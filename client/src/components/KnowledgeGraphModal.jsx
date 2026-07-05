@@ -51,13 +51,17 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     return () => { mountedRef.current = false; };
   }, []);
 
+  const planIdRef = useRef(plan?.id);
+  planIdRef.current = plan?.id;
+
   const loadGraph = useCallback(async () => {
-    if (!plan) return;
+    const pid = planIdRef.current;
+    if (!pid) return;
     setLoading(true);
     setError(null);
     setExtractResult(null);
     try {
-      const d = await api.getKnowledgeGraph(plan.id, inferEnabled);
+      const d = await api.getKnowledgeGraph(pid, inferEnabled);
       setGraphData(d.graph);
       const mermaidDef = buildMermaidGraph(plan, d.graph.nodes, d.graph.edges);
       await renderMermaid(mermaidDef);
@@ -66,10 +70,10 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     } finally {
       setLoading(false);
     }
-  }, [plan, inferEnabled]);
+  }, [inferEnabled]);
 
   useEffect(() => {
-    if (!plan) return;
+    if (!plan?.id) return;
     loadGraph();
   }, [plan?.id, loadGraph]);
 
@@ -290,14 +294,17 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       def += `    ${fromId} ${connector}|${edgeLabel}| ${toId};\n`;
     }
 
-    // Apply link styles post-definition (per-edge colors and dash styles)
+    // Apply link styles post-definition (per-edge colors, dash styles, and weight thickness)
     for (let i = 0; i < edges.length; i++) {
       const e = edges[i];
       const typeInfo = RELATION_TYPES[e.type] || RELATION_TYPES.related;
       const isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
       const dashPattern = typeInfo.style === 'dashed' ? '8,4' :
                           typeInfo.style === 'dotted' ? '4,4' : '0,0';
-      def += `\nlinkStyle ${i} stroke:${typeInfo.color},stroke-width:${isInferred ? 1.5 : 2},stroke-dasharray:${dashPattern};`;
+      // Use weight for stroke thickness (weight 0-1, default 0.5)
+      const weight = e.weight != null ? e.weight : 0.5;
+      const strokeWidth = weight >= 0.8 ? 2.5 : weight >= 0.5 ? 2 : 1.5;
+      def += `\nlinkStyle ${i} stroke:${typeInfo.color},stroke-width:${strokeWidth},stroke-dasharray:${dashPattern},opacity:${Math.min(0.4 + weight * 0.6, 1)};`;
     }
 
     return def;
