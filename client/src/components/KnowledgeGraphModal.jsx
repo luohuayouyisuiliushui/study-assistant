@@ -227,7 +227,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       const phaseName = phaseNames[phaseId] || `阶段 ${phaseId}`;
       const colorIdx = phaseIndex[phaseId] || 0;
 
-      def += `\n    subgraph ${phaseName.replace(/\s+/g, '_')}["${phaseName}"]\n`;
+      def += `\n    subgraph sg_${phaseId}["${phaseName}"]\n`;
 
       for (const n of phaseNodes) {
         const nodeId = 'n' + n.id.replace(/-/g, '_');
