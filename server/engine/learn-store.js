@@ -526,6 +526,9 @@ export function buildInferredEdges(plan, options = {}) {
     includeDetailExtraction = true,
     includeTransitive = true,
     includeInherited = true,
+    includeSiblingRelated = true,
+    includeSequential = true,
+    includeKeywordCrossPhase = true,
   } = options;
 
   const inferredEdges = [];
@@ -541,7 +544,10 @@ export function buildInferredEdges(plan, options = {}) {
       if (!t.detail) continue;
       const extracted = extractRelationsFromDetail(t.detail, plan.topics, t.id);
       for (const e of extracted) {
-        const key = `${e.from}-${e.type}-${e.to}`;
+        const isUndirected = e.type === 'related' || e.type === 'contrasts';
+        const key = isUndirected
+          ? [e.from, e.to].sort().join(':') + ':' + e.type
+          : e.from + ':' + e.type + ':' + e.to;
         if (!seen.has(key)) {
           seen.add(key);
           inferredEdges.push(e);
@@ -558,7 +564,7 @@ export function buildInferredEdges(plan, options = {}) {
       const descendants = getTopicDescendants(plan, t.id);
       for (const preId of t.prerequisites) {
         for (const desc of descendants) {
-          const key = `${preId}-inheritedPrerequisite-${desc.id}`;
+          const key = `${preId}:inheritedPrerequisite:${desc.id}`;
           if (!seen.has(key)) {
             seen.add(key);
             inferredEdges.push({
@@ -603,7 +609,7 @@ export function buildInferredEdges(plan, options = {}) {
             if (transPreId === t.id) continue;
             // Check this isn't already a direct prerequisite
             if (t.prerequisites && t.prerequisites.includes(transPreId)) continue;
-            const key = `${transPreId}-transitivePrerequisite-${t.id}`;
+            const key = `${transPreId}:transitivePrerequisite:${t.id}`;
             if (!seen.has(key)) {
               seen.add(key);
               inferredEdges.push({
@@ -616,6 +622,99 @@ export function buildInferredEdges(plan, options = {}) {
             }
           }
         }
+      }
+    }
+  }
+
+  // 4. Sibling relatedness — topics under the same parent are inherently related
+  if (includeSiblingRelated) {
+    const siblingsByParent = {};
+    for (const t of plan.topics) {
+      const key = t.parentId || '__root__';
+      if (!siblingsByParent[key]) siblingsByParent[key] = [];
+      siblingsByParent[key].push(t);
+    }
+    for (const [parentKey, siblings] of Object.entries(siblingsByParent)) {
+      if (siblings.length < 2) continue;
+      for (let i = 0; i < siblings.length; i++) {
+        for (let j = i + 1; j < siblings.length; j++) {
+          const a = siblings[i], b = siblings[j];
+          const key = `${[a.id, b.id].sort().join(':')}:related`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          inferredEdges.push({
+            from: a.id,
+            to: b.id,
+            type: 'related',
+            description: `同属于「${topicMap[parentKey]?.title || '根节点'}」的兄弟知识点`,
+            source: 'structure',
+            weight: 0.6,
+          });
+        }
+      }
+    }
+  }
+
+  // 5. Sequential dependency — ordered topics under the same parent imply builds-on
+  if (includeSequential) {
+    const groups = {};
+    for (const t of plan.topics) {
+      const gk = t.parentId || '__root__';
+      if (!groups[gk]) groups[gk] = [];
+      groups[gk].push(t);
+    }
+    for (const [, group] of Object.entries(groups)) {
+      group.sort((a, b) => a.order - b.order);
+      for (let i = 0; i < group.length - 1; i++) {
+        const a = group[i], b = group[i + 1];
+        if (b.prerequisites && b.prerequisites.includes(a.id)) continue;
+        const key = `${a.id}:buildsOn:${b.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        inferredEdges.push({
+          from: a.id,
+          to: b.id,
+          type: 'buildsOn',
+          description: `在学习顺序上位于「${b.title}」之前`,
+          source: 'structure',
+          weight: 0.4,
+        });
+      }
+    }
+  }
+
+  // 6. Cross-phase keyword matching
+  if (includeKeywordCrossPhase) {
+    const keywordIndex = [];
+    const skipWords = new Set(['的', '与', '和', '及', '在', '之', '基础', '入门', '详解', '介绍', '概述', '浅析', '初步']);
+    for (const t of plan.topics) {
+      const words = t.title.split(/[\s,，、：:()（）\/]/).filter(Boolean);
+      const keywords = [];
+      for (const w of words) {
+        const trimmed = w.trim();
+        if (!trimmed || trimmed.length < 2) continue;
+        if (skipWords.has(trimmed)) continue;
+        keywords.push(trimmed);
+      }
+      keywordIndex.push({ id: t.id, title: t.title, phaseId: t.phaseId, keywords });
+    }
+    for (let i = 0; i < keywordIndex.length; i++) {
+      for (let j = i + 1; j < keywordIndex.length; j++) {
+        const a = keywordIndex[i], b = keywordIndex[j];
+        if (a.phaseId === b.phaseId) continue;
+        const key = `${[a.id, b.id].sort().join(':')}:related`;
+        if (seen.has(key)) continue;
+        const overlap = a.keywords.filter(kw => b.keywords.some(bkw => bkw.includes(kw) || kw.includes(bkw)));
+        if (overlap.length === 0) continue;
+        seen.add(key);
+        inferredEdges.push({
+          from: a.id,
+          to: b.id,
+          type: 'related',
+          description: `共享关键词「${overlap.join('、')}」的跨阶段关联`,
+          source: 'structure',
+          weight: Math.min(0.3 + overlap.length * 0.1, 0.8),
+        });
       }
     }
   }
@@ -634,12 +733,27 @@ export function buildInferredEdges(plan, options = {}) {
 export function buildEnhancedKnowledgeGraph(plan, options = {}) {
   const base = buildKnowledgeGraph(plan);
   const inferredEdges = buildInferredEdges(plan, options);
-  const allEdges = [...base.edges, ...inferredEdges];
+  // Dedup: base edges take priority over inferred
+  const baseKeys = new Set();
+  for (const e of base.edges) {
+    // For undirected types (related), use sorted key
+    const key = e.type === 'related'
+      ? [e.from, e.to].sort().join(':') + ':related'
+      : e.from + ':' + e.type + ':' + e.to;
+    baseKeys.add(key);
+  }
+  const dedupedInferred = inferredEdges.filter(e => {
+    const key = e.type === 'related'
+      ? [e.from, e.to].sort().join(':') + ':related'
+      : e.from + ':' + e.type + ':' + e.to;
+    return !baseKeys.has(key);
+  });
+  const allEdges = [...base.edges, ...dedupedInferred];
   return {
     nodes: base.nodes,
     edges: allEdges,
     baseEdgeCount: base.edges.length,
-    inferredCount: inferredEdges.length,
+    inferredCount: dedupedInferred.length,
   };
 }
 
