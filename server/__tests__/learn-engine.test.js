@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
-import { generateReview, gradeExercises, analyzeWeakPoints } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -274,8 +274,419 @@ describe('learn-engine', () => {
       const needs = store.getTopicsNeedingReview(p);
       const found = needs.find(n => n.id === p.topics[0].id);
       assert.ok(!found, 'should not include topic without issues');
+
       // Cleanup
       store.deletePlan(plan.id);
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  INTERACTIVE MODE TESTS
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Create a mock provider that supports streaming (async iterable).
+ */
+function createStreamMockProvider(content) {
+  const mockClient = {
+    chat: {
+      completions: {
+        async create(opts) {
+          const chars = (content || '').split('');
+          const chunks = chars.map((char) => ({
+            choices: [{ delta: { content: char }, index: 0 }],
+          }));
+          // Send usage in a separate final chunk so provider doesn't skip the last content char
+          chunks.push({ choices: [{ delta: { content: '' }, index: 0 }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
+          if (chunks.length <= 1) {
+            chunks.push({ choices: [{ delta: { content: '' }, index: 0 }] });
+          }
+          return (async function* () {
+            for (const chunk of chunks) {
+              yield chunk;
+            }
+          })();
+        },
+      },
+    },
+  };
+  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+  provider._client = mockClient;
+  provider._autoWarm = false;
+  provider._lastPrefixHash = null;
+  return provider;
+}
+
+describe('Interactive mode', () => {
+  let testPlan = null;
+  let testTopicId = null;
+
+  before(async () => {
+    const plan = store.createPlan('interactive-test-plan');
+    await store.addTopics(plan.id, ['交互测试知识点']);
+    const p = store.getPlan(plan.id);
+    testPlan = p;
+    testTopicId = p.topics[0].id;
+  });
+
+  after(() => {
+    if (testPlan) {
+      try { store.deletePlan(testPlan.id); } catch {}
+    }
+  });
+
+  it('startInteractiveDetail should return content and session', async () => {
+    const provider = createStreamMockProvider('这是第一部分的讲解内容。你理解了吗？');
+    const result = await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+
+    assert.ok(result.content, 'should return content');
+    assert.ok(result.content.includes('第一部分'), 'should include expected text');
+    assert.ok(result.session, 'should return session object');
+    assert.strictEqual(result.session.mode, 'stepwise', 'session mode should be stepwise');
+    assert.strictEqual(result.session.finished, false, 'should not be finished');
+    assert.strictEqual(result.session.transcript.length, 1, 'transcript should have one AI entry');
+    // State machine should be initialized for stepwise mode
+    assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
+    assert.strictEqual(result.session.stateMachine.totalSteps, 6, 'should have 6 teaching phases');
+    assert.strictEqual(result.session.stateMachine.currentStep, 0, 'should start at step 0');
+    assert.strictEqual(result.session.stateMachine.steps[0].status, 'active', 'first step should be active');
+    assert.strictEqual(result.session.stateMachine.steps[1].status, 'pending', 'second step should be pending');
+  });
+
+  it('startInteractiveDetail should support all modes', async () => {
+    const provider = createStreamMockProvider('测试内容');
+    for (const mode of ['stepwise', 'realtime', 'challenge', 'scaffold']) {
+      const result = await startInteractiveDetail(provider, testPlan, testTopicId, mode);
+      assert.strictEqual(result.session.mode, mode, `mode should be ${mode}`);
+    // State machine should only exist for stepwise mode
+    if (mode === 'stepwise') {
+      assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
+    } else {
+      assert.strictEqual(result.session.stateMachine, null, `non-stepwise (${mode}) should not have stateMachine`);
+    }
+      assert.ok(result.content, `${mode} should return content`);
+    }
+  });
+
+  it('should throw for non-existent topic', async () => {
+    const provider = createStreamMockProvider('');
+    await assert.rejects(
+      () => startInteractiveDetail(provider, testPlan, 'non-existent', 'stepwise'),
+      { message: 'Topic not found' }
+    );
+  });
+
+  it('should persist session on topic after start', async () => {
+    const provider = createStreamMockProvider('第一部分内容');
+    await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+    const p = store.getPlan(testPlan.id);
+    const topic = p.topics.find(t => t.id === testTopicId);
+    assert.ok(topic.interactiveSession, 'session should be persisted');
+    assert.strictEqual(topic.interactiveSession.mode, 'stepwise');
+  });
+
+  // ═════════════════════════════════════════════════════════
+  //  continueInteractiveDetail tests
+  // ═════════════════════════════════════════════════════════
+
+  it('continueInteractiveDetail should advance state machine on "继续"', async () => {
+    const provider = createStreamMockProvider('第二部分内容');
+    await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+
+    const r1 = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
+    assert.strictEqual(r1.session.stateMachine.currentStep, 1, 'should advance to step 1');
+    assert.strictEqual(r1.session.stateMachine.steps[0].status, 'completed', 'step 0 should be completed');
+    assert.strictEqual(r1.session.stateMachine.steps[1].status, 'active', 'step 1 should be active');
+
+    const r2 = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
+    assert.strictEqual(r2.session.stateMachine.currentStep, 2, 'should advance to step 2');
+  });
+
+  it('continueInteractiveDetail should take feedback and return next section', async () => {
+    const provider = createStreamMockProvider('第二部分：我们来深入讲讲细节。');
+    await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+
+    const result = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
+
+    assert.ok(result.content, 'should return next section content');
+    assert.ok(result.content.includes('第二部分'), 'should include expected next content');
+    assert.ok(result.session, 'should return session');
+    assert.strictEqual(result.session.transcript.length, 3, 'transcript should have 3 entries: ai + user + ai');
+    assert.strictEqual(result.session.transcript[1].role, 'user', 'second entry should be user feedback');
+    assert.strictEqual(result.session.transcript[1].content, '继续', 'should store user feedback');
+    assert.strictEqual(result.session.transcript[2].role, 'ai', 'third entry should be ai response');
+  });
+
+  it('continueInteractiveDetail should detect [SESSION_END] marker', async () => {
+    // Use a separate plan to avoid cross-test interference
+    const sepPlan = store.createPlan('session-end-test');
+    await store.addTopics(sepPlan.id, ['测试结束检测']);
+    const p = store.getPlan(sepPlan.id);
+    const provider = createStreamMockProvider('以上是全部内容。[SESSION_END]');
+    await startInteractiveDetail(provider, p, p.topics[0].id, 'stepwise');
+
+    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'stepwise', '继续');
+
+    assert.ok(result.finished, 'session should be marked as finished');
+    assert.strictEqual(result.session.finished, true, 'session.finished should be true');
+    store.deletePlan(sepPlan.id);
+  });
+
+  it('continueInteractiveDetail should re-open finished session for further questions', async () => {
+    // Use separate plan
+    const reopenPlan = store.createPlan('reopen-test');
+    await store.addTopics(reopenPlan.id, ['重开测试']);
+    const p2 = store.getPlan(reopenPlan.id);
+
+    // First mark session as finished
+    const finishProvider = createStreamMockProvider('所有内容结束。[SESSION_END]');
+    await startInteractiveDetail(finishProvider, p2, p2.topics[0].id, 'stepwise');
+    const finishResult = await continueInteractiveDetail(finishProvider, p2, p2.topics[0].id, 'stepwise', '继续');
+    assert.ok(finishResult.finished, 'session should be finished first');
+
+    // Now ask a follow-up question — session should re-open
+    const reopenProvider = createStreamMockProvider('好问题！让我解释一下这个细节。');
+    const result = await continueInteractiveDetail(reopenProvider, p2, p2.topics[0].id, 'stepwise', '我还有问题');
+
+    assert.ok(result.content, 'should return answer for follow-up question');
+    assert.strictEqual(result.session.finished, false, 'session should be re-opened (finished = false)');
+    store.deletePlan(reopenPlan.id);
+  });
+
+  it('continueInteractiveDetail should throw when no session exists', async () => {
+    const provider = createStreamMockProvider('');
+    // Call continue without starting interactive session first
+    const freshPlan = store.createPlan('no-session-test');
+    await store.addTopics(freshPlan.id, ['无会话知识点']);
+    const p = store.getPlan(freshPlan.id);
+
+    await assert.rejects(
+      () => continueInteractiveDetail(provider, p, p.topics[0].id, 'stepwise', '继续'),
+      { message: /没有互动讲解会话/ }
+    );
+
+    store.deletePlan(freshPlan.id);
+  });
+
+  it('continueInteractiveDetail should support all modes with feedback', async () => {
+    for (const mode of ['realtime', 'challenge', 'scaffold']) {
+      const provider = createStreamMockProvider(`这是${mode}模式的回应。`);
+      await startInteractiveDetail(provider, testPlan, testTopicId, mode);
+
+      const result = await continueInteractiveDetail(provider, testPlan, testTopicId, mode, '好的继续');
+
+      assert.ok(result.content, `${mode}: should return content`);
+      assert.ok(result.content.includes(mode), `${mode}: should include mode-specific content`);
+      assert.strictEqual(result.session.mode, mode, `${mode}: session mode should be preserved`);
+    }
+  });
+
+  it('continueInteractiveDetail should accumulate transcript across multiple turns', async () => {
+    const provider1 = createStreamMockProvider('第一轮内容');
+    await startInteractiveDetail(provider1, testPlan, testTopicId, 'stepwise');
+
+    const provider2 = createStreamMockProvider('第二轮内容');
+    await continueInteractiveDetail(provider2, testPlan, testTopicId, 'stepwise', '继续');
+
+    const provider3 = createStreamMockProvider('第三轮内容');
+    await continueInteractiveDetail(provider3, testPlan, testTopicId, 'stepwise', '再继续');
+
+    // Re-read from store to verify persistence
+    const p = store.getPlan(testPlan.id);
+    const topic = p.topics.find(t => t.id === testTopicId);
+    const transcript = topic.interactiveSession.transcript;
+
+    assert.strictEqual(transcript.length, 5, 'transcript should have 5 entries: 1 start + 2 user + 2 ai');
+    assert.strictEqual(transcript[0].role, 'ai', 'entry 0: start AI');
+    assert.strictEqual(transcript[1].role, 'user', 'entry 1: user feedback 1');
+    assert.strictEqual(transcript[1].content, '继续');
+    assert.strictEqual(transcript[2].role, 'ai', 'entry 2: AI response 1');
+    assert.strictEqual(transcript[3].role, 'user', 'entry 3: user feedback 2');
+    assert.strictEqual(transcript[3].content, '再继续');
+    assert.strictEqual(transcript[4].role, 'ai', 'entry 4: AI response 2');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  generateDetail tests
+// ═══════════════════════════════════════════════════════
+
+describe('generateDetail', () => {
+  it('should generate content and mark topic as done', async () => {
+    const plan = store.createPlan('gendetail-test');
+    await store.addTopics(plan.id, ['测试核心生成']);
+    const p = store.getPlan(plan.id);
+    const topicId = p.topics[0].id;
+
+    const provider = createStreamMockProvider('这是讲解内容。包括核心概念和实际代码。');
+    const result = await generateDetail(provider, p, topicId);
+
+    assert.ok(result, 'should return content');
+    assert.ok(result.includes('核心概念'), 'should include expected content');
+
+    // Verify topic is marked as done
+    const p2 = store.getPlan(plan.id);
+    const topic = p2.topics[0];
+    assert.strictEqual(topic.done, true, 'topic should be marked done');
+    assert.ok(topic.detail, 'topic should have detail');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should throw for non-existent topic', async () => {
+    const plan = store.createPlan('gendetail-err');
+    const provider = createStreamMockProvider('');
+    await assert.rejects(
+      () => generateDetail(provider, plan, 'non-existent'),
+      { message: 'Topic not found' }
+    );
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle empty AI response as error', async () => {
+    const plan = store.createPlan('gendetail-empty');
+    await store.addTopics(plan.id, ['空响应']);
+    const p = store.getPlan(plan.id);
+    const provider = createStreamMockProvider('');
+    await assert.rejects(
+      () => generateDetail(provider, p, p.topics[0].id),
+      { message: 'AI 返回内容为空' }
+    );
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  answerFollowUp tests
+// ═══════════════════════════════════════════════════════
+
+describe('answerFollowUp', () => {
+  it('should answer a follow-up question and store in history', async () => {
+    const plan = store.createPlan('followup-test');
+    await store.addTopics(plan.id, ['测试追问']);
+    const p = store.getPlan(plan.id);
+    // Set up detail so context is non-empty
+    store.updateTopic(plan.id, p.topics[0].id, {
+      detail: '这是讲解内容。',
+      done: true,
+    });
+    const p2 = store.getPlan(plan.id);
+
+    const provider = createMockProvider('这是一个很好的问题！让我详细解释一下。');
+    const answer = await answerFollowUp(provider, p2, p2.topics[0].id, '能再解释一下吗？');
+
+    assert.ok(answer, 'should return an answer');
+    assert.ok(answer.includes('很好'), 'should include relevant response');
+
+    // Verify history was stored
+    const p3 = store.getPlan(plan.id);
+    const topicHistory = p3.history.filter(h => h.topicId === p2.topics[0].id);
+    assert.ok(topicHistory.length >= 2, 'should have user+ai entries in history');
+    assert.strictEqual(topicHistory[topicHistory.length - 2].role, 'user', 'penultimate entry should be user question');
+    assert.strictEqual(topicHistory[topicHistory.length - 2].content, '能再解释一下吗？');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should throw for empty question', async () => {
+    const plan = store.createPlan('followup-empty');
+    const provider = createMockProvider('');
+    await assert.rejects(
+      () => answerFollowUp(provider, plan, 'some-topic', '   '),
+      { message: '问题不能为空' }
+    );
+    store.deletePlan(plan.id);
+  });
+
+  it('should throw for non-existent topic', async () => {
+    const plan = store.createPlan('followup-nope');
+    const provider = createMockProvider('');
+    await assert.rejects(
+      () => answerFollowUp(provider, plan, 'non-existent', '你好'),
+      { message: 'Topic not found' }
+    );
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  revealEmbeddedErrors tests
+// ═══════════════════════════════════════════════════════
+
+describe('revealEmbeddedErrors', () => {
+  it('should return empty when topic has no detail', async () => {
+    const plan = store.createPlan('reveal-no-detail');
+    await store.addTopics(plan.id, ['空知识点']);
+    const p = store.getPlan(plan.id);
+    const provider = createMockProvider('{}');
+    const result = await revealEmbeddedErrors(provider, p, p.topics[0].id);
+    assert.strictEqual(result.hasErrors, false);
+    assert.deepStrictEqual(result.errors, []);
+    store.deletePlan(plan.id);
+  });
+
+  it('should detect errors from AI response', async () => {
+    const plan = store.createPlan('reveal-test');
+    await store.addTopics(plan.id, ['带错误的知识点']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+    await store.updateTopic(plan.id, topic.id, {
+      detail: '这段内容包含一个错误。变量赋值为 x = 5 + 3 = 10。',
+      done: false,
+    });
+    const p2 = store.getPlan(plan.id);
+
+    const mockResult = JSON.stringify({
+      errors: [{
+        location: '变量赋值部分',
+        description: '5 + 3 应该等于 8，不是 10',
+        correction: 'x = 5 + 3 = 8',
+        type: '概念偏差',
+      }],
+      hasErrors: true,
+    });
+    const provider = createMockProvider(mockResult);
+    const result = await revealEmbeddedErrors(provider, p2, topic.id);
+    assert.strictEqual(result.hasErrors, true);
+    assert.strictEqual(result.errors.length, 1);
+    assert.ok(result.errors[0].correction.includes('8'));
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  decomposeTopic tests
+// ═══════════════════════════════════════════════════════
+
+describe('decomposeTopic', () => {
+  it('should return subtopics from AI', async () => {
+    const plan = store.createPlan('decompose-test');
+    await store.addTopics(plan.id, ['JavaScript 闭包']);
+    const p = store.getPlan(plan.id);
+
+    const mockResult = JSON.stringify({
+      subtopics: [
+        { title: '作用域链', summary: '理解变量查找机制', order: 1 },
+        { title: '闭包的定义与原理', summary: '闭包的本质是函数+外层作用域', order: 2 },
+        { title: '闭包的实际应用', summary: '模块模式和私有变量', order: 3 },
+      ],
+    });
+    const provider = createMockProvider(mockResult);
+    const result = await decomposeTopic(provider, p, p.topics[0].id);
+    assert.strictEqual(result.length, 3);
+    assert.strictEqual(result[0].title, '作用域链');
+    assert.strictEqual(result[1].title, '闭包的定义与原理');
+    store.deletePlan(plan.id);
+  });
+
+  it('should throw for non-existent topic', async () => {
+    const plan = store.createPlan('decompose-nope');
+    const provider = createMockProvider('');
+    await assert.rejects(
+      () => decomposeTopic(provider, plan, 'non-existent'),
+      { message: 'Topic not found' }
+    );
+    store.deletePlan(plan.id);
   });
 });

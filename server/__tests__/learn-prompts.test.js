@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildDeterministicContext, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT } from '../engine/learn-prompts.js';
+import { buildDeterministicContext, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT } from '../engine/learn-prompts.js';
 
 function makePlan(overrides = {}) {
   return {
@@ -194,5 +194,57 @@ describe('STABLE_WEAK_POINT_PROMPT', () => {
   it('should mention exercise analysis', () => {
     assert.ok(STABLE_WEAK_POINT_PROMPT.includes('薄弱'));
     assert.ok(STABLE_WEAK_POINT_PROMPT.includes('confidence'));
+  });
+});
+
+describe('STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT === 'string');
+    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.length > 200);
+  });
+
+  it('should contain stepwise teaching keywords', () => {
+    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('分段输出'));
+    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('等待用户'));
+    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('[SESSION_END]'));
+  });
+});
+
+describe('STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT === 'string');
+    assert.ok(STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT.length > 200);
+  });
+
+  it('should contain realtime teaching keywords', () => {
+    assert.ok(STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT.includes('小块输出'));
+    assert.ok(STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT.includes('高频率'));
+    assert.ok(STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT.includes('[SESSION_END]'));
+  });
+});
+
+describe('STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT === 'string');
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.length > 200);
+  });
+
+  it('should contain challenge teaching keywords', () => {
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('故意'));
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('用户发现'));
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('[SESSION_END]'));
+  });
+});
+
+describe('STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT === 'string');
+    assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.length > 200);
+  });
+
+  it('should contain scaffold teaching keywords', () => {
+    assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('子问题'));
+    assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('鼓励'));
+    assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('[SESSION_END]'));
   });
 });

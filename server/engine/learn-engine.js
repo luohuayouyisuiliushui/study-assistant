@@ -151,6 +151,73 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
 // ═══════════════════════════════════════════════════════
 
 /**
+ * Explicit teaching phases for stepwise mode (state machine steps).
+ * Used by both engine code and injected into AI context for structured state awareness.
+ */
+const STEPWISE_PHASES = [
+  { id: 'core_concept', name: '核心概念讲解' },
+  { id: 'why_important', name: '为什么重要' },
+  { id: 'deep_dive', name: '详细原理' },
+  { id: 'code_example', name: '代码/示例' },
+  { id: 'common_pitfalls', name: '常见坑/注意事项' },
+  { id: 'practice', name: '练习题' },
+];
+
+/**
+ * Build a state machine snapshot for an interactive session.
+ */
+function _buildStateMachineSnapshot(session) {
+  if (!session?.stateMachine) return '';
+  const sm = session.stateMachine;
+  const current = sm.steps[sm.currentStep] || sm.steps[0];
+  const completed = sm.steps.filter(s => s.status === 'completed').length;
+  let result = `【教学进度】已完成 ${completed}/${sm.totalSteps} 步\n`;
+  result += `当前阶段：${current.name}（第 ${sm.currentStep + 1}/${sm.totalSteps} 步）\n`;
+  result += '步骤列表：\n';
+  sm.steps.forEach((s, i) => {
+    const marker = s.status === 'completed' ? '✅' : s.status === 'active' ? '▶️' : '⏳';
+    result += `  ${marker} ${i + 1}. ${s.name}\n`;
+  });
+  return result;
+}
+
+/**
+ * Initialize state machine for a new stepwise interactive session.
+ */
+function _initStateMachine(mode) {
+  if (mode !== 'stepwise') return null;
+  return {
+    totalSteps: STEPWISE_PHASES.length,
+    currentStep: 0,
+    steps: STEPWISE_PHASES.map((p, i) => ({
+      ...p,
+      status: i === 0 ? 'active' : 'pending',
+    })),
+  };
+}
+
+/**
+ * Advance the state machine one step forward.
+ * Returns true if there are more steps, false if completed.
+ */
+function _advanceStateMachine(session) {
+  const sm = session.stateMachine;
+  if (!sm) return false;
+  // Mark current as completed
+  if (sm.steps[sm.currentStep]) {
+    sm.steps[sm.currentStep].status = 'completed';
+  }
+  // Advance to next
+  const nextIndex = sm.currentStep + 1;
+  if (nextIndex < sm.totalSteps) {
+    sm.currentStep = nextIndex;
+    sm.steps[nextIndex].status = 'active';
+    return true;
+  }
+  return false; // No more steps
+}
+
+/**
  * Get the interactive system prompt by mode.
  */
 function _getInteractivePrompt(mode) {
@@ -191,10 +258,13 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
 
   const context = buildDeterministicContext(plan, topicId);
+  const stateMachine = _initStateMachine(mode);
+  const stateSnapshot = stateMachine ? _buildStateMachineSnapshot({ stateMachine }) : '';
+
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: context },
-    { role: 'user', content: `请开始${promptName}模式。先讲解核心概念，作为第一部分的讲解内容。知识点：「${topic.title}」\n\n注意：只输出第一部分内容，不要一次性讲完所有内容。这部分讲完后给出下一步选项，等待我的反馈。` },
+    { role: 'user', content: `请开始${promptName}模式。先讲解核心概念，作为第一部分的讲解内容。知识点：「${topic.title}」\n\n注意：只输出第一部分内容，不要一次性讲完所有内容。这部分讲完后给出下一步选项，等待我的反馈。\n\n${stateSnapshot}` },
   ];
 
   const fullContent = await provider.stream(messages, { maxTokens: 2048 });
@@ -204,6 +274,7 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
     mode,
     finished: false,
     transcript: [{ role: 'ai', content: fullContent }],
+    stateMachine,
   };
 
   topic.interactiveSession = session;
@@ -237,8 +308,17 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
   const context = buildDeterministicContext(plan, topicId);
   const transcriptText = _buildInteractiveTranscript(session);
 
+  // Advance state machine when user says "继续" in stepwise mode
+  const isAdvance = mode === 'stepwise' && /^继续/.test(feedback.trim());
+  if (isAdvance) {
+    _advanceStateMachine(session);
+  }
+
+  const stateSnapshot = _buildStateMachineSnapshot(session);
+
   const continuationInstruction = (
     `我们正在进行「${topic.title}」的${promptName}模式。\n\n` +
+    `${stateSnapshot}\n\n` +
     `### 到目前为止的对话记录\n` +
     `${transcriptText}\n\n` +
     `### 用户的最新反馈\n` +
@@ -269,6 +349,92 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
   await updateTopic(plan.id, topicId, { interactiveSession: session });
 
   return { content: fullContent, session, finished: session.finished };
+}
+
+// ═══════════════════════════════════════════════════════
+//  CHALLENGE: reveal embedded errors on completion
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Analyze generated detail content for intentionally subtle errors.
+ * Called when user clicks \"学完了\" to reveal any missed errors.
+ */
+export async function revealEmbeddedErrors(providerOrConfig, plan, topicId, model) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+  if (!topic.detail) return { errors: [], hasErrors: false };
+
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+
+  const prompt =
+    '你是一位学习内容审查专家。以下是一篇AI生成的讲解内容。请仔细检查其中是否有故意埋下的微妙错误。\n\n' +
+    '注意：\n' +
+    '- 有些错误是AI故意加入来考验学习者的（如边界条件偏差、概念近似但不精确、逻辑陷阱等）\n' +
+    '- 有些内容是完全正确的\n' +
+    '- 你的任务是识别出所有**可能是故意埋下的错误**\n\n' +
+    '请以JSON格式返回：{"errors": [{"location": "错误所在章节", "description": "错误描述", "correction": "正确版本", "type": "边界条件|概念偏差|逻辑陷阱|代码错误"}], "hasErrors": true/false}\n\n' +
+    '讲解内容：\n\n' + topic.detail.slice(0, 10000);
+
+  const messages = [
+    { role: 'system', content: '你是一位严格但友好的学习内容审查专家。只输出JSON。' },
+    { role: 'user', content: prompt },
+  ];
+
+  try {
+    const result = await provider.complete(messages, { maxTokens: 2048, temperature: 0.3, responseFormat: { type: 'json_object' } });
+    const parsed = JSON.parse(result.content || '{}');
+    return {
+      errors: Array.isArray(parsed.errors) ? parsed.errors : [],
+      hasErrors: parsed.hasErrors === true && Array.isArray(parsed.errors) && parsed.errors.length > 0,
+    };
+  } catch (err) {
+    console.warn('[revealEmbeddedErrors] Analysis failed:', err?.message);
+    return { errors: [], hasErrors: false };
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  SCAFFOLD: decompose a topic into sub-topics
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Decompose a knowledge point into 3-5 sub-topics using AI.
+ * Returns an array of sub-topic titles for creating child topics.
+ */
+export async function decomposeTopic(providerOrConfig, plan, topicId, model) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+  const context = buildDeterministicContext(plan, topicId);
+
+  const prompt =
+    `请将知识点「${topic.title}」分解为 3-6 个递进的子知识点，从基础到深入排列。\n\n` +
+    `要求：\\n` +
+    `1. 子知识点应该是可独立学习的单元\\n` +
+    `2. 从易到难排列，前1-2个是基础概念，中间是核心内容，最后1个是进阶内容\\n` +
+    `3. 每个子知识点用一句话概括其核心内容\\n` +
+    `4. 不要重复父知识点标题中的词语\\n\\n` +
+    `以JSON格式返回：{\"subtopics\": [{\"title\": \"子知识点名称\", \"summary\": \"一句话概括\", \"order\": 1}]}\\n\\n` +
+    `学习上下文：\\n${context}`;
+
+  const messages = [
+    { role: 'system', content: '你是一位课程设计专家，擅长将复杂知识分解为递进的学习单元。只输出JSON。' },
+    { role: 'user', content: prompt },
+  ];
+
+  try {
+    const result = await provider.complete(messages, { maxTokens: 2048, temperature: 0.4, responseFormat: { type: 'json_object' } });
+    const parsed = JSON.parse(result.content || '{}');
+    const subtopics = Array.isArray(parsed.subtopics) ? parsed.subtopics : [];
+    return subtopics.map((s, i) => ({
+      title: (typeof s === 'string' ? s : s.title || s.name || '') || '子知识点' + (i + 1),
+      summary: s.summary || '',
+      order: i + 1,
+    })).filter(s => s.title);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -751,6 +917,41 @@ export async function generateDetailWithImage(providerOrConfig, plan, topicId, i
   return content;
 }
 
+// ═══════════════════════════════════════════════════════
+//  SILICONFLOW TTS (Text-to-Speech)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Text-to-speech: synthesize speech using SiliconFlow CosyVoice2.
+ * @param {string} apiKey - SiliconFlow API key
+ * @param {string} text - Text to synthesize
+ * @returns {Promise<Buffer>} MP3 audio buffer
+ */
+export async function textToSpeech(apiKey, text) {
+  if (!apiKey) throw new Error('请先配置 API Key');
+  if (!text || !text.trim()) throw new Error('请输入要合成的文本');
+
+  const response = await fetch('https://api.siliconflow.cn/v1/audio/speech', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'FunAudioLLM/CosyVoice2-0.5B',
+      input: text.slice(0, 2000),
+      voice: 'default',
+      response_format: 'mp3',
+      speed: 1.0,
+    }),
+  });
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`TTS 请求失败 (${response.status}): ${errBody.slice(0, 200)}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
 export function getEngineCacheDiagnostics() {
   return engineCacheMonitor.summary();
 }
@@ -767,6 +968,9 @@ export default {
   analyzeWeakPoints,
   startInteractiveDetail,
   continueInteractiveDetail,
+  revealEmbeddedErrors,
+  decomposeTopic,
+  textToSpeech,
   getEngineCacheDiagnostics,
   createProviderFromConfig,
 };

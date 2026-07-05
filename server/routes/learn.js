@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -370,6 +370,72 @@ router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => 
     res.json(result);
   } catch (err) {
     console.error('[interactive-continue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  CHALLENGE: reveal embedded errors on completion
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/reveal-errors/:topicId
+ * Analyze topic content for subtle embedded errors.
+ */
+router.post('/plans/:planId/reveal-errors/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const result = await revealEmbeddedErrors(provider, plan, req.params.topicId, provider.model);
+    res.json(result);
+  } catch (err) {
+    console.error('[reveal-errors]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  SCAFFOLD: decompose a topic into sub-topics
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/decompose/:topicId
+ * Decompose a topic into 3-6 sub-topics using AI.
+ */
+router.post('/plans/:planId/decompose/:topicId', async (req, res) => {
+  // ... existing decompose route ...
+});
+
+// ═══════════════════════════════════════════════════════
+//  TTS: text-to-speech via SiliconFlow
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/tts
+ * Synthesize speech from text.
+ * Body: { text: '...', imageApiKey: '...' }
+ * Returns: audio/mpeg binary
+ */
+router.post('/tts', async (req, res) => {
+  const { text } = req.body;
+  const apiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
+
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: '请输入文本' });
+  }
+  if (!apiKey) {
+    return res.status(400).json({ error: '请先配置硅基流动 API Key（设置中的图片API Key）' });
+  }
+
+  try {
+    const audioBuffer = await textToSpeech(apiKey, text);
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Content-Length', audioBuffer.length.toString());
+    res.end(audioBuffer);
+  } catch (err) {
+    console.error('[tts]', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -18,6 +18,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const analysisChatRef = useRef(null);
   const [graphOpen, setGraphOpen] = useState(false);
   const [mindMapOpen, setMindMapOpen] = useState(false);
+  const [decomposingId, setDecomposingId] = useState(null);
   const [expandedTopics, setExpandedTopics] = useState({});
 
   // Toggle expand/collapse for a parent topic
@@ -141,6 +142,26 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     e.target.value = '';
   };
 
+  const handleDecompose = async (topicId) => {
+    setDecomposingId(topicId);
+    try {
+      await api.decomposeTopic(plan.id, topicId);
+      // Refresh the plan to show new sub-topics
+      const fresh = await api.getPlan(plan.id);
+      if (fresh.plan) {
+        // Replace current plan topics with fresh data
+        plan.topics.length = 0;
+        plan.topics.push(...fresh.plan.topics);
+        // Force re-render by toggling a key
+        setDecomposingId(null);
+      }
+    } catch (err) {
+      alert('分解失败: ' + err.message);
+    } finally {
+      setDecomposingId(null);
+    }
+  };
+
   const doneTopics = plan.topics.filter(t => t.done);
   const inProgressTopics = plan.topics.filter(t => !t.done && t.detail && t.detail.length > 0);
   const notStartedTopics = plan.topics.filter(t => !t.done && (!t.detail || t.detail.length === 0));
@@ -211,6 +232,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
             <div className="topic-actions">
               <button className="btn-tiny primary" onClick={() => onGenerate(t.id)}>
                 生成讲解
+              </button>
+              <button className="btn-tiny secondary" onClick={() => handleDecompose(t.id)} disabled={decomposingId === t.id} title="分解为子知识点">
+                {decomposingId === t.id ? '⏳' : '📐'}
               </button>
               <button className="btn-tiny danger" onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>✕</button>
             </div>

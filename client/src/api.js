@@ -119,6 +119,36 @@ const api = {
     }, true);
   },
 
+  // ─── Challenge: Reveal Embedded Errors ───
+  async revealErrors(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/reveal-errors/${topicId}`, {
+      method: 'POST',
+    }, true);
+  },
+
+  // ─── Scaffold: Decompose Topic ───
+  async decomposeTopic(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/decompose/${topicId}`, {
+      method: 'POST',
+    }, true);
+  },
+
+  // ─── TTS: Text-to-Speech ───
+  async textToSpeech(text) {
+    const settings = getApiSettings();
+    if (!settings.imageApiKey) throw new Error('请先在设置中配置图片 API Key（硅基流动）');
+    const res = await fetch(`${API_BASE}/learn/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, imageApiKey: settings.imageApiKey }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'TTS 请求失败' }));
+      throw new Error(err.error || 'TTS 请求失败');
+    }
+    return res.blob();
+  },
+
   // ─── Time Tracking ───
   async recordTime(planId, topicId, seconds) {
     return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/time`, {

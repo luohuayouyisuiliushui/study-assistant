@@ -118,6 +118,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
+  const [revealErrors, setRevealErrors] = useState(null); // null | { hasErrors, errors }
+  const [revealLoading, setRevealLoading] = useState(false);
   const lastReportedRef = useRef(0);
   const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
 
@@ -140,6 +142,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [interactiveLoading, setInteractiveLoading] = useState(false);
   const [interactiveFinished, setInteractiveFinished] = useState(false);
   const [interactiveInput, setInteractiveInput] = useState('');
+  const [interactiveStateMachine, setInteractiveStateMachine] = useState(null); // { currentStep, totalSteps, steps }
   const interactiveInputRef = useRef(null);
   const interactiveBusyRef = useRef(false);
 
@@ -558,16 +561,36 @@ ${bodyHtml}
   };
 
   const handleComplete = async () => {
+    // First check for embedded errors (challenge mode — always on)
+    setRevealLoading(true);
     try {
-      // Mark as done + refresh, then navigate back
+      const result = await api.revealErrors(plan.id, topic.id);
+      if (result.hasErrors && result.errors?.length > 0) {
+        setRevealErrors(result);
+        setRevealLoading(false);
+        return; // Don't mark done yet — wait for user confirmation
+      }
+    } catch { /* silently continue if reveal fails */ }
+    setRevealLoading(false);
+
+    // No errors found or reveal failed — mark as done directly
+    await doComplete();
+  };
+
+  const doComplete = async () => {
+    try {
       await api.updateTopic(plan.id, topic.id, { done: true });
       const fresh = await api.getPlan(plan.id);
       onRefresh(fresh.plan);
       onBack();
     } catch {
-      // Even if API fails, still go back
       onBack();
     }
+  };
+
+  const handleDismissReveal = async () => {
+    setRevealErrors(null);
+    await doComplete();
   };
 
   // ─── Exercise Handlers ───
@@ -646,6 +669,9 @@ ${bodyHtml}
     try {
       const result = await api.startInteractive(plan.id, topic.id, mode);
       setInteractiveSections([{ content: result.content }]);
+      if (result.session?.stateMachine) {
+        setInteractiveStateMachine(result.session.stateMachine);
+      }
     } catch (err) {
       setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]);
     } finally {
@@ -673,6 +699,9 @@ ${bodyHtml}
     try {
       const result = await api.continueInteractive(plan.id, topic.id, interactiveMode, feedback);
       setInteractiveSections(prev => [...prev, { content: result.content }]);
+      if (result.session?.stateMachine) {
+        setInteractiveStateMachine(result.session.stateMachine);
+      }
       if (result.finished) {
         setInteractiveFinished(true);
       }
@@ -689,6 +718,7 @@ ${bodyHtml}
     setInteractiveSections([]);
     setInteractiveFinished(false);
     setInteractiveInput('');
+    setInteractiveStateMachine(null);
   };
 
   // ─── Voice Input Handler ───
@@ -775,8 +805,8 @@ ${bodyHtml}
           </button>
         )}
         {localDetail && !error && !generating && topic.done === false && (
-          <button className="btn btn-sm" onClick={handleComplete} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
-            ✅ 学完了
+          <button className="btn btn-sm" onClick={handleComplete} disabled={revealLoading} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
+            {revealLoading ? '⏳ 检查中...' : '✅ 学完了'}
           </button>
         )}
         {localDetail && !error && !generating && topic.done && (
@@ -792,12 +822,6 @@ ${bodyHtml}
             </button>
             <button className="btn btn-sm interactive-btn realtime-btn" onClick={() => handleStartInteractive('realtime')} title="实时互动，更灵活的教学节奏">
               🎙️ 实时互动
-            </button>
-            <button className="btn btn-sm interactive-btn challenge-btn" onClick={() => handleStartInteractive('challenge')} title="考验模式：AI 故意埋错，你来揪出错误">
-              🔍 考验模式
-            </button>
-            <button className="btn btn-sm interactive-btn scaffold-btn" onClick={() => handleStartInteractive('scaffold')} title="脚手架引导：问题驱动，步步递进">
-              📐 引导模式
             </button>
           </>
         )}
@@ -854,6 +878,40 @@ ${bodyHtml}
             )}
           </div>
         )}
+        {revealLoading && (
+          <div className="reveal-overlay">
+            <div className="reveal-modal">
+              <div className="spinner-sm" />
+              <p>正在检查讲解内容中的潜在错误...</p>
+            </div>
+          </div>
+        )}
+        {revealErrors && (
+          <div className="reveal-overlay">
+            <div className="reveal-modal">
+              <div className="reveal-modal-header">
+                🔍 等一下！AI 在内容中埋了挑战
+              </div>
+              <p style={{ margin: '12px 0', color: '#666', fontSize: '14px' }}>
+                这份讲解中包含了一些微妙的错误，用来考验你是否真正理解了。
+                你没发现的错误有：
+              </p>
+              {revealErrors.errors.map((err, i) => (
+                <div key={i} className="reveal-error-item">
+                  <div className="reveal-error-location">📍 {err.location || '位置未知'}</div>
+                  <div className="reveal-error-desc">{err.description}</div>
+                  <div className="reveal-error-correction">
+                    ✅ 正确版本：{err.correction}
+                  </div>
+                  {err.type && <span className="reveal-error-type">{err.type}</span>}
+                </div>
+              ))}
+              <button className="btn btn-primary" onClick={handleDismissReveal} style={{ marginTop: '16px', width: '100%' }}>
+                我知道了，标记完成
+              </button>
+            </div>
+          </div>
+        )}
         {/* Generating — show spinner + any intermediate content */}
         {generating && !localDetail && (
           <div className="generating-placeholder">
@@ -875,10 +933,27 @@ ${bodyHtml}
         {interactiveMode && (
           <div className="topic-content">
             <div className="interactive-mode-header">
-              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : interactiveMode === 'realtime' ? '🎙️ 实时互动' : interactiveMode === 'challenge' ? '🔍 考验模式' : '📐 引导模式'}</span>
+              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : '🎙️ 实时互动'}</span>
               {interactiveLoading && <span className="typing-text">导师正在思考...</span>}
               {interactiveFinished && <span className="interactive-finished-badge">✅ 讲解完成</span>}
             </div>
+
+            {/* State machine progress bar for stepwise mode */}
+            {interactiveMode === 'stepwise' && interactiveStateMachine && (
+              <div className="sm-progress-bar">
+                {interactiveStateMachine.steps.map((step, i) => (
+                  <div key={i} className="sm-step-chip" data-status={step.status}>
+                    {step.status === 'completed' && '✅ '}
+                    {step.status === 'active' && '▶️ '}
+                    {step.status === 'pending' && '⏳ '}
+                    {step.name}
+                  </div>
+                ))}
+                <div className="sm-progress-text">
+                  第 {interactiveStateMachine.currentStep + 1}/{interactiveStateMachine.totalSteps} 步
+                </div>
+              </div>
+            )}
 
             <div className="interactive-sections">
               {interactiveSections.map((section, i) => (
@@ -912,9 +987,9 @@ ${bodyHtml}
                   <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('和前面讲的有什么关系？')}>
                     🔗 关联
                   </button>
-                  {interactiveMode === 'challenge' && (
-                    <button className="btn btn-sm interactive-quick-btn challenge-catch-btn" onClick={() => handleQuickAction('我发现错误了！')}>
-                      🕵️ 我发现错误了！
+                  {interactiveMode === 'realtime' && (
+                    <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('换个角度解释')}>
+                      🔄 换角度
                     </button>
                   )}
                 </div>
@@ -932,6 +1007,17 @@ ${bodyHtml}
                     placeholder="输入你的问题或反馈...（Enter 发送）"
                     rows={2}
                   />
+                  {voiceSupported && (
+                    <button
+                      type="button"
+                      className={"voice-btn" + (isRecording ? ' recording' : '')}
+                      onClick={handleVoiceInput}
+                      disabled={interactiveLoading}
+                      title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
+                    >
+                      🎤
+                    </button>
+                  )}
                   <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
                     发送
                   </button>
@@ -1041,17 +1127,6 @@ ${bodyHtml}
                       e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
                     }}
                   />
-                  {voiceSupported && (
-                    <button
-                      type="button"
-                      className={"voice-btn" + (isRecording ? ' recording' : '')}
-                      onClick={handleVoiceInput}
-                      disabled={qaLoading}
-                      title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
-                    >
-                      🎤
-                    </button>
-                  )}
                   <button type="button" className="chat-send-btn" onClick={handleAsk} disabled={!qaInput.trim() || qaLoading}>
                     {qaLoading ? <span className="typing-text">思考中...</span> : '➤'}
                   </button>
@@ -1166,8 +1241,8 @@ ${bodyHtml}
 
             {/* Mark complete & go back */}
             <div className="topic-complete-bar">
-              <button className="btn-complete" onClick={handleComplete} title="标记为已学完并返回列表">
-                ✅ 学完了，返回列表
+              <button className="btn-complete" onClick={handleComplete} disabled={revealLoading} title="标记为已学完并返回列表">
+                {revealLoading ? '⏳ 检查错误中...' : '✅ 学完了，返回列表'}
               </button>
             </div>
           </div>
