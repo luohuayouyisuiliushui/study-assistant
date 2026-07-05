@@ -22,7 +22,10 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   const [baseURL, setBaseURL] = useState(saved.baseURL || 'https://api.openai.com/v1');
   const [model, setModel] = useState(saved.model || 'gpt-4o-mini');
   const [showKey, setShowKey] = useState(false);
-  const [testResult, setTestResult] = useState(null); // { ok, model, error } | null
+  const [imageApiKey, setImageApiKey] = useState(saved.imageApiKey || '');
+  const [imageModel, setImageModel] = useState(saved.imageModel || 'black-forest-labs/FLUX.1-dev');
+  const [showImageKey, setShowImageKey] = useState(false);
+  const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
 
   if (!isOpen) return null;
@@ -42,7 +45,7 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   };
 
   const handleSave = () => {
-    const settings = { apiKey, baseURL, model };
+    const settings = { apiKey, baseURL, model, imageApiKey, imageModel };
     saveSettings(settings);
     onSave(settings);
     onClose();
@@ -97,6 +100,39 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
             placeholder="gpt-4o-mini"
           />
           <span className="field-hint">支持 OpenAI、DeepSeek、SiliconFlow 等兼容 API</span>
+        </label>
+
+        <h3 className="settings-section-title">🖼️ 插图生成（硅基流动）</h3>
+
+        <label>
+          生图 API Key
+          <div className="password-input">
+            <input
+              type={showImageKey ? 'text' : 'password'}
+              value={imageApiKey}
+              onChange={e => setImageApiKey(e.target.value)}
+              placeholder="sk-..."
+            />
+            <button
+              className="toggle-btn"
+              onClick={() => setShowImageKey(!showImageKey)}
+              type="button"
+            >
+              {showImageKey ? '🙈' : '👁️'}
+            </button>
+          </div>
+          <span className="field-hint">使用硅基流动（SiliconFlow）API Key，用于为知识点生成配图</span>
+        </label>
+
+        <label>
+          生图模型
+          <select value={imageModel} onChange={e => setImageModel(e.target.value)}>
+            <option value="black-forest-labs/FLUX.1-dev">FLUX.1-dev（高质量，推荐）</option>
+            <option value="Kwai-Kolors/Kolors">Kolors（中等质量，速度快）</option>
+            <option value="stabilityai/stable-diffusion-3-5-large">SD3.5 Large（高质量）</option>
+            <option value="stabilityai/stable-diffusion-xl-base-1.0">SDXL 1.0（兼容性好）</option>
+          </select>
+          <span className="field-hint">不同模型影响图片质量和生成速度</span>
         </label>
 
         {testResult && (

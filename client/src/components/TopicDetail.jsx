@@ -679,6 +679,12 @@ ${bodyHtml}
         {/* Content + inline Q&A */}
         {localDetail && !error && (
           <div className="topic-content">
+            {/* Generated illustration */}
+            {topic.imageUrl && (
+              <div className="topic-illustration">
+                <img src={topic.imageUrl} alt={topic.title} className="topic-illustration-img" />
+              </div>
+            )}
             <ContentArea content={localDetail} />
             {generating && <div className="streaming-indicator">⏳ 继续生成中...</div>}
 

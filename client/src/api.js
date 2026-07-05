@@ -92,8 +92,11 @@ const api = {
 
   // ─── Generation & Q&A (needs API key) ───
   async generateDetail(planId, topicId) {
+    const settings = getApiSettings();
+    const body = settings.imageApiKey ? JSON.stringify({ imageApiKey: settings.imageApiKey, imageModel: settings.imageModel }) : undefined;
+    const headers = body ? { 'Content-Type': 'application/json' } : {};
     return request(`${API_BASE}/learn/plans/${planId}/generate/${topicId}`,
-      { method: 'POST' }, true);
+      { method: 'POST', body, headers }, true);
   },
   async askQuestion(planId, topicId, question) {
     return request(`${API_BASE}/learn/plans/${planId}/ask/${topicId}`, {

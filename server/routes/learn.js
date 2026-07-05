@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -303,7 +303,14 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
 
   try {
     const provider = getProvider(req);
-    await generateDetail(provider, plan, req.params.topicId, provider.model);
+    const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
+    const imageModel = req.body?.imageModel || '';
+    if (imageApiKey) {
+      // Generate text + illustration
+      await generateDetailWithImage(provider, plan, req.params.topicId, imageApiKey, provider.model, imageModel);
+    } else {
+      await generateDetail(provider, plan, req.params.topicId, provider.model);
+    }
   } catch (err) {
     console.error('Generate failed:', err.message);
   }

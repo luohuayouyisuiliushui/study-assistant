@@ -20,6 +20,10 @@ import { buildDetailMessages, buildFollowUpMessages,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
 import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
+import OpenAI from 'openai';
+import https from 'https';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * Global cache monitor for this process.
@@ -471,12 +475,104 @@ export async function analyzeWeakPoints(providerOrConfig, plan, model = 'gpt-4o-
 /**
  * Get cache diagnostics for the engine.
  */
+/**
+ * Generate an illustration for a knowledge point using SiliconFlow's image generation API.
+ * Calls the text-to-image model, downloads the result, and saves it to server/data/images/.
+ * @param {object} topic - The topic object (must have id and title)
+ * @param {string} imageApiKey - SiliconFlow API key
+ * @param {string} [model] - Image generation model (default: FLUX.1-dev)
+ * @returns {Promise<string|null>} The local URL path to the saved image, or null on failure
+ */
+export async function generateTopicImage(topic, imageApiKey, model) {
+  if (!topic?.id || !topic?.title || !imageApiKey) return null;
+
+  const imageModel = model || 'black-forest-labs/FLUX.1-dev';
+
+  // Build a prompt for the image based on the topic title
+  const prompt = `Educational illustration for the topic: ${topic.title}. Clean, professional diagram style with Chinese labels, suitable for a study note. Flat vector design, light background, no text errors.`;
+
+  const imageDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'images');
+  fs.mkdirSync(imageDir, { recursive: true });
+
+  try {
+    const client = new OpenAI({
+      apiKey: imageApiKey,
+      baseURL: 'https://api.siliconflow.cn/v1',
+      maxRetries: 2,
+      timeout: 60_000,
+    });
+
+    const response = await client.images.generate({
+      model: imageModel,
+      prompt,
+      n: 1,
+      size: '1024x1024',
+      response_format: 'url',
+    });
+
+    const imageUrl = response.data?.[0]?.url;
+    if (!imageUrl) {
+      console.warn('[generateTopicImage] No image URL returned');
+      return null;
+    }
+
+    // Download the image from the temporary URL
+    const safeName = topic.id.replace(/[^a-zA-Z0-9_-]/g, '_') + '.png';
+    const localPath = path.join(imageDir, safeName);
+
+    await new Promise((resolve, reject) => {
+      https.get(imageUrl, (res) => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Download failed: ${res.statusCode}`));
+          return;
+        }
+        const fileStream = fs.createWriteStream(localPath);
+        res.pipe(fileStream);
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve();
+        });
+        fileStream.on('error', reject);
+      }).on('error', reject);
+    });
+
+    const relativePath = '/images/' + safeName;
+    console.log('[generateTopicImage] Saved:', relativePath);
+    return relativePath;
+  } catch (err) {
+    console.warn('[generateTopicImage] Failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Generate a detail + illustration for a topic (combines text and image generation).
+ */
+export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel) {
+  // First generate the text detail
+  const content = await generateDetail(providerOrConfig, plan, topicId, model);
+
+  // Then generate an illustration (fire-and-forget on the image, don't block)
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (topic && imageApiKey) {
+    generateTopicImage(topic, imageApiKey, imageModel).then(imageUrl => {
+      if (imageUrl && topic) {
+        updateTopic(plan.id, topicId, { imageUrl });
+      }
+    });
+  }
+
+  return content;
+}
+
 export function getEngineCacheDiagnostics() {
   return engineCacheMonitor.summary();
 }
 
 export default {
   generateDetail,
+  generateDetailWithImage,
+  generateTopicImage,
   answerFollowUp,
   answerAnalysisFollowUp,
   analyzeLearning,

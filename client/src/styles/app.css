@@ -1198,6 +1198,17 @@ body {
 }
 .modal h2 { margin: 0 0 4px; font-size: 18px; }
 .modal-hint { color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; }
+.settings-section-title {
+  font-size: 14px; font-weight: 600;
+  margin: 20px 0 12px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.modal select {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; background: white; outline: none;
+}
+.modal select:focus { border-color: var(--primary); }
 
 .security-notice {
   font-size: 12px; color: #92400e;
@@ -1244,3 +1255,14 @@ body {
 }
 .test-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
 .test-fail { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+
+/* ─── Topic Illustration ─── */
+.topic-illustration {
+  display: flex; justify-content: center; margin: 16px 0;
+}
+.topic-illustration-img {
+  max-width: 100%; max-height: 400px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+}

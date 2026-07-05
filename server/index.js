@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import learnRouter from './routes/learn.js';
 
@@ -9,12 +10,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Image storage directory
+const IMAGES_DIR = path.join(__dirname, 'data', 'images');
+fs.mkdirSync(IMAGES_DIR, { recursive: true });
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // API routes
 app.use('/api/learn', learnRouter);
+
+// Serve generated images
+app.use('/images', express.static(IMAGES_DIR));
 
 // Serve built React app in production
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
