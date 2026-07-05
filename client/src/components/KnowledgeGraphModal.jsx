@@ -44,6 +44,12 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
   const [extractResult, setExtractResult] = useState(null);
   const graphContainerRef = useRef(null);
   const svgRef = useRef(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadGraph = useCallback(async () => {
     if (!plan) return;
@@ -78,15 +84,15 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
   useEffect(() => {
     if (!graphSvg || !graphContainerRef.current) return;
     const container = graphContainerRef.current;
-    // Wait for DOM to be updated
-    const timer = setTimeout(() => {
+    // Use requestAnimationFrame for safer DOM timing
+    const raf = requestAnimationFrame(() => {
       const svgEl = container.querySelector('svg');
       if (svgEl) {
         svgRef.current = svgEl;
         attachNodeClickHandlers(svgEl);
       }
-    }, 100);
-    return () => clearTimeout(timer);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [graphSvg]);
 
   const filteredEdges = (edges) => {
@@ -276,7 +282,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       const isDashed = typeInfo.style === 'dashed' || typeInfo.style === 'dotted' || isInferred;
 
       let connector;
-      if (isBidirectional && isDashed) connector = '<-.- ->';
+      if (isBidirectional && isDashed) connector = '<-.->';
       else if (isBidirectional) connector = '<-->';
       else if (isDashed) connector = '-.->';
       else connector = '-->';
@@ -314,8 +320,9 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       });
       const id = 'kg-' + Math.random().toString(36).slice(2, 9);
       const { svg } = await mermaid.default.render(id, mermaidDef);
-      setGraphSvg(svg);
+      if (mountedRef.current) setGraphSvg(svg);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError('图谱渲染失败: ' + err.message);
       setGraphSvg('<pre style="background:#f8fafc;padding:16px;border-radius:6px;overflow:auto;font-size:12px;">' +
         mermaidDef.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>');

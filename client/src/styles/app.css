@@ -59,7 +59,7 @@ body {
 }
 
 .app-main {
-  flex: 1; overflow: hidden;
+  flex: 1; overflow-y: auto;
   display: flex; align-items: flex-start; justify-content: center;
 }
 
@@ -208,7 +208,7 @@ body {
 .plan-view {
   width: 100%; max-width: 700px;
   padding: 24px 20px;
-  margin: 0 auto; overflow-y: auto; height: 100%;
+  margin: 0 auto;
 }
 
 .plan-view-header {
@@ -574,7 +574,7 @@ body {
 .kg-svg-container svg { max-width: 100%; height: auto; }
 .kg-legend { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .kg-legend-item { font-size: 11px; }
-.kg-legend-sep { color: #d1d5db; font-size: 14px; }
+.kg-legend-sep { color: #d1d5db; font-size: 14px; margin: 0 4px; }
 .kg-legend-inferred { color: #7c3aed; font-weight: 500; }
 .kg-legend-hint { color: #f59e0b; font-style: italic; }
 
