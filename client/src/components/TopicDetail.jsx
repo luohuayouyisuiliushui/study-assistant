@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -30,6 +30,40 @@ const markdownComponents = {
   },
 };
 
+// Memo-optimized content area — only re-renders when the markdown string changes
+const ContentArea = memo(function ContentArea({ content }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{content}</ReactMarkdown>;
+});
+
+// Memo-optimized Q&A message list — only re-renders when qaList changes
+const QaMessages = memo(function QaMessages({ qaList }) {
+  return qaList.length === 0 ? (
+    <div className="chat-empty">暂无追问，在下方输入问题开始讨论</div>
+  ) : (
+    qaList.map((qa, i) => (
+      <div key={i} className="chat-message-group" data-round={i}>
+        {/* User message */}
+        <div className="chat-message user">
+          <div className="chat-bubble user-bubble">
+            {qa.question}
+          </div>
+        </div>
+        {/* AI message */}
+        <div className="chat-message ai">
+          <div className="chat-avatar">🤖</div>
+          <div className="chat-bubble ai-bubble">
+            {qa.answer === '...' ? (
+              <span className="typing-text">思考中...</span>
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
+            )}
+          </div>
+        </div>
+      </div>
+    ))
+  );
+});
+
 export default function TopicDetail({ plan, topic, onBack, onRefresh }) {
   const [qaInput, setQaInput] = useState('');
   const [qaList, setQaList] = useState([]);
@@ -44,14 +78,34 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh }) {
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
+  const lastReportedRef = useRef(0); // seconds already reported to server for this topic
 
-  // Record time spent when leaving this topic
+  // Record time spent — heartbeat every 30s + flush on leave
   useEffect(() => {
+    const pid = plan?.id;
+    const tid = topic?.id;
     startTimeRef.current = Date.now();
+    lastReportedRef.current = 0;
+
+    // Periodic heartbeat: send accumulated time every 30s
+    const heartbeat = setInterval(async () => {
+      const total = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const unreported = total - lastReportedRef.current;
+      if (unreported >= 5 && pid && tid) {
+        try {
+          await api.recordTime(pid, tid, unreported);
+          lastReportedRef.current = total;
+        } catch { /* ignore */ }
+      }
+    }, 30000);
+
     return () => {
+      clearInterval(heartbeat);
+      // Send remaining time on leave
       const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
-      if (elapsed >= 5 && plan?.id && topic?.id) {
-        api.recordTime(plan.id, topic.id, elapsed).catch(() => {});
+      const unreported = elapsed - lastReportedRef.current;
+      if (unreported >= 5 && pid && tid) {
+        api.recordTime(pid, tid, unreported).catch(() => {});
       }
     };
   }, [topic?.id]);
@@ -374,6 +428,19 @@ ${bodyHtml}
     setDifficultySaving(false);
   };
 
+  const handleComplete = async () => {
+    try {
+      // Mark as done + refresh, then navigate back
+      await api.updateTopic(plan.id, topic.id, { done: true });
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+      onBack();
+    } catch {
+      // Even if API fails, still go back
+      onBack();
+    }
+  };
+
   return (
     <div className="topic-detail">
       <div className="topic-detail-header">
@@ -389,6 +456,11 @@ ${bodyHtml}
         {localDetail && !error && !generating && (
           <button className="btn btn-sm" onClick={handleExportHtml} title="导出为 HTML（含渲染后的 Mermaid 图表）">
             🌐 .html
+          </button>
+        )}
+        {localDetail && !error && !generating && topic.done === false && (
+          <button className="btn btn-sm" onClick={handleComplete} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
+            ✅ 学完了
           </button>
         )}
       </div>
@@ -414,9 +486,7 @@ ${bodyHtml}
         {/* Content + inline Q&A */}
         {localDetail && !error && (
           <div className="topic-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>
-              {localDetail}
-            </ReactMarkdown>
+            <ContentArea content={localDetail} />
             {generating && <div className="streaming-indicator">⏳ 继续生成中...</div>}
 
             {/* Chat panel for Q&A (DS-web style) */}
@@ -434,6 +504,7 @@ ${bodyHtml}
                         onClick={() => scrollToRound(i)}
                         onMouseEnter={() => setHoveredRound(i)}
                         onMouseLeave={() => setHoveredRound(null)}
+                        title={qa.question}
                       >
                         {i + 1}
                       </button>
@@ -448,33 +519,7 @@ ${bodyHtml}
                 </div>
               )}
               <div className="chat-messages" ref={chatPanelRef}>
-                {qaList.length === 0 ? (
-                  <div className="chat-empty">
-                    暂无追问，在下方输入问题开始讨论
-                  </div>
-                ) : (
-                  qaList.map((qa, i) => (
-                    <div key={i} className="chat-message-group" data-round={i}>
-                      {/* User message */}
-                      <div className="chat-message user">
-                        <div className="chat-bubble user-bubble">
-                          {qa.question}
-                        </div>
-                      </div>
-                      {/* AI message */}
-                      <div className="chat-message ai">
-                        <div className="chat-avatar">🤖</div>
-                        <div className="chat-bubble ai-bubble">
-                          {qa.answer === '...' ? (
-                            <span className="typing-text">思考中...</span>
-                          ) : (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
+                <QaMessages qaList={qaList} />
               </div>
               <div className="chat-input">
                 <form onSubmit={e => { e.preventDefault(); handleAsk(); }}>
@@ -523,6 +568,13 @@ ${bodyHtml}
                 </div>
               </div>
             )}
+
+            {/* Mark complete & go back */}
+            <div className="topic-complete-bar">
+              <button className="btn-complete" onClick={handleComplete} title="标记为已学完并返回列表">
+                ✅ 学完了，返回列表
+              </button>
+            </div>
           </div>
         )}
       </div>
