@@ -230,6 +230,149 @@ describe('learn-store', () => {
     });
   });
 
+  // ═══════════════════════════════════════════════════════
+  //  NEW: createPlanWithPhases (nested hierarchy)
+  // ═══════════════════════════════════════════════════════
+  describe('createPlanWithPhases (hierarchy)', () => {
+    it('should create plan with nested hierarchy (old string format)', () => {
+      const phases = [{ name: '基础', topics: ['变量', '函数'] }];
+      const plan = store.createPlanWithPhases('旧格式兼容', phases);
+      createdPlanIds.push(plan.id);
+      assert.strictEqual(plan.topics.length, 2);
+      assert.strictEqual(plan.topics[0].title, '变量');
+      assert.strictEqual(plan.topics[0].level, 1);
+      assert.strictEqual(plan.topics[0].parentId, null);
+    });
+
+    it('should create plan with nested hierarchy (new object format)', () => {
+      const phases = [{
+        name: 'Python',
+        topics: [
+          { title: '基础语法', level: 1, subtopics: [
+            { title: '变量', level: 2 },
+            { title: '函数', level: 2, subtopics: [
+              { title: '参数传递', level: 3 },
+            ]},
+          ]},
+          { title: '面向对象', level: 1 },
+        ],
+      }];
+      const plan = store.createPlanWithPhases('层级测试', phases);
+      createdPlanIds.push(plan.id);
+      assert.strictEqual(plan.topics.length, 5);
+      // Check parent-child relationships
+      const base = plan.topics.find(t => t.title === '基础语法');
+      const variable = plan.topics.find(t => t.title === '变量');
+      const func = plan.topics.find(t => t.title === '函数');
+      const param = plan.topics.find(t => t.title === '参数传递');
+      const oop = plan.topics.find(t => t.title === '面向对象');
+      assert.ok(base); assert.ok(variable); assert.ok(func); assert.ok(param); assert.ok(oop);
+      assert.strictEqual(variable.parentId, base.id);
+      assert.strictEqual(func.parentId, base.id);
+      assert.strictEqual(param.parentId, func.id);
+      // Check levels
+      assert.strictEqual(base.level, 1);
+      assert.strictEqual(variable.level, 2);
+      assert.strictEqual(param.level, 3);
+    });
+
+    it('should process external relations (prerequisite + related)', () => {
+      const phases = [{ name: '内容', topics: [
+        { title: 'A', level: 1 },
+        { title: 'B', level: 1 },
+        { title: 'C', level: 1 },
+      ]}];
+      const relations = [
+        { from: 'A', to: 'B', type: 'prerequisite' },
+        { from: 'A', to: 'C', type: 'related' },
+      ];
+      const plan = store.createPlanWithPhases('关系测试', phases, relations);
+      createdPlanIds.push(plan.id);
+      const a = plan.topics.find(t => t.title === 'A');
+      const b = plan.topics.find(t => t.title === 'B');
+      const c = plan.topics.find(t => t.title === 'C');
+      assert.ok(b.prerequisites.includes(a.id));
+      assert.ok(a.relatedTopics.includes(c.id) || c.relatedTopics.includes(a.id));
+    });
+
+    it('should handle item-level prerequisites with external relations', () => {
+      const phases = [{ name: '内容', topics: [
+        { title: 'A', level: 1 },
+        { title: 'B', level: 1, prerequisites: ['A'] },
+      ]}];
+      const plan = store.createPlanWithPhases('混合前置', phases);
+      createdPlanIds.push(plan.id);
+      const b = plan.topics.find(t => t.title === 'B');
+      const a = plan.topics.find(t => t.title === 'A');
+      assert.strictEqual(b.prerequisites.length, 1);
+      assert.strictEqual(b.prerequisites[0], a.id);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════
+  //  NEW: getTopicChildren / getTopicPrerequisites
+  // ═══════════════════════════════════════════════════════
+  describe('getTopicChildren', () => {
+    it('should return direct children sorted by order', () => {
+      const plan = store.createPlan('children-test');
+      createdPlanIds.push(plan.id);
+      // Manually build a plan with parent-child
+      const parentId = 'p1';
+      plan.topics = [
+        { id: parentId, title: '父', order: 0, parentId: null, level: 1, prerequisites: [], relatedTopics: [] },
+        { id: 'c1', title: '子1', order: 1, parentId, level: 2, prerequisites: [], relatedTopics: [] },
+        { id: 'c2', title: '子2', order: 2, parentId, level: 2, prerequisites: [], relatedTopics: [] },
+      ];
+      const children = store.getTopicChildren(plan, parentId);
+      assert.strictEqual(children.length, 2);
+      assert.strictEqual(children[0].title, '子1');
+    });
+  });
+
+  describe('getTopicPrerequisites', () => {
+    it('should return prerequisite topics', () => {
+      const plan = store.createPlan('pre-test');
+      createdPlanIds.push(plan.id);
+      const p1 = { id: 'p1', title: '前置', prerequisites: [], relatedTopics: [] };
+      const p2 = { id: 'p2', title: '后置', prerequisites: ['p1'], relatedTopics: [] };
+      plan.topics = [p1, p2];
+      const prereqs = store.getTopicPrerequisites(plan, 'p2');
+      assert.strictEqual(prereqs.length, 1);
+      assert.strictEqual(prereqs[0].title, '前置');
+    });
+
+    it('should return empty array for topic without prerequisites', () => {
+      const plan = store.createPlan('no-pre-test');
+      createdPlanIds.push(plan.id);
+      plan.topics = [{ id: 'x', title: '独立', prerequisites: [], relatedTopics: [] }];
+      const prereqs = store.getTopicPrerequisites(plan, 'x');
+      assert.strictEqual(prereqs.length, 0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════
+  //  NEW: buildKnowledgeGraph
+  // ═══════════════════════════════════════════════════════
+  describe('buildKnowledgeGraph', () => {
+    it('should return nodes and edges from plan topics', () => {
+      const plan = store.createPlan('graph-test');
+      createdPlanIds.push(plan.id);
+      plan.topics = [
+        { id: 'a', title: 'A', phaseId: 'ph1', level: 1, done: false, difficulty: null, parentId: null, prerequisites: [], relatedTopics: ['b'] },
+        { id: 'b', title: 'B', phaseId: 'ph1', level: 2, done: true, difficulty: 'easy', parentId: 'a', prerequisites: [], relatedTopics: ['a'] },
+      ];
+      const graph = store.buildKnowledgeGraph(plan);
+      assert.strictEqual(graph.nodes.length, 2);
+      assert.strictEqual(graph.nodes[0].title, 'A');
+      assert.strictEqual(graph.nodes[1].done, true);
+      // Should have parentOf + 2 related (a→b, b→a deduped to one) = 2 edges
+      assert.strictEqual(graph.edges.length, 2);
+      const edgeTypes = graph.edges.map(e => e.type);
+      assert.ok(edgeTypes.includes('parentOf'));
+      assert.ok(edgeTypes.includes('related'));
+    });
+  });
+
   describe('deletePlan', () => {
     it('should delete a plan', () => {
       const plan = store.createPlan('delete-me');

@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import api from '../api';
 import KnowledgeGraphModal from './KnowledgeGraphModal';
+import { detectEncoding } from '../utils/encoding';
 
 export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTopic, onGenerate }) {
   const [bulkInput, setBulkInput] = useState('');
@@ -111,16 +112,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      // Try UTF-8 first; if garbled, try GBK (Windows 记事本默认编码)
       const buffer = ev.target?.result;
       if (!buffer) return;
-      let text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-      // 检查是否有乱码字符（U+FFFD 或常见 GBK 误读特征）
-      if (text.includes('\uFFFD') || /[\u0080-\u00FF]{4,}/.test(text.replace(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g, ''))) {
-        try {
-          text = new TextDecoder('gbk').decode(buffer);
-        } catch { /* keep utf-8 result */ }
-      }
+      const text = detectEncoding(buffer);
       setBulkInput(prev => (prev ? prev + '\n' : '') + text);
     };
     reader.readAsArrayBuffer(file);

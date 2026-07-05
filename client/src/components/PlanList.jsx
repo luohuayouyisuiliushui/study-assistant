@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { detectEncoding } from '../utils/encoding';
 
 export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete }) {
   const [mode, setMode] = useState('manual');
@@ -37,18 +38,7 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
     reader.onload = (ev) => {
       const buffer = ev.target?.result;
       if (!buffer) return;
-
-      // 用两种编码解码，选中文更多的那个
-      const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(buffer);
-      let gbk = utf8;
-      try { gbk = new TextDecoder('gbk').decode(buffer); } catch {}
-
-      // 统计中文字符数
-      const cjkCount = (s) => (s.match(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g) || []).length;
-      const utf8Cjk = cjkCount(utf8);
-      const gbkCjk = cjkCount(gbk);
-
-      const text = gbkCjk > utf8Cjk ? gbk : utf8;
+      const text = detectEncoding(buffer);
       setImportText(text);
       doImport(text);
     };
