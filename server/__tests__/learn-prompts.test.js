@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildDeterministicContext, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT } from '../engine/learn-prompts.js';
+import { buildDeterministicContext, buildDetailMessages, buildFollowUpMessages, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
 
 function makePlan(overrides = {}) {
   return {
@@ -246,5 +246,98 @@ describe('STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT', () => {
     assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('子问题'));
     assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('鼓励'));
     assert.ok(STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT.includes('[SESSION_END]'));
+  });
+});
+
+describe('ANALYSIS_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof ANALYSIS_SYSTEM_PROMPT === 'string');
+    assert.ok(ANALYSIS_SYSTEM_PROMPT.length > 200);
+  });
+
+  it('should contain analysis keywords', () => {
+    assert.ok(ANALYSIS_SYSTEM_PROMPT.includes('分析'));
+    assert.ok(ANALYSIS_SYSTEM_PROMPT.includes('个性化'));
+  });
+});
+
+describe('ANALYSIS_FOLLOWUP_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof ANALYSIS_FOLLOWUP_PROMPT === 'string');
+    assert.ok(ANALYSIS_FOLLOWUP_PROMPT.length > 100);
+  });
+
+  it('should contain follow-up keywords', () => {
+    assert.ok(ANALYSIS_FOLLOWUP_PROMPT.includes('分析报告'));
+    assert.ok(ANALYSIS_FOLLOWUP_PROMPT.includes('进一步的问题'));
+  });
+});
+
+describe('IMPORT_PLAN_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof IMPORT_PLAN_PROMPT === 'string');
+    assert.ok(IMPORT_PLAN_PROMPT.length > 500);
+  });
+
+  it('should contain JSON output requirements', () => {
+    assert.ok(IMPORT_PLAN_PROMPT.includes('documentAnalysis'));
+    assert.ok(IMPORT_PLAN_PROMPT.includes('phases'));
+    assert.ok(IMPORT_PLAN_PROMPT.includes('relations'));
+  });
+});
+
+describe('buildDetailMessages', () => {
+  it('should return array with system + context messages', () => {
+    const plan = makePlan();
+    const msgs = buildDetailMessages(plan, 't1');
+    assert.strictEqual(msgs.length, 2);
+    assert.strictEqual(msgs[0].role, 'system');
+    assert.strictEqual(msgs[0].content, STABLE_DETAIL_SYSTEM_PROMPT);
+    assert.strictEqual(msgs[1].role, 'user');
+    assert.ok(msgs[1].content.includes('学习上下文'));
+  });
+
+  it('should include question when provided', () => {
+    const plan = makePlan();
+    const msgs = buildDetailMessages(plan, 't1', '请讲解这个知识点');
+    assert.strictEqual(msgs.length, 3);
+    assert.strictEqual(msgs[2].role, 'user');
+    assert.strictEqual(msgs[2].content, '请讲解这个知识点');
+  });
+
+  it('should not include question when omitted', () => {
+    const plan = makePlan();
+    const msgs = buildDetailMessages(plan, 't1');
+    assert.strictEqual(msgs.length, 2);
+  });
+
+  it('should return empty context for missing topic', () => {
+    const plan = makePlan();
+    const msgs = buildDetailMessages(plan, 'non-existent');
+    assert.strictEqual(msgs[1].content, '');
+  });
+});
+
+describe('buildFollowUpMessages', () => {
+  it('should return array with system + context messages', () => {
+    const plan = makePlan();
+    const msgs = buildFollowUpMessages(plan, 't1');
+    assert.strictEqual(msgs.length, 2);
+    assert.strictEqual(msgs[0].role, 'system');
+    assert.strictEqual(msgs[0].content, STABLE_FOLLOWUP_SYSTEM_PROMPT);
+  });
+
+  it('should include question when provided', () => {
+    const plan = makePlan();
+    const msgs = buildFollowUpMessages(plan, 't1', '追问问题');
+    assert.strictEqual(msgs.length, 3);
+    assert.strictEqual(msgs[2].content, '追问问题');
+  });
+
+  it('should use follow-up prompt (not detail prompt)', () => {
+    const plan = makePlan();
+    const msgs = buildFollowUpMessages(plan, 't1');
+    assert.ok(msgs[0].content.includes('追问'));
+    assert.ok(!msgs[0].content.includes('练习题'));
   });
 });

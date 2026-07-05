@@ -173,11 +173,19 @@ function _buildStateMachineSnapshot(session) {
   const completed = sm.steps.filter(s => s.status === 'completed').length;
   let result = `【教学进度】已完成 ${completed}/${sm.totalSteps} 步\n`;
   result += `当前阶段：${current.name}（第 ${sm.currentStep + 1}/${sm.totalSteps} 步）\n`;
+  if (current.retryCount > 0) {
+    result += `⚠️ 当前步骤已重新讲解 ${current.retryCount} 次\n`;
+  }
   result += '步骤列表：\n';
   sm.steps.forEach((s, i) => {
-    const marker = s.status === 'completed' ? '✅' : s.status === 'active' ? '▶️' : '⏳';
-    result += `  ${marker} ${i + 1}. ${s.name}\n`;
+    const marker = s.status === 'completed' ? '✅' : s.status === 'active' ? '▶️' : s.status === 'skipped' ? '⏭️' : '⏳';
+    result += `  ${marker} ${i + 1}. ${s.name}`;
+    if (s.retryCount > 0 && s.status !== 'completed') {
+      result += ` (已重试${s.retryCount}次)`;
+    }
+    result += '\n';
   });
+  result += `会话状态：${session.status === 'waiting_user' ? '等待你的回应' : session.status === 'ai_thinking' ? 'AI 正在思考' : session.status === 'completed' ? '已完成' : '进行中'}`;
   return result;
 }
 
@@ -192,6 +200,7 @@ function _initStateMachine(mode) {
     steps: STEPWISE_PHASES.map((p, i) => ({
       ...p,
       status: i === 0 ? 'active' : 'pending',
+      retryCount: 0,
     })),
   };
 }
@@ -215,6 +224,24 @@ function _advanceStateMachine(session) {
     return true;
   }
   return false; // No more steps
+}
+
+/**
+ * Skip the current step (mark as skipped) and advance to the next.
+ */
+function _skipStep(session) {
+  const sm = session.stateMachine;
+  if (!sm) return false;
+  if (sm.steps[sm.currentStep]) {
+    sm.steps[sm.currentStep].status = 'skipped';
+  }
+  const nextIndex = sm.currentStep + 1;
+  if (nextIndex < sm.totalSteps) {
+    sm.currentStep = nextIndex;
+    sm.steps[nextIndex].status = 'active';
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -272,6 +299,7 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
 
   const session = {
     mode,
+    status: 'waiting_user',
     finished: false,
     transcript: [{ role: 'ai', content: fullContent }],
     stateMachine,
@@ -304,14 +332,22 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
 
   session.transcript.push({ role: 'user', content: feedback });
+  session.status = 'ai_thinking';
 
   const context = buildDeterministicContext(plan, topicId);
   const transcriptText = _buildInteractiveTranscript(session);
 
-  // Advance state machine when user says "继续" in stepwise mode
-  const isAdvance = mode === 'stepwise' && /^继续/.test(feedback.trim());
-  if (isAdvance) {
-    _advanceStateMachine(session);
+  // State machine logic for stepwise mode
+  if (mode === 'stepwise') {
+    const currentStep = session.stateMachine?.steps[session.stateMachine?.currentStep];
+    if (/^跳过/.test(feedback.trim())) {
+      _skipStep(session);
+    } else if (/^继续/.test(feedback.trim())) {
+      _advanceStateMachine(session);
+    } else if (currentStep && currentStep.status === 'active') {
+      // User asked for re-explanation or other feedback on current step
+      currentStep.retryCount = (currentStep.retryCount || 0) + 1;
+    }
   }
 
   const stateSnapshot = _buildStateMachineSnapshot(session);
@@ -340,15 +376,18 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
 
   session.transcript.push({ role: 'ai', content: fullContent });
 
+  session.status = 'waiting_user';
+
   // Detect session end via explicit marker (set in system prompt)
   if (/\[SESSION_END\]/.test(fullContent)) {
     session.finished = true;
+    session.status = 'completed';
   }
 
   topic.interactiveSession = session;
   await updateTopic(plan.id, topicId, { interactiveSession: session });
 
-  return { content: fullContent, session, finished: session.finished };
+  return { content: fullContent, session, finished: session.finished, status: session.status };
 }
 
 // ═══════════════════════════════════════════════════════

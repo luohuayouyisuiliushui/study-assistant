@@ -1,7 +1,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp } from '../engine/learn-engine.js';
+import { CacheMonitor } from '../engine/cache-diagnostics.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -345,6 +346,7 @@ describe('Interactive mode', () => {
     assert.ok(result.session, 'should return session object');
     assert.strictEqual(result.session.mode, 'stepwise', 'session mode should be stepwise');
     assert.strictEqual(result.session.finished, false, 'should not be finished');
+    assert.strictEqual(result.session.status, 'waiting_user', 'session should be waiting for user');
     assert.strictEqual(result.session.transcript.length, 1, 'transcript should have one AI entry');
     // State machine should be initialized for stepwise mode
     assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
@@ -401,6 +403,28 @@ describe('Interactive mode', () => {
 
     const r2 = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
     assert.strictEqual(r2.session.stateMachine.currentStep, 2, 'should advance to step 2');
+  });
+
+  it('continueInteractiveDetail should increment retryCount on non-advance feedback', async () => {
+    const sepPlan = store.createPlan('retry-test');
+    await store.addTopics(sepPlan.id, ['重试测试']);
+    const p = store.getPlan(sepPlan.id);
+
+    const provider1 = createStreamMockProvider('第一步讲解');
+    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
+
+    // Say "不懂" instead of "继续" — should increment retryCount, not advance
+    const provider2 = createStreamMockProvider('重新解释一遍');
+    const r1 = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '不太懂');
+    assert.strictEqual(r1.session.stateMachine.currentStep, 0, 'should stay on step 0');
+    assert.strictEqual(r1.session.stateMachine.steps[0].retryCount, 1, 'retryCount should be 1');
+    assert.strictEqual(r1.session.status, 'waiting_user', 'should be waiting for user after response');
+
+    const provider3 = createStreamMockProvider('换个角度解释');
+    const r2 = await continueInteractiveDetail(provider3, p, p.topics[0].id, 'stepwise', '还是不太懂');
+    assert.strictEqual(r2.session.stateMachine.steps[0].retryCount, 2, 'retryCount should be 2');
+
+    store.deletePlan(sepPlan.id);
   });
 
   it('continueInteractiveDetail should take feedback and return next section', async () => {
@@ -687,6 +711,272 @@ describe('decomposeTopic', () => {
       () => decomposeTopic(provider, plan, 'non-existent'),
       { message: 'Topic not found' }
     );
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  analyzeLearning tests
+// ═══════════════════════════════════════════════════════
+
+describe('analyzeLearning', () => {
+  it('should return analysis structure with provider response', async () => {
+    const mockProvider = createMockProvider('## 分析结果\n\n学习进度良好，继续努力！');
+    const plan = store.createPlan('analysis-test');
+    await store.addTopics(plan.id, ['分析测试']);
+    const p1 = store.getPlan(plan.id); // reload after addTopics
+    await store.updateTopic(p1.id, p1.topics[0].id, {
+      detail: '讲解了分析相关内容',
+      done: true,
+    });
+    await store.addHistory(p1.id, p1.topics[0].id, 'user', '这个知识点难吗？');
+    await store.addHistory(p1.id, p1.topics[0].id, 'ai', '不难，掌握就好。');
+    const p = store.getPlan(plan.id);
+
+    const result = await analyzeLearning(mockProvider, p, 'mock-model');
+    assert.ok(result.analysis, 'should have analysis text');
+    assert.ok(result.analysis.includes('分析结果'), 'should include AI response');
+    assert.ok(result.analyzedAt > 0, 'should have timestamp');
+    assert.strictEqual(result.topicCount, 1, 'should count topics');
+    assert.strictEqual(result.doneCount, 1, 'should count done topics');
+    assert.strictEqual(result.totalQuestions, 1, 'should count questions');
+    assert.ok(result.usage, 'should include usage data');
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle empty plan gracefully', async () => {
+    const mockProvider = createMockProvider('无分析数据。');
+    const plan = store.createPlan('empty-analysis');
+    const p = store.getPlan(plan.id);
+
+    const result = await analyzeLearning(mockProvider, p, 'mock-model');
+    assert.ok(result.analysis, 'should still return analysis');
+    assert.strictEqual(result.topicCount, 0, 'no topics');
+    assert.strictEqual(result.doneCount, 0, 'no done topics');
+    store.deletePlan(plan.id);
+  });
+
+  it('should include previous analysis chat when provided', async () => {
+    const mockProvider = createMockProvider('根据之前的讨论，我调整了分析。');
+    const plan = store.createPlan('analysis-chat-test');
+    const p = store.getPlan(plan.id);
+    const chatHistory = [
+      { role: 'user', content: '能详细说下我的学习风格吗？' },
+      { role: 'assistant', content: '你的学习风格是偏向理论驱动的。' },
+    ];
+
+    const result = await analyzeLearning(mockProvider, p, 'mock-model', chatHistory);
+    assert.ok(result.analysis, 'should have analysis');
+    assert.ok(result.analysis.includes('之前的讨论'), 'should reference chat');
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  answerAnalysisFollowUp tests
+// ═══════════════════════════════════════════════════════
+
+describe('answerAnalysisFollowUp', () => {
+  it('should return answer for analysis follow-up', async () => {
+    const analysis = '## 分析报告\n你的学习进度良好。';
+    const mockProvider = createMockProvider('这是一个很好的追问！让我详细说明。');
+    const plan = store.createPlan('analysis-fu-test');
+    const p = store.getPlan(plan.id);
+    await store.addTopics(plan.id, ['追问测试']);
+    const p2 = store.getPlan(plan.id);
+
+    const result = await answerAnalysisFollowUp(mockProvider, p2, analysis, '能详细说明一下吗？');
+    assert.ok(result, 'should return result');
+    assert.ok(result.content, 'should have content');
+    assert.ok(result.content.includes('很好'), 'should include response');
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle empty question gracefully', async () => {
+    const mockProvider = createMockProvider('请提供你的问题。');
+    const plan = store.createPlan('analysis-fu-empty');
+    const p = store.getPlan(plan.id);
+
+    const result = await answerAnalysisFollowUp(mockProvider, p, '报告内容', '');
+    assert.ok(result, 'should still return something');
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  getEngineCacheDiagnostics tests
+// ═══════════════════════════════════════════════════════
+
+describe('getEngineCacheDiagnostics', () => {
+  it('should return cache diagnostics object', () => {
+    const diag = getEngineCacheDiagnostics();
+    assert.ok(diag, 'should return diagnostics');
+    assert.ok('summary' in diag, 'should have summary');
+    assert.ok('prefixChanges' in diag, 'should have prefixChanges');
+  });
+
+  it('should have summary with totalCalls', () => {
+    const diag = getEngineCacheDiagnostics();
+    assert.strictEqual(typeof diag.summary.totalCalls, 'number');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  createProviderFromConfig tests
+// ═══════════════════════════════════════════════════════
+
+describe('createProviderFromConfig', () => {
+  it('should create a Provider from config values', () => {
+    const provider = createProviderFromConfig('test-key', 'https://test.api/v1', 'test-model');
+    assert.ok(provider instanceof Provider, 'should be a Provider instance');
+    assert.strictEqual(provider.model, 'test-model');
+  });
+
+  it('should return the same instance for same config (cached)', () => {
+    const p1 = createProviderFromConfig('cache-key', 'https://cache.api/v1', 'cache-model');
+    const p2 = createProviderFromConfig('cache-key', 'https://cache.api/v1', 'cache-model');
+    assert.strictEqual(p1, p2, 'should be the same instance');
+  });
+
+  it('should create different instances for different config', () => {
+    const p1 = createProviderFromConfig('key1', 'https://api1/v1', 'model1');
+    const p2 = createProviderFromConfig('key2', 'https://api2/v1', 'model2');
+    assert.notStrictEqual(p1, p2, 'should be different instances');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  buildImagePrompt tests (pure function, internal)
+// ═══════════════════════════════════════════════════════
+
+describe('buildImagePrompt', () => {
+  // We test via generateTopicImage with mock — the buildImagePrompt is internal.
+  // Since it's not exported, we test generateTopicImage returns null for missing inputs.
+  it('generateTopicImage should return null for missing topic id', async () => {
+    // generateTopicImage is not directly exported to test the internal function,
+    // but we can verify it handles edge cases
+    const result = await generateTopicImage(null, 'some-key');
+    assert.strictEqual(result, null);
+  });
+
+  it('generateTopicImage should return null for missing title', async () => {
+    const result = await generateTopicImage({ id: 't1' }, 'some-key');
+    assert.strictEqual(result, null);
+  });
+
+  it('generateTopicImage should return null for missing apiKey', async () => {
+    const result = await generateTopicImage({ id: 't1', title: '测试' }, null);
+    assert.strictEqual(result, null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Interactive mode edge cases
+// ═══════════════════════════════════════════════════════
+
+describe('Interactive mode - edge cases', () => {
+  it('continueInteractiveDetail should handle "跳过" command in stepwise mode', async () => {
+    const plan = store.createPlan('skip-test');
+    await store.addTopics(plan.id, ['跳过测试']);
+    const p = store.getPlan(plan.id);
+
+    const provider1 = createStreamMockProvider('第一步：核心概念。');
+    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
+
+    // "跳过" should mark current as skip and advance
+    const provider2 = createStreamMockProvider('第二步：为什么重要。');
+    const result = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '跳过');
+    assert.strictEqual(result.session.stateMachine.currentStep, 1, 'should advance to step 1');
+    assert.strictEqual(result.session.stateMachine.steps[0].status, 'skipped', 'step 0 should be skipped');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('continueInteractiveDetail should handle empty feedback gracefully', async () => {
+    const plan = store.createPlan('empty-fb-test');
+    await store.addTopics(plan.id, ['空反馈测试']);
+    const p = store.getPlan(plan.id);
+
+    const provider = createStreamMockProvider('回应内容');
+    await startInteractiveDetail(provider, p, p.topics[0].id, 'realtime');
+
+    // Empty feedback should not crash
+    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'realtime', '');
+    assert.ok(result.content, 'should still return content');
+    assert.strictEqual(result.session.transcript.length, 3, 'should have 3 entries');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('continueInteractiveDetail should handle stepwise mode without stateMachine', async () => {
+    const plan = store.createPlan('no-sm-test');
+    await store.addTopics(plan.id, ['无状态机测试']);
+    const p = store.getPlan(plan.id);
+
+    const provider = createStreamMockProvider('回应内容');
+    await startInteractiveDetail(provider, p, p.topics[0].id, 'realtime');
+
+    // Call with stepwise mode but session was started in realtime → no stateMachine
+    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'stepwise', '继续');
+    assert.ok(result.content, 'should still work');
+    // State machine not present, stepwise mode checks should not crash
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should persist interactive session across multiple restarts', async () => {
+    const plan = store.createPlan('persist-test');
+    await store.addTopics(plan.id, ['持久化测试']);
+    const p = store.getPlan(plan.id);
+
+    const provider1 = createStreamMockProvider('第一轮内容');
+    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
+
+    // Read back from store
+    const pAfterStart = store.getPlan(plan.id);
+    const sessionAfterStart = pAfterStart.topics.find(t => t.id === p.topics[0].id)?.interactiveSession;
+    assert.ok(sessionAfterStart, 'session should be persisted');
+    assert.strictEqual(sessionAfterStart.transcript.length, 1);
+
+    const provider2 = createStreamMockProvider('第二轮内容');
+    await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '继续');
+
+    // Read back from store again
+    const pAfterContinue = store.getPlan(plan.id);
+    const sessionAfterContinue = pAfterContinue.topics.find(t => t.id === p.topics[0].id)?.interactiveSession;
+    assert.ok(sessionAfterContinue, 'session should still be persisted');
+    assert.strictEqual(sessionAfterContinue.transcript.length, 3);
+
+    store.deletePlan(plan.id);
+  });
+
+  it('startInteractiveDetail should support all modes and return correct mode', async () => {
+    // This supplements the existing all-modes test with additional assertions
+    const modes = ['stepwise', 'realtime', 'challenge', 'scaffold'];
+    for (const mode of modes) {
+      const plan = store.createPlan(`mode-${mode}-test`);
+      await store.addTopics(plan.id, [`${mode}模式测试`]);
+      const p = store.getPlan(plan.id);
+      const provider = createStreamMockProvider(`这是${mode}模式的讲解。`);
+      const result = await startInteractiveDetail(provider, p, p.topics[0].id, mode);
+      assert.strictEqual(result.session.mode, mode);
+      assert.strictEqual(result.session.finished, false);
+      assert.ok(result.content.includes(mode) || result.content.length > 0);
+      store.deletePlan(plan.id);
+    }
+  });
+
+  it('continueInteractiveDetail should work with exercise mode (scaffold)', async () => {
+    const plan = store.createPlan('scaffold-continue');
+    await store.addTopics(plan.id, ['脚手架继续测试']);
+    const p = store.getPlan(plan.id);
+    const provider = createStreamMockProvider('子问题1：什么是变量？');
+    await startInteractiveDetail(provider, p, p.topics[0].id, 'scaffold');
+
+    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'scaffold', '变量是存储数据的容器');
+    assert.ok(result.content, 'should return next content');
+    assert.strictEqual(result.session.mode, 'scaffold');
+    assert.strictEqual(result.session.transcript.length, 3);
     store.deletePlan(plan.id);
   });
 });

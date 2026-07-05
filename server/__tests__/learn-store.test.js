@@ -11,12 +11,15 @@ import * as store from '../engine/learn-store.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_PREFIX = '__test_' + Date.now() + '_';
 
+// Global test plan ID tracking shared across describe blocks
+const _testPlanIds = [];
+
 describe('learn-store', () => {
-  let createdPlanIds = [];
+  let createdPlanIds = _testPlanIds;
 
   after(() => {
     // Cleanup test plans
-    for (const id of createdPlanIds) {
+    for (const id of _testPlanIds) {
       try { store.deletePlan(id); } catch {}
     }
   });
@@ -510,5 +513,71 @@ describe('learn-store', () => {
       const needs = store.getTopicsNeedingReview(plan);
       assert.strictEqual(needs.length, 0);
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Edge cases
+// ═══════════════════════════════════════════════════════
+
+describe('Edge cases', () => {
+  let createdPlanIds = _testPlanIds;
+
+  it('addTopics should handle empty array', async () => {
+    const plan = store.createPlan('empty-topics-test');
+    createdPlanIds.push(plan.id);
+    const result = await store.addTopics(plan.id, []);
+    assert.strictEqual(result.topics.length, 0);
+  });
+
+  it('addTopics should throw for non-existent plan', async () => {
+    await assert.rejects(
+      () => store.addTopics('non-existent-plan-' + Date.now(), ['测试']),
+      { message: /not found/ }
+    );
+  });
+
+  it('updateTopicTime should throw for non-existent topic', async () => {
+    const plan = store.createPlan('time-edge-test');
+    createdPlanIds.push(plan.id);
+    await assert.rejects(
+      () => store.updateTopicTime(plan.id, 'non-existent-topic-id', 60),
+      { message: /not found/i }
+    );
+  });
+
+  it('should handle topics with special characters in titles', async () => {
+    const plan = store.createPlan('special-chars');
+    createdPlanIds.push(plan.id);
+    await store.addTopics(plan.id, ['变量&函数<>测试', '正则/.*[测试]']);
+    const p = store.getPlan(plan.id);
+    assert.strictEqual(p.topics.length, 2);
+    assert.ok(p.topics.find(t => t.title.includes('变量')));
+    assert.ok(p.topics.find(t => t.title.includes('正则')));
+  });
+
+  it('should handle addTopics with duplicate filtering', async () => {
+    const plan = store.createPlan('dup-edge');
+    createdPlanIds.push(plan.id);
+    await store.addTopics(plan.id, ['A', 'B']);
+    const result = await store.addTopics(plan.id, ['A', 'C']); // A is duplicate
+    assert.strictEqual(result.topics.length, 3); // A should not be added again
+    assert.ok(result.topics.filter(t => t.title === 'A').length, 1);
+  });
+
+  it('buildKnowledgeGraph should handle empty plan', () => {
+    const plan = store.createPlan('empty-graph');
+    createdPlanIds.push(plan.id);
+    const graph = store.buildKnowledgeGraph(plan);
+    assert.strictEqual(graph.nodes.length, 0);
+    assert.strictEqual(graph.edges.length, 0);
+  });
+
+  it('removeTopic should handle non-existent topic', async () => {
+    const plan = store.createPlan('remove-nonexist');
+    createdPlanIds.push(plan.id);
+    const result = await store.removeTopic(plan.id, 'non-existent');
+    assert.ok(result);
+    assert.strictEqual(result.topics.length, 0);
   });
 });
