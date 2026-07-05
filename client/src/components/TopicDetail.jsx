@@ -1,0 +1,531 @@
+import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import MermaidDiagram from './MermaidDiagram';
+import api from '../api';
+
+// Custom component map for ReactMarkdown — handles Mermaid diagrams
+const markdownComponents = {
+  code({ className, children, ...props }) {
+    const isInline = !props?.node?.properties?.className && !className;
+    const code = String(children).replace(/\n$/, '');
+
+    // Mermaid code block: class is "language-mermaid"
+    if (className && className.includes('language-mermaid') && !isInline) {
+      return <MermaidDiagram code={code} />;
+    }
+
+    // Inline code
+    if (isInline) {
+      return <code {...props}>{children}</code>;
+    }
+
+    // Regular code block
+    return (
+      <pre {...props}>
+        <code className={className}>{children}</code>
+      </pre>
+    );
+  },
+};
+
+export default function TopicDetail({ plan, topic, onBack, onRefresh }) {
+  const [qaInput, setQaInput] = useState('');
+  const [qaList, setQaList] = useState([]);
+  const [qaLoading, setQaLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
+  const [localDetail, setLocalDetail] = useState(topic?.detail || '');
+  const qaInputRef = useRef(null);
+  const chatPanelRef = useRef(null);
+  const genTriggered = useRef(false); // prevent double trigger
+  const startTimeRef = useRef(Date.now()); // time tracking
+  const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
+  const [difficultySaving, setDifficultySaving] = useState(false);
+  const [hoveredRound, setHoveredRound] = useState(null);
+
+  // Record time spent when leaving this topic
+  useEffect(() => {
+    startTimeRef.current = Date.now();
+    return () => {
+      const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+      if (elapsed >= 5 && plan?.id && topic?.id) {
+        api.recordTime(plan.id, topic.id, elapsed).catch(() => {});
+      }
+    };
+  }, [topic?.id]);
+
+  // Load Q&A history from plan (only on topic change, not on every plan refresh)
+  useEffect(() => {
+    setLocalDetail(topic?.detail || '');
+    setError(topic?.lastError || null);
+
+    // Only load Q&A history on initial topic mount, skip if already has items
+    const history = plan.history?.filter(h => h.topicId === topic?.id) || [];
+    const pairs = [];
+    for (let i = 0; i < history.length; i++) {
+      if (history[i].role === 'user' && i + 1 < history.length && history[i + 1].role === 'ai') {
+        pairs.push({ question: history[i].content, answer: history[i + 1].content });
+        i++;
+      }
+    }
+    // Only set if we don't have a pending question (answer === '...')
+    setQaList(prev => {
+      const hasPending = prev.some(q => q.answer === '...');
+      if (hasPending) return prev; // don't overwrite mid-Q&A
+      return pairs;
+    });
+  }, [topic?.id]); // removed plan.history to prevent overwrite during polls
+
+  // Scroll chat panel to bottom on new Q&A
+  useEffect(() => {
+    if (chatPanelRef.current) {
+      chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
+    }
+  }, [qaList.length]);
+
+  // Scroll to a specific round
+  const scrollToRound = (index) => {
+    const container = chatPanelRef.current;
+    if (!container) return;
+    const target = container.querySelector(`[data-round="${index}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // Auto-generate on first load (only once)
+  useEffect(() => {
+    if (!topic || genTriggered.current) return;
+    if (topic.detail && topic.done) {
+      setGenerating(false);
+      return;
+    }
+    if (topic.lastError) {
+      setError(topic.lastError);
+      return;
+    }
+    // If detail is empty and not errored, trigger generation
+    if (!topic.detail && !topic.done && !topic.lastError) {
+      genTriggered.current = true;
+      setGenerating(true);
+      api.generateDetail(plan.id, topic.id).catch(() => {});
+    }
+  }, [topic?.id]);
+
+  // Auto-focus Q&A input when generation completes
+  useEffect(() => {
+    if (!generating && localDetail && !error) {
+      qaInputRef.current?.focus();
+    }
+  }, [generating, localDetail, error]);
+
+  // Poll for generation progress (intermediate content + error detection)
+  useEffect(() => {
+    if (!generating || !plan) return;
+    const timer = setInterval(async () => {
+      try {
+        const d = await api.getPlan(plan.id);
+        const t = d.plan.topics.find(t => t.id === topic?.id);
+        if (!t) { clearInterval(timer); return; }
+
+        if (t.detail && t.detail !== localDetail) {
+          setLocalDetail(t.detail);
+          onRefresh(d.plan);
+        }
+        if (t.lastError) {
+          setError(t.lastError);
+          setGenerating(false);
+          clearInterval(timer);
+        }
+        if (t.done && !t.lastError) {
+          setLocalDetail(t.detail || localDetail);
+          setGenerating(false);
+          clearInterval(timer);
+        }
+      } catch { clearInterval(timer); }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [generating, plan?.id, topic?.id]);
+
+  if (!topic) return null;
+
+  const handleAsk = async () => {
+    if (!qaInput.trim() || qaLoading) return;
+    const question = qaInput.trim();
+    setQaInput('');
+    setQaLoading(true);
+    setQaList(prev => [...prev, { question, answer: '...' }]);
+
+    try {
+      const d = await api.askQuestion(plan.id, topic.id, question);
+      setQaList(prev => {
+        const list = [...prev];
+        list[list.length - 1] = { question, answer: d.answer };
+        return list;
+      });
+      // Scroll to bottom when answer arrives
+      requestAnimationFrame(() => {
+        if (chatPanelRef.current) {
+          chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
+        }
+      });
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+      setTimeout(() => qaInputRef.current?.focus(), 100);
+    } catch (err) {
+      setQaList(prev => {
+        const list = [...prev];
+        list[list.length - 1] = { question, answer: `❌ 请求失败: ${err.message}` };
+        return list;
+      });
+    } finally {
+      setQaLoading(false);
+    }
+  };
+
+  const handleExport = () => {
+    if (!localDetail) return;
+    let md = `# ${topic.title}\n\n`;
+    md += topic.detail + '\n\n';
+    if (qaList.length > 0) {
+      md += `---\n\n## 📎 扩展讨论\n\n`;
+      qaList.forEach((qa, i) => {
+        md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`;
+        md += `> ${qa.answer}\n\n`;
+      });
+    }
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${topic.title}.md`.replace(/[/\\?%*:|"<>]/g, '_');
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportHtml = async () => {
+    if (!localDetail) return;
+
+    // Build the full Markdown content (same as handleExport)
+    let md = `# ${topic.title}\n\n`;
+    md += topic.detail + '\n\n';
+    if (qaList.length > 0) {
+      md += `---\n\n## 📎 扩展讨论\n\n`;
+      qaList.forEach((qa, i) => {
+        md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`;
+        md += `> ${qa.answer}\n\n`;
+      });
+    }
+
+    // ── Step 1: Split into segments — regular text vs mermaid blocks ──
+    // Each segment: { type: 'markdown'|'mermaid', content: string }
+    const segments = [];
+    const mermaidRe = /```mermaid\s*\n([\s\S]*?)```/g;
+    let lastIdx = 0;
+    let match;
+    while ((match = mermaidRe.exec(md)) !== null) {
+      if (match.index > lastIdx) {
+        segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
+      }
+      segments.push({ type: 'mermaid', content: match[1].trim() });
+      lastIdx = mermaidRe.lastIndex;
+    }
+    if (lastIdx < md.length) {
+      segments.push({ type: 'markdown', content: md.slice(lastIdx) });
+    }
+
+    // ── Step 2: Simple Markdown-to-HTML converter ──
+    const mdToHtml = (text) => {
+      // Escape HTML special chars
+      let h = text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      // Headings
+      h = h.replace(/^##### (.*$)/gm, '<h5>$1</h5>');
+      h = h.replace(/^#### (.*$)/gm, '<h4>$1</h4>');
+      h = h.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+      h = h.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+      h = h.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+      // Bold + italic
+      h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // Inline code
+      h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+      // Links
+      h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+      // Horizontal rule
+      h = h.replace(/^---$/gm, '<hr>');
+      // Blockquote
+      h = h.replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>');
+      // Unordered list items
+      h = h.replace(/^- (.*$)/gm, '<li>$1</li>');
+      // Ordered list items
+      h = h.replace(/^\d+\. (.*$)/gm, '<li>$1</li>');
+      // Wrap consecutive <li> in <ul>
+      h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+      // Paragraphs: double newline = new paragraph (skip block-level elements)
+      h = h.replace(/\n\n/g, '</p><p>');
+      // Wrap remaining in <p> if not already wrapped
+      if (!h.startsWith('<h') && !h.startsWith('<p>') && !h.startsWith('<ul') && !h.startsWith('<blockquote') && !h.startsWith('<hr')) {
+        h = '<p>' + h;
+      }
+      if (!h.endsWith('>')) {
+        h = h + '</p>';
+      }
+      // Clean empty paragraphs
+      h = h.replace(/<p><\/p>/g, '');
+      return h;
+    };
+
+    // ── Step 3: Render all segments to HTML (mermaid → SVG) ──
+    const { default: mermaid } = await import('mermaid');
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'neutral',
+      securityLevel: 'strict',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    });
+
+    let bodyHtml = '';
+    for (const seg of segments) {
+      if (seg.type === 'mermaid') {
+        try {
+          const id = 'm-export-' + Math.random().toString(36).slice(2, 9);
+          const { svg: svgText } = await mermaid.render(id, seg.content);
+          bodyHtml += `<div class="mermaid-svg">${svgText}</div>`;
+        } catch {
+          bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`;
+        }
+      } else {
+        bodyHtml += mdToHtml(seg.content);
+      }
+    }
+
+    // ── Step 4: Build self-contained HTML ──
+    const title = topic.title.replace(/[/\\?%*:|"<>]/g, '_');
+    const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px 20px; line-height: 1.8; color: #1e293b; background: #fff; }
+  h1 { font-size: 24px; margin: 20px 0 10px; }
+  h2 { font-size: 20px; margin: 16px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+  h3 { font-size: 17px; margin: 12px 0 6px; }
+  h4, h5 { font-size: 15px; margin: 10px 0 5px; }
+  p { margin: 8px 0; }
+  ul, ol { padding-left: 20px; margin: 8px 0; }
+  li { margin: 3px 0; }
+  code { padding: 2px 5px; background: #f1f5f9; border-radius: 3px; font-size: .9em; }
+  pre { padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  pre.mermaid-fallback { background: #fef2f2; border-color: #fca5a5; color: #dc2626; }
+  blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid #60a5fa; background: #f1f5f9; border-radius: 0 6px 6px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  th, td { padding: 6px 10px; border: 1px solid #e2e8f0; text-align: left; }
+  th { background: #f1f5f9; font-weight: 600; }
+  hr { margin: 20px 0; border: none; border-top: 1px solid #e2e8f0; }
+  a { color: #2563eb; }
+  .mermaid-svg { margin: 16px 0; display: flex; justify-content: center; overflow-x: auto; padding: 16px 8px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 6px; }
+  .mermaid-svg svg { max-width: 100%; height: auto; }
+  .qa-section { margin-top: 32px; border-top: 2px solid #e2e8f0; padding-top: 16px; }
+  .qa-section h2 { color: #2563eb; }
+  .qa-item { margin: 16px 0; }
+  .qa-question { font-weight: 600; color: #1e293b; padding: 8px 12px; background: #eff6ff; border-radius: 6px; }
+  .qa-answer { padding: 8px 12px 8px 16px; border-left: 3px solid #e2e8f0; margin-left: 4px; }
+  .footer { margin-top: 32px; font-size: 12px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 16px; }
+</style>
+</head>
+<body>
+${bodyHtml}
+<div class="footer">由 Study Assistant 生成</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRetry = () => {
+    setError(null);
+    setLocalDetail('');
+    genTriggered.current = false;
+    setGenerating(true);
+    api.generateDetail(plan.id, topic.id).catch(() => {});
+  };
+
+  const handleDifficulty = async (level) => {
+    if (difficultySaving) return;
+    setDifficulty(level);
+    setDifficultySaving(true);
+    try {
+      await api.updateTopic(plan.id, topic.id, { difficulty: level });
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+    } catch { /* ignore */ }
+    setDifficultySaving(false);
+  };
+
+  return (
+    <div className="topic-detail">
+      <div className="topic-detail-header">
+        <button className="btn btn-sm" onClick={onBack}>← 返回列表</button>
+        <h2>{topic.title}</h2>
+        {generating && <span className="generating-badge">⏳ 生成中...</span>}
+        {error && <span className="error-badge">❌ 生成失败</span>}
+        {localDetail && !error && !generating && (
+          <button className="btn btn-sm" onClick={handleExport} title="导出为 Markdown">
+            ⬇️ .md
+          </button>
+        )}
+        {localDetail && !error && !generating && (
+          <button className="btn btn-sm" onClick={handleExportHtml} title="导出为 HTML（含渲染后的 Mermaid 图表）">
+            🌐 .html
+          </button>
+        )}
+      </div>
+
+      <div className="topic-detail-body">
+        {/* Generating — show spinner + any intermediate content */}
+        {generating && !localDetail && (
+          <div className="generating-placeholder">
+            <div className="spinner" />
+            <p>AI 正在为您生成「{topic.title}」的详细讲解...</p>
+            <p className="hint">首次生成可能需要 30 秒到 1 分钟</p>
+          </div>
+        )}
+
+        {/* Error — show error + retry */}
+        {error && (
+          <div className="error-state">
+            <p>❌ {error}</p>
+            <button className="btn btn-primary" onClick={handleRetry}>重试</button>
+          </div>
+        )}
+
+        {/* Content + inline Q&A */}
+        {localDetail && !error && (
+          <div className="topic-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>
+              {localDetail}
+            </ReactMarkdown>
+            {generating && <div className="streaming-indicator">⏳ 继续生成中...</div>}
+
+            {/* Chat panel for Q&A (DS-web style) */}
+            <div className="chat-panel">
+              <div className="chat-panel-header">
+                <h2>📎 扩展讨论</h2>
+                {qaList.length > 0 && <span className="chat-count">{qaList.length} 轮</span>}
+              </div>
+              {qaList.length >= 2 && (
+                <div className="chat-round-nav">
+                  {qaList.map((qa, i) => (
+                    <div key={i} className="chat-round-chip-wrapper">
+                      <button
+                        className="chat-round-chip"
+                        onClick={() => scrollToRound(i)}
+                        onMouseEnter={() => setHoveredRound(i)}
+                        onMouseLeave={() => setHoveredRound(null)}
+                      >
+                        {i + 1}
+                      </button>
+                      {hoveredRound === i && (
+                        <div className="chat-round-preview">
+                          <div className="chat-round-preview-label">追问 {i + 1}</div>
+                          <div className="chat-round-preview-text">{qa.question}</div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="chat-messages" ref={chatPanelRef}>
+                {qaList.length === 0 ? (
+                  <div className="chat-empty">
+                    暂无追问，在下方输入问题开始讨论
+                  </div>
+                ) : (
+                  qaList.map((qa, i) => (
+                    <div key={i} className="chat-message-group" data-round={i}>
+                      {/* User message */}
+                      <div className="chat-message user">
+                        <div className="chat-bubble user-bubble">
+                          {qa.question}
+                        </div>
+                      </div>
+                      {/* AI message */}
+                      <div className="chat-message ai">
+                        <div className="chat-avatar">🤖</div>
+                        <div className="chat-bubble ai-bubble">
+                          {qa.answer === '...' ? (
+                            <span className="typing-text">思考中...</span>
+                          ) : (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="chat-input">
+                <form onSubmit={e => { e.preventDefault(); handleAsk(); }}>
+                  <textarea
+                    ref={qaInputRef}
+                    value={qaInput}
+                    onChange={e => setQaInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAsk();
+                      }
+                    }}
+                    placeholder="输入你的追问...（Shift+Enter 换行，Enter 发送）"
+                    disabled={qaLoading}
+                    rows={1}
+                  />
+                  <button type="submit" className="chat-send-btn" disabled={!qaInput.trim() || qaLoading}>
+                    {qaLoading ? <span className="typing-text">思考中...</span> : '➤'}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Difficulty self-rating */}
+            {!generating && (
+              <div className="difficulty-rating">
+                <hr />
+                <p className="difficulty-label">这个知识点对你来说？</p>
+                <div className="difficulty-buttons">
+                  <button
+                    className={'diff-btn' + (difficulty === 'easy' ? ' active easy' : '')}
+                    onClick={() => handleDifficulty('easy')}
+                    disabled={difficultySaving}
+                  >🟢 简单</button>
+                  <button
+                    className={'diff-btn' + (difficulty === 'medium' ? ' active medium' : '')}
+                    onClick={() => handleDifficulty('medium')}
+                    disabled={difficultySaving}
+                  >🟡 适中</button>
+                  <button
+                    className={'diff-btn' + (difficulty === 'hard' ? ' active hard' : '')}
+                    onClick={() => handleDifficulty('hard')}
+                    disabled={difficultySaving}
+                  >🔴 困难</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

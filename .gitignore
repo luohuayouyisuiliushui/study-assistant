@@ -1,0 +1,30 @@
+# 环境变量与密钥
+.env
+.env.local
+*.key
+
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+
+# 用户数据
+server/data/
+
+# AI 缓存
+server/cache/
+
+# AI 工作文件
+.reasonix/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
