@@ -42,13 +42,35 @@ export default function MermaidDiagram({ code }) {
   }, [code]);
 
   if (error) {
+    // Extract a short, readable error description
+    const shortMsg = error
+      .replace(/Syntax error in graph.*?$/ms, '语法错误，请检查图表定义')
+      .replace(/Lexical error.*?$/ms, '存在无法识别的字符或符号')
+      .replace(/Error: (.*?)\\n.*/s, '$1')
+      .split('\n')[0]
+      .substring(0, 120);
+    const isSyntaxError = /syntax|parse|lexical|unexpected/i.test(error);
+
     return (
       <div className="mermaid-error">
-        <details>
-          <summary>⚠️ 图表渲染失败</summary>
-          <pre>{error}</pre>
-          <pre className="mermaid-error-source">{code}</pre>
-        </details>
+        <div className="mermaid-error-header">
+          <span>⚠️ 图表渲染失败</span>
+          <button className="btn-tiny" onClick={() => { setError(null); setSvg(''); }} title="重新渲染">🔄 重试</button>
+        </div>
+        <div className="mermaid-error-body">
+          <p className="mermaid-error-reason">{shortMsg}</p>
+          {isSyntaxError && (
+            <p className="mermaid-error-hint">💡 提示：Mermaid 图表语法可能有误。常见原因——缺少节点定义、箭头方向错误、括号不匹配。</p>
+          )}
+          <details>
+            <summary>查看源代码</summary>
+            <pre className="mermaid-error-source">{code}</pre>
+          </details>
+          <details>
+            <summary>查看详细错误</summary>
+            <pre>{error}</pre>
+          </details>
+        </div>
       </div>
     );
   }
