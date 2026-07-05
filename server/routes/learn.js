@@ -132,41 +132,97 @@ router.post('/plans/import', async (req, res) => {
     const provider = getProvider(req);
     const { IMPORT_PLAN_PROMPT } = await import('../engine/learn-prompts.js');
 
-    const result = await provider.complete(
+    // ── First attempt: deep analysis with IMPORT_PLAN_PROMPT ──
+    let parsed;
+    let phases;
+    let relations;
+    let planName;
+
+    const firstAttempt = await provider.complete(
       [
         { role: 'system', content: IMPORT_PLAN_PROMPT },
         { role: 'user', content: text.trim() },
       ],
-      { temperature: 0.1, responseFormat: { type: 'json_object' } }
+      { temperature: 0.3, responseFormat: { type: 'json_object' } }
     );
 
-    const parsed = JSON.parse(result.content || '{}');
-    const planName = overrideName || parsed.name || '导入的学习计划';
+    parsed = JSON.parse(firstAttempt.content || '{}');
+    planName = overrideName || parsed.name || '导入的学习计划';
 
     // Handle both old format (topics as string arrays) and new format (topics as objects with level/subtopics)
     const rawPhases = (parsed.phases && parsed.phases.length > 0)
       ? parsed.phases
       : [{ name: '核心内容', topics: [] }];
 
-    // Convert old format to new format if needed (topics is array of strings)
-    const phases = rawPhases.map(p => {
+    phases = rawPhases.map(p => {
       if (p.topics && p.topics.length > 0 && typeof p.topics[0] === 'string') {
-        // Old format: ["知识1", "知识2"] → new format: [{ title: "知识1", level: 1 }, ...]
         return { ...p, topics: p.topics.map(t => ({ title: t, level: 1 })) };
       }
       return p;
     });
 
     const hasTopics = phases.some(p => p.topics && p.topics.length > 0);
+
+    // ── Retry if AI failed to extract any topics ──
     if (!hasTopics) {
-      const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.match(/^[#*\-=~]+$/));
-      phases[0].topics = lines.map(l => ({
-        title: l.replace(/^[-*\d\s.]+/, '').trim(),
-        level: 1,
-      })).filter(t => t.title);
+      console.log('[import] First attempt yielded no topics, retrying with corrective prompt...');
+      const retryPrompt =
+        '之前你分析了这份材料但没有成功提取出知识点。请重新认真分析以下资料。\n\n' +
+        '⚠️ 重要：不要逐行拆分！你需要先理解整篇内容的逻辑，再提取核心知识点（3-15 个），而不是每一行/每一句都列出来。\n\n' +
+        '输出 JSON 时，第一个字段必须是 "documentAnalysis"：先写一段对整份资料的完整理解总结（主题、逻辑结构、内容风格），再输出知识点结构。\n\n' +
+        '请严格按照以下结构输出 JSON：\n' +
+        '{\n' +
+        '  "documentAnalysis": "对整份资料的完整理解...",\n' +
+        '  "name": "学习计划名称",\n' +
+        '  "phases": [\n' +
+        '    {\n' +
+        '      "name": "阶段名称",\n' +
+        '      "topics": [\n' +
+        '        { "title": "知识点1", "level": 1, "subtopics": [\n' +
+        '          { "title": "子知识点", "level": 2 }\n' +
+        '        ]}\n' +
+        '      ]\n' +
+        '    }\n' +
+        '  ],\n' +
+        '  "relations": []\n' +
+        '}\n\n' +
+        '资料内容：\n' + text.trim();
+
+      const retryResult = await provider.complete(
+        [
+          { role: 'system', content: '你是一位学习内容结构分析专家。你的核心方法是「先理解，再结构化」：先在 JSON 的第一个字段 "documentAnalysis" 中完整总结对整份资料的理解，再从中提炼出 3-15 个核心知识点，形成有层次的学习计划。注意：不要逐行拆分，要理解全文后做语义聚合。知识点应反映主要章节/概念，而不是每一句话。' },
+          { role: 'user', content: retryPrompt },
+        ],
+        { temperature: 0.4, responseFormat: { type: 'json_object' } }
+      );
+
+      parsed = JSON.parse(retryResult.content || '{}');
+      const retryRawPhases = (parsed.phases && parsed.phases.length > 0)
+        ? parsed.phases
+        : [{ name: '核心内容', topics: [] }];
+
+      phases = retryRawPhases.map(p => {
+        if (p.topics && p.topics.length > 0 && typeof p.topics[0] === 'string') {
+          return { ...p, topics: p.topics.map(t => ({ title: t, level: 1 })) };
+        }
+        return p;
+      });
+
+      const retryHasTopics = phases.some(p => p.topics && p.topics.length > 0);
+      if (!retryHasTopics) {
+        // Both attempts failed — tell the user instead of silently splitting by line
+        return res.status(422).json({
+          error: 'AI 无法从这段资料中提取出知识点结构。请尝试：\n' +
+            '1. 简化输入内容，给出更清晰的大纲格式\n' +
+            '2. 使用「手动创建」模式，自己列出知识点\n' +
+            '3. 将较长的资料先拆分成几个小段分别导入',
+        });
+      }
+
+      planName = overrideName || parsed.name || (planName + '（修正版）');
     }
 
-    const relations = parsed.relations || [];
+    relations = parsed.relations || [];
     const plan = store.createPlanWithPhases(planName, phases, relations);
     res.json({ plan });
   } catch (err) {

@@ -79,16 +79,19 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
           <textarea
             value={importText}
             onChange={e => setImportText(e.target.value)}
-            placeholder={`粘贴你的学习计划，或点击下方按钮导入文件。例如：
+            placeholder={`粘贴整份文档内容，AI 会自动分析结构并生成学习计划。
 
-第一阶段：Python 基础
-- 变量与数据类型
-- 控制流
-- 函数
+支持文章、教程、笔记、大纲等。例如：
 
-第二阶段：Python 进阶
-- 装饰器
-- 生成器`}
+Python 基础教程
+第一章：数据类型
+- 整数和浮点数
+- 字符串操作
+- 布尔类型
+
+第二章：控制流
+- if/else 条件判断
+- for 循环`}
             rows={8}
           />
           <div className="plan-import-actions">

@@ -94,6 +94,23 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
 
   const handleAdd = () => {
     const lines = bulkInput.split('\n').map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+
+    // Detect if the user might be pasting a full document instead of topic names
+    const longLines = lines.filter(l => l.length > 80);
+    const isLikelyDocument = lines.length > 20 || longLines.length > lines.length * 0.3;
+
+    if (isLikelyDocument) {
+      const confirmMsg =
+        '⚠️ 检测到您粘贴的内容看起来像是一整份文档（' + lines.length + ' 行，其中 ' + longLines.length + ' 行较长）。\n\n' +
+        '当前操作会将每一行文字作为一个独立知识点添加，但这份内容更适合用「AI 导入」功能来自动分析文档结构。\n\n' +
+        '确定要继续按行拆分添加吗？\n（取消后请回到首页使用 AI 导入）';
+
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+    }
+
     // Detect format: if most lines start with -/*/numbered, strip those prefixes
     const bulletCount = lines.filter(l => /^[-*]\s/.test(l) || /^\d+[\.\)]\s/.test(l)).length;
     const isBulleted = bulletCount > lines.length * 0.5;
@@ -380,11 +397,20 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
       </div>
 
       <div className="plan-add">
-        <div className="section-title">添加知识点</div>
+        <div className="section-title">
+          快速添加知识点
+          <span className="hint" style={{ fontWeight: 'normal', fontSize: '12px', color: '#94a3b8', marginLeft: '8px' }}>
+            ⚡ 每行列一个知识点名称
+          </span>
+        </div>
+        <div className="plan-add-tip" style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px', padding: '6px 10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+          💡 <strong>逐条添加</strong>：每行输入一个知识点名称。<br />
+          📄 <strong>整份文档</strong>：请在首页使用「AI 导入」功能，AI 会自动分析文档结构生成学习计划。
+        </div>
         <textarea
           value={bulkInput}
           onChange={e => setBulkInput(e.target.value)}
-          placeholder={`每行一个知识点，例如：\n- 装饰器\n- 生成器\n- 上下文管理器\n\n也支持从文件导入（.txt / .md）`}
+          placeholder={'逐条输入知识点，每行一个：\n变量与数据类型\n控制流（if/else）\n循环结构（for/while）\n函数定义与调用'}
           rows={4}
         />
         <div className="plan-add-actions">

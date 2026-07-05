@@ -59,12 +59,30 @@ function enqueueWrite(planId, fn) {
   return next;
 }
 
-// ─── JSON safe read ───
+// ─── JSON safe read (with encoding resilience) ───
 
+/**
+ * Read a JSON file safely with fallback for GBK/ANSI-encoded files.
+ * Node.js 'utf-8' strips BOM normally, but if a file was manually
+ * saved in Windows ANSI (GBK), we try GBK as a fallback.
+ */
 function readJSON(filePath) {
   try {
     if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    let raw = fs.readFileSync(filePath, 'utf-8');
+    try {
+      return JSON.parse(raw);
+    } catch (parseErr) {
+      // If utf-8 parse fails, try raw bytes as GBK (Windows ANSI fallback)
+      console.warn(`[learn-store] UTF-8 parse failed for ${filePath}, trying GBK: ${parseErr.message}`);
+      try {
+        const rawBuf = fs.readFileSync(filePath);
+        return JSON.parse(new TextDecoder('gbk').decode(rawBuf));
+      } catch (gbkErr) {
+        console.warn(`[learn-store] GBK fallback also failed for ${filePath}: ${gbkErr.message}`);
+        throw parseErr; // re-throw original so outer catch can attempt backup recovery
+      }
+    }
   } catch (err) {
     console.warn(`[learn-store] JSON parse error: ${filePath}`, err.message);
     // 尝试从备份恢复（study-trace 模式：损坏自动恢复）
