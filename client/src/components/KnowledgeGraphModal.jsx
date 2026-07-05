@@ -45,6 +45,8 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
   const graphContainerRef = useRef(null);
   const svgRef = useRef(null);
   const mountedRef = useRef(true);
+  const planIdRef = useRef(plan?.id);
+  planIdRef.current = plan?.id;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -52,12 +54,13 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
   }, []);
 
   const loadGraph = useCallback(async () => {
-    if (!plan) return;
+    const pid = planIdRef.current;
+    if (!pid) return;
     setLoading(true);
     setError(null);
     setExtractResult(null);
     try {
-      const d = await api.getKnowledgeGraph(plan.id, inferEnabled);
+      const d = await api.getKnowledgeGraph(pid, inferEnabled);
       setGraphData(d.graph);
       const mermaidDef = buildMermaidGraph(plan, d.graph.nodes, d.graph.edges);
       await renderMermaid(mermaidDef);
@@ -66,7 +69,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     } finally {
       setLoading(false);
     }
-  }, [plan, inferEnabled]);
+  }, [inferEnabled]);
 
   useEffect(() => {
     if (!plan) return;
@@ -227,7 +230,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       const phaseName = phaseNames[phaseId] || `阶段 ${phaseId}`;
       const colorIdx = phaseIndex[phaseId] || 0;
 
-      def += `\n    subgraph ${phaseName.replace(/\s+/g, '_')}["${phaseName}"]\n`;
+      def += `\n    subgraph sg_${phaseId}["${phaseName}"]\n`;
 
       for (const n of phaseNodes) {
         const nodeId = 'n' + n.id.replace(/-/g, '_');
