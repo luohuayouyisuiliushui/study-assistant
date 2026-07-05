@@ -16,9 +16,11 @@
 
 import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
-import { buildDetailMessages, buildFollowUpMessages,
+import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
-  STABLE_WEAK_POINT_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
+  STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
+  STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT,
+  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
 import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
 import OpenAI from 'openai';
 import https from 'https';
@@ -142,6 +144,131 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
     });
     throw err;
   }
+}
+
+// ═══════════════════════════════════════════════════════
+//  INTERACTIVE MODE: stepwise section-by-section + realtime
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Get the interactive system prompt by mode.
+ */
+function _getInteractivePrompt(mode) {
+  if (mode === 'realtime') return STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT;
+  if (mode === 'challenge') return STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT;
+  if (mode === 'scaffold') return STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT;
+  return STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT;
+}
+
+/**
+ * Build a compact transcript string from the interactive session.
+ */
+function _buildInteractiveTranscript(session, maxLength = 6000) {
+  if (!session?.transcript || session.transcript.length === 0) return '';
+  const lines = session.transcript.map((entry) => {
+    const roleMap = { user: '用户', ai: '导师', system: '系统' };
+    const role = roleMap[entry.role] || '其他';
+    const content = entry.content.length > 1500 ? entry.content.slice(0, 1500) + '...' : entry.content;
+    return `${role}：${content}`;
+  });
+  let transcript = lines.join('\n\n---\n\n');
+  if (transcript.length > maxLength) {
+    transcript = '...（前面的对话摘要略）...\n' + transcript.slice(-maxLength);
+  }
+  return transcript;
+}
+
+/**
+ * Start an interactive explanation session.
+ * Generates the FIRST section/chunk of content.
+ */
+export async function startInteractiveDetail(providerOrConfig, plan, topicId, mode = 'stepwise', model) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+  const systemPrompt = _getInteractivePrompt(mode);
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+
+  const context = buildDeterministicContext(plan, topicId);
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: context },
+    { role: 'user', content: `请开始${promptName}模式。先讲解核心概念，作为第一部分的讲解内容。知识点：「${topic.title}」\n\n注意：只输出第一部分内容，不要一次性讲完所有内容。这部分讲完后给出下一步选项，等待我的反馈。` },
+  ];
+
+  const fullContent = await provider.stream(messages, { maxTokens: 2048 });
+  if (!fullContent) throw new Error('AI 返回内容为空');
+
+  const session = {
+    mode,
+    finished: false,
+    transcript: [{ role: 'ai', content: fullContent }],
+  };
+
+  topic.interactiveSession = session;
+  await updateTopic(plan.id, topicId, { interactiveSession: session });
+
+  return { content: fullContent, session };
+}
+
+/**
+ * Continue an interactive explanation session based on user feedback.
+ */
+export async function continueInteractiveDetail(providerOrConfig, plan, topicId, mode, feedback, model) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  // Initialize or re-open session if it doesn't exist or was finished
+  if (!topic.interactiveSession) {
+    throw new Error('当前没有互动讲解会话，请先点击「分段讲解」或「实时互动」开始');
+  }
+  const session = topic.interactiveSession;
+  if (session.finished) {
+    session.finished = false; // re-open for continued questions
+  }
+
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+  const systemPrompt = _getInteractivePrompt(mode);
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+
+  session.transcript.push({ role: 'user', content: feedback });
+
+  const context = buildDeterministicContext(plan, topicId);
+  const transcriptText = _buildInteractiveTranscript(session);
+
+  const continuationInstruction = (
+    `我们正在进行「${topic.title}」的${promptName}模式。\n\n` +
+    `### 到目前为止的对话记录\n` +
+    `${transcriptText}\n\n` +
+    `### 用户的最新反馈\n` +
+    `用户说：${feedback}\n\n` +
+    `请根据对话记录和用户的最新反馈，继续你的教学。` +
+    `如果是分段讲解模式，按计划讲下一部分或根据反馈调整。` +
+    `如果是实时讲解模式，根据用户的反应灵活继续。` +
+    `注意：每次只输出当前步骤的内容，在末尾给出下一步选项。`
+  );
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: context },
+    { role: 'user', content: continuationInstruction },
+  ];
+
+  const fullContent = await provider.stream(messages, { maxTokens: 2048 });
+  if (!fullContent) throw new Error('AI 返回内容为空');
+
+  session.transcript.push({ role: 'ai', content: fullContent });
+
+  // Detect session end via explicit marker (set in system prompt)
+  if (/\[SESSION_END\]/.test(fullContent)) {
+    session.finished = true;
+  }
+
+  topic.interactiveSession = session;
+  await updateTopic(plan.id, topicId, { interactiveSession: session });
+
+  return { content: fullContent, session, finished: session.finished };
 }
 
 /**
@@ -638,6 +765,8 @@ export default {
   generateReview,
   gradeExercises,
   analyzeWeakPoints,
+  startInteractiveDetail,
+  continueInteractiveDetail,
   getEngineCacheDiagnostics,
   createProviderFromConfig,
 };

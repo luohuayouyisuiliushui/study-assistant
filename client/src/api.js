@@ -105,6 +105,20 @@ const api = {
     }, true);
   },
 
+  // ─── Interactive Mode ───
+  async startInteractive(planId, topicId, mode) {
+    return request(`${API_BASE}/learn/plans/${planId}/interactive-start/${topicId}`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }, true);
+  },
+  async continueInteractive(planId, topicId, mode, feedback) {
+    return request(`${API_BASE}/learn/plans/${planId}/interactive-continue/${topicId}`, {
+      method: 'POST',
+      body: JSON.stringify({ mode, feedback }),
+    }, true);
+  },
+
   // ─── Time Tracking ───
   async recordTime(planId, topicId, seconds) {
     return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/time`, {

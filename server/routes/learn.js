@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -316,7 +316,66 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
   }
 });
 
-router.post('/plans/:planId/ask/:topicId', async (req, res) => {
+// ═══════════════════════════════════════════════════════
+//  INTERACTIVE MODE ROUTES (stepwise + realtime)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/interactive-start/:topicId
+ * Start an interactive explanation session.
+ * Body: { mode: 'stepwise'|'realtime' }
+ */
+router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const mode = req.body?.mode || 'stepwise';
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge 或 scaffold' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const result = await startInteractiveDetail(provider, plan, req.params.topicId, mode, provider.model);
+    res.json(result);
+  } catch (err) {
+    console.error('[interactive-start]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/interactive-continue/:topicId
+ * Continue an interactive session with user feedback.
+ * Body: { mode: 'stepwise'|'realtime', feedback: '...' }
+ */
+router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const { mode, feedback } = req.body;
+  if (!mode || !feedback || !feedback.trim()) {
+    return res.status(400).json({ error: '\u8bf7\u63d0\u4f9b mode \u548c feedback \u53c2\u6570' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const result = await continueInteractiveDetail(provider, plan, req.params.topicId, mode, feedback.trim(), provider.model);
+    res.json(result);
+  } catch (err) {
+    console.error('[interactive-continue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/ask/:topicId', async (req, res) => {
   const { question } = req.body;
   if (!question || !question.trim()) {
     return res.status(400).json({ error: '请输入问题' });

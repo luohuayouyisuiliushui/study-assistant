@@ -134,6 +134,37 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
 
+  // ─── Interactive Mode State ───
+  const [interactiveMode, setInteractiveMode] = useState(null); // null | 'stepwise' | 'realtime'
+  const [interactiveSections, setInteractiveSections] = useState([]);
+  const [interactiveLoading, setInteractiveLoading] = useState(false);
+  const [interactiveFinished, setInteractiveFinished] = useState(false);
+  const [interactiveInput, setInteractiveInput] = useState('');
+  const interactiveInputRef = useRef(null);
+  const interactiveBusyRef = useRef(false);
+
+  // ─── Voice Input State ───
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef(null);
+  const [voiceSupported, setVoiceSupported] = useState(true);
+
+  // Check Web Speech API support on mount
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceSupported(false);
+    }
+  }, []);
+
+  // Cleanup recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+      }
+    };
+  }, []);
+
   // Record time spent — heartbeat every 30s + flush on leave
   useEffect(() => {
     const pid = plan?.id;
@@ -603,6 +634,129 @@ ${bodyHtml}
     if (onSelectTopic) onSelectTopic(targetTopicId);
   };
 
+  // ─── Interactive Mode Handlers ───
+
+  const handleStartInteractive = async (mode) => {
+    if (interactiveBusyRef.current) return;
+    interactiveBusyRef.current = true;
+    setInteractiveMode(mode);
+    setInteractiveSections([]);
+    setInteractiveFinished(false);
+    setInteractiveLoading(true);
+    try {
+      const result = await api.startInteractive(plan.id, topic.id, mode);
+      setInteractiveSections([{ content: result.content }]);
+    } catch (err) {
+      setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]);
+    } finally {
+      setInteractiveLoading(false);
+      interactiveBusyRef.current = false;
+    }
+  };
+
+  const handleSendInteractiveFeedback = async () => {
+    const feedback = interactiveInput.trim();
+    if (!feedback || interactiveBusyRef.current) return;
+    await handleContinueInteractive(feedback);
+  };
+
+  const handleQuickAction = async (action) => {
+    if (interactiveBusyRef.current) return;
+    await handleContinueInteractive(action);
+  };
+
+  const handleContinueInteractive = async (feedback) => {
+    if (!interactiveMode || interactiveBusyRef.current) return;
+    interactiveBusyRef.current = true;
+    setInteractiveLoading(true);
+    setInteractiveInput('');
+    try {
+      const result = await api.continueInteractive(plan.id, topic.id, interactiveMode, feedback);
+      setInteractiveSections(prev => [...prev, { content: result.content }]);
+      if (result.finished) {
+        setInteractiveFinished(true);
+      }
+    } catch (err) {
+      setInteractiveSections(prev => [...prev, { content: '❌ 响应失败: ' + err.message }]);
+    } finally {
+      setInteractiveLoading(false);
+      interactiveBusyRef.current = false;
+    }
+  };
+
+  const handleExitInteractive = () => {
+    setInteractiveMode(null);
+    setInteractiveSections([]);
+    setInteractiveFinished(false);
+    setInteractiveInput('');
+  };
+
+  // ─── Voice Input Handler ───
+
+  const handleVoiceInput = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('您的浏览器不支持语音输入，请使用 Chrome 或 Edge');
+      return;
+    }
+
+    if (isRecording) {
+      // Stop recording
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = '';
+
+    recognition.onresult = (event) => {
+      // Only append FINAL results to avoid text duplication from interim callbacks
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript;
+        }
+      }
+      // Always show the latest interim + final transcript in input
+      const latestTranscript = Array.from(event.results)
+        .map(r => r[0].transcript)
+        .join('');
+      setQaInput(latestTranscript);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      // Use the accumulated final transcript for auto-submit
+      if (finalTranscript.trim()) {
+        // Set input and immediately submit
+        setQaInput(finalTranscript.trim());
+        setTimeout(() => handleAsk(), 50);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setIsRecording(false);
+      if (event.error === 'not-allowed') {
+        alert('语音输入需要麦克风权限，请在浏览器设置中允许');
+      } else if (event.error === 'no-speech') {
+        // Silent: no speech detected, user can try again
+      }
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsRecording(true);
+  };
+
   return (
     <div className="topic-detail">
       <div className="topic-detail-header">
@@ -628,6 +782,28 @@ ${bodyHtml}
         {localDetail && !error && !generating && topic.done && (
           <button className="btn btn-sm" onClick={handleToggleReview} style={{ background: reviewMode ? '#6366f1' : '#8b5cf6', color: 'white', borderColor: reviewMode ? '#6366f1' : '#8b5cf6' }} title="复习模式">
             {reviewLoading ? '⏳' : '🔄'} {reviewMode ? '返回讲解' : '复习'}
+          </button>
+        )}
+        {/* Interactive mode buttons */}
+        {!generating && localDetail && !error && !interactiveMode && (
+          <>
+            <button className="btn btn-sm interactive-btn stepwise-btn" onClick={() => handleStartInteractive('stepwise')} title="分段讲解，每部分等你反馈后再继续">
+              📖 分段讲解
+            </button>
+            <button className="btn btn-sm interactive-btn realtime-btn" onClick={() => handleStartInteractive('realtime')} title="实时互动，更灵活的教学节奏">
+              🎙️ 实时互动
+            </button>
+            <button className="btn btn-sm interactive-btn challenge-btn" onClick={() => handleStartInteractive('challenge')} title="考验模式：AI 故意埋错，你来揪出错误">
+              🔍 考验模式
+            </button>
+            <button className="btn btn-sm interactive-btn scaffold-btn" onClick={() => handleStartInteractive('scaffold')} title="脚手架引导：问题驱动，步步递进">
+              📐 引导模式
+            </button>
+          </>
+        )}
+        {interactiveMode && (
+          <button className="btn btn-sm" onClick={handleExitInteractive} style={{ background: '#ef4444', color: 'white', borderColor: '#ef4444' }}>
+            ✕ 退出互动
           </button>
         )}
       </div>
@@ -695,8 +871,92 @@ ${bodyHtml}
           </div>
         )}
 
+        {/* Interactive Mode Content */}
+        {interactiveMode && (
+          <div className="topic-content">
+            <div className="interactive-mode-header">
+              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : interactiveMode === 'realtime' ? '🎙️ 实时互动' : interactiveMode === 'challenge' ? '🔍 考验模式' : '📐 引导模式'}</span>
+              {interactiveLoading && <span className="typing-text">导师正在思考...</span>}
+              {interactiveFinished && <span className="interactive-finished-badge">✅ 讲解完成</span>}
+            </div>
+
+            <div className="interactive-sections">
+              {interactiveSections.map((section, i) => (
+                <div key={i} className="interactive-section">
+                  <div className="interactive-section-number">第 {i + 1} 部分</div>
+                  <ContentArea content={section.content} />
+                </div>
+              ))}
+            </div>
+
+            {interactiveLoading && (
+              <div className="interactive-loading">
+                <div className="spinner-sm" />
+                <span>导师正在回应你的反馈...</span>
+              </div>
+            )}
+
+            {!interactiveLoading && !interactiveFinished && interactiveSections.length > 0 && (
+              <div className="interactive-actions">
+                <p className="interactive-prompt">💬 你的回应是什么？</p>
+                <div className="interactive-quick-buttons">
+                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('继续')}>
+                    ✅ 继续
+                  </button>
+                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('不太懂，详细解释')}>
+                    🤔 不太懂
+                  </button>
+                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('给我举个例子')}>
+                    💡 举例
+                  </button>
+                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('和前面讲的有什么关系？')}>
+                    🔗 关联
+                  </button>
+                  {interactiveMode === 'challenge' && (
+                    <button className="btn btn-sm interactive-quick-btn challenge-catch-btn" onClick={() => handleQuickAction('我发现错误了！')}>
+                      🕵️ 我发现错误了！
+                    </button>
+                  )}
+                </div>
+                <div className="interactive-input-area">
+                  <textarea
+                    ref={interactiveInputRef}
+                    value={interactiveInput}
+                    onChange={e => setInteractiveInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendInteractiveFeedback();
+                      }
+                    }}
+                    placeholder="输入你的问题或反馈...（Enter 发送）"
+                    rows={2}
+                  />
+                  <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
+                    发送
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {interactiveFinished && (
+              <div className="interactive-finished-actions">
+                <p>🎉 互动讲解已完成！你可以继续提问或退出互动模式。</p>
+                <div className="interactive-finished-buttons">
+                  <button className="btn btn-sm" onClick={() => handleQuickAction('我还有问题想问')}>
+                    💬 继续提问
+                  </button>
+                  <button className="btn btn-sm" onClick={handleExitInteractive}>
+                    ✅ 结束互动
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Content + inline Q&A */}
-        {localDetail && !error && (
+        {localDetail && !error && !interactiveMode && (
           <div className="topic-content">
             {/* Generated illustration */}
             <div className="topic-illustration-section">
@@ -781,6 +1041,17 @@ ${bodyHtml}
                       e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
                     }}
                   />
+                  {voiceSupported && (
+                    <button
+                      type="button"
+                      className={"voice-btn" + (isRecording ? ' recording' : '')}
+                      onClick={handleVoiceInput}
+                      disabled={qaLoading}
+                      title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
+                    >
+                      🎤
+                    </button>
+                  )}
                   <button type="button" className="chat-send-btn" onClick={handleAsk} disabled={!qaInput.trim() || qaLoading}>
                     {qaLoading ? <span className="typing-text">思考中...</span> : '➤'}
                   </button>
