@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import api from '../api';
 
 const STORAGE_KEY = 'textbook-maker-settings';
 
@@ -21,8 +22,24 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   const [baseURL, setBaseURL] = useState(saved.baseURL || 'https://api.openai.com/v1');
   const [model, setModel] = useState(saved.model || 'gpt-4o-mini');
   const [showKey, setShowKey] = useState(false);
+  const [testResult, setTestResult] = useState(null); // { ok, model, error } | null
+  const [testing, setTesting] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleTestConnection = async () => {
+    if (!apiKey) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testConnection(apiKey, baseURL, model);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ ok: false, error: err.message });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const handleSave = () => {
     const settings = { apiKey, baseURL, model };
@@ -82,8 +99,23 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
           <span className="field-hint">支持 OpenAI、DeepSeek、SiliconFlow 等兼容 API</span>
         </label>
 
+        {testResult && (
+          <div className={`test-result ${testResult.ok ? 'test-success' : 'test-fail'}`}>
+            {testResult.ok
+              ? `✅ 连接成功！模型: ${testResult.model || model}`
+              : `❌ 连接失败: ${testResult.error}`}
+          </div>
+        )}
+
         <div className="modal-actions">
           <button className="btn btn-secondary" onClick={onClose}>取消</button>
+          <button
+            className="btn btn-test"
+            onClick={handleTestConnection}
+            disabled={!apiKey || testing}
+          >
+            {testing ? '⏳ 测试中...' : '🔍 测试连接'}
+          </button>
           <button className="btn btn-primary" onClick={handleSave} disabled={!apiKey}>
             保存并开始
           </button>

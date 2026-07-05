@@ -6,7 +6,12 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
   const [newName, setNewName] = useState('');
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const fileInputRef = useRef(null);
+
+  const filteredPlans = searchQuery.trim()
+    ? plans.filter(p => p.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : plans;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -51,6 +56,21 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
       <div className="plan-list-header">
         <h2>我的学习计划</h2>
       </div>
+
+      {plans.length > 0 && (
+        <div className="plan-search">
+          <input
+            type="text"
+            className="search-input"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="🔍 搜索计划..."
+          />
+          {searchQuery.trim() && (
+            <span className="search-count">{filteredPlans.length} / {plans.length}</span>
+          )}
+        </div>
+      )}
 
       <div className="plan-create-tabs">
         <button
@@ -117,13 +137,18 @@ Python 基础教程
       )}
 
       <div className="plan-cards">
-        {plans.length === 0 && (
+        {plans.length === 0 && !searchQuery.trim() && (
           <div className="plan-empty">
             <p>还没有学习计划</p>
             <p className="hint">粘贴或导入文件，AI 自动识别阶段和知识点</p>
           </div>
         )}
-        {plans.map(plan => (
+        {searchQuery.trim() && filteredPlans.length === 0 && (
+          <div className="plan-empty">
+            <p>没有找到匹配的计划</p>
+          </div>
+        )}
+        {filteredPlans.map(plan => (
           <div key={plan.id} className="plan-card" onClick={() => onSelect(plan.id)}>
             <div className="plan-card-body">
               <strong>{plan.name}</strong>

@@ -212,6 +212,10 @@ function flattenTopics(phases, phasesById) {
         difficulty: null,
         done: false,
         lastError: null,
+        exercises: [],
+        weakPoints: [],
+        reviewGenerated: null,
+        reviewUpdatedAt: null,
         prerequisites: [],
         relatedTopics: [],
       };
@@ -349,6 +353,296 @@ export function buildKnowledgeGraph(plan) {
   return { nodes, edges };
 }
 
+/**
+ * Relationship type keywords for inferring relation types from AI detail text.
+ * Maps keyword patterns to relationship types.
+ */
+const RELATION_TYPE_KEYWORDS = [
+  { keywords: ['下一步学习', '下一步', '先学', '前置', '基础', '预备', '需要掌握', '建议先'], type: 'prerequisite' },
+  { keywords: ['扩展', '深入', '进阶', '进一步学习', '更深', '提升'], type: 'extends' },
+  { keywords: ['示例', '例子', '实例', '应用场景', '实际应用', '实践'], type: 'exampleOf' },
+  { keywords: ['对比', '区别', '异同', '比较', 'vs', 'versus', '差异', '不同'], type: 'contrasts' },
+  { keywords: ['构建于', '基于', '依赖', '建立在', '依托'], type: 'buildsOn' },
+  { keywords: ['参考', '引用', '参见', '详见', '参阅'], type: 'references' },
+];
+
+/**
+ * Extract relationship edges from a topic's AI-generated detail text.
+ * Parses the "与相关知识点的联系" section and infers edge types from descriptions.
+ * @param {string} detail - The topic's Markdown detail content
+ * @param {Array} allTopics - All topics in the plan (for title matching)
+ * @param {string} currentTopicId - The ID of the topic whose detail is being parsed
+ * @returns {Array} Inferred edges: [{ from, to, type, description, source: 'detail' }]
+ */
+export function extractRelationsFromDetail(detail, allTopics, currentTopicId) {
+  if (!detail || !allTopics || !currentTopicId) return [];
+  const edges = [];
+
+  // Section headers indicating a "related topics" section
+  const sectionPatterns = [
+    /^#{2,4}\s*与相关知识点的联系\s*$/m,
+    /^#{2,4}\s*(?:关联|相关|联系|后续|延伸)(?:知识|学习|概念|主题)?(?:点)?\s*(?:的联系|的关系)?\s*$/m,
+  ];
+
+  let sectionStart = -1;
+  let sectionEnd = -1;
+  const lines = detail.split('\n');
+
+  // Find the matching section
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (sectionStart === -1) {
+      for (const pat of sectionPatterns) {
+        if (pat.test(line)) {
+          sectionStart = i;
+          break;
+        }
+      }
+    } else if (sectionStart >= 0 && line.startsWith('#')) {
+      // Next heading ends the section
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  if (sectionStart === -1) return [];
+  if (sectionEnd === -1) sectionEnd = lines.length;
+
+  // Normalize a string for fuzzy matching
+  const normalize = (s) => s.toLowerCase()
+    .replace(/[^\w\u4e00-\u9fff]/g, '')
+    .replace(/\s+/g, '');
+
+  // Build a map of normalized titles for matching
+  const titleMap = [];
+  for (const t of allTopics) {
+    if (t.id === currentTopicId) continue;
+    titleMap.push({ id: t.id, title: t.title, norm: normalize(t.title) });
+  }
+
+  // Parse each line within the section
+  for (let i = sectionStart + 1; i < sectionEnd; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (line.startsWith('#')) continue;
+
+    // Bullet point with **Title** pattern: - **Title**：description
+    let bulletMatch = line.match(/^[-*]\s+\*\*(.+?)\*\*\s*[：:]\s*(.*)/);
+    if (!bulletMatch) {
+      // Try without bullet: **Title**：description
+      bulletMatch = line.match(/^\*\*(.+?)\*\*\s*[：:]\s*(.*)/);
+    }
+    if (!bulletMatch) {
+      // Try [Title] pattern
+      bulletMatch = line.match(/^[-*]\s*\[(.+?)\]\s*[：:]\s*(.*)/);
+    }
+    if (!bulletMatch) continue;
+
+    const bulletTitle = bulletMatch[1].trim();
+    const description = bulletMatch[2].trim();
+    if (!bulletTitle) continue;
+
+    // Match title to a topic
+    const bulletNorm = normalize(bulletTitle);
+    let matchedTopic = null;
+
+    // Exact match first
+    matchedTopic = titleMap.find(t => t.norm === bulletNorm);
+    if (!matchedTopic) {
+      // Partial match: bullet title is contained in stored title or vice versa
+      matchedTopic = titleMap.find(t =>
+        t.norm.includes(bulletNorm) || bulletNorm.includes(t.norm)
+      );
+    }
+
+    if (!matchedTopic) continue;
+
+    // Infer relationship type from description
+    let relType = 'related';
+    for (const rule of RELATION_TYPE_KEYWORDS) {
+      const descLower = description.toLowerCase();
+      if (rule.keywords.some(kw => descLower.includes(kw))) {
+        relType = rule.type;
+        break;
+      }
+    }
+
+    // Determine edge direction based on description semantics:
+    // - "下一步学习/深入/扩展" → current topic is foundation, matched comes after → current → matched
+    // - "先学/前置/基础/需要掌握/构建于/基于" → matched topic is foundation → matched → current
+    // - "示例/例子" → current's example → current → matched
+    // - "对比/区别" → symmetric, keep current → matched
+    let from = currentTopicId;
+    let to = matchedTopic.id;
+
+    const nextStepKeywords = ['下一步学习', '下一步', '扩展', '深入', '进阶', '进一步学习', '更深', '提升', '延伸'];
+    const foundationKeywords = ['先学', '前置', '基础', '需要掌握', '建议先', '预备知识',
+                                '构建于', '基于', '依赖', '建立在', '依托',
+                                '参考', '引用', '参见'];
+
+    const isNextStep = nextStepKeywords.some(kw => description.includes(kw));
+    const isFoundation = foundationKeywords.some(kw => description.includes(kw));
+
+    if (relType === 'buildsOn' || relType === 'references') {
+      // Linked topic is the foundation → reverse direction: matched → current
+      from = matchedTopic.id;
+      to = currentTopicId;
+    } else if (relType === 'prerequisite') {
+      if (isFoundation) {
+        // Linked topic should be learned first → matched → current
+        from = matchedTopic.id;
+        to = currentTopicId;
+      }
+      // else: isNextStep → current → matched (already the default)
+    }
+    // For 'extends', 'exampleOf', 'contrasts', 'related': keep default current → matched
+
+    edges.push({
+      from,
+      to,
+      type: relType,
+      description: description.substring(0, 120),
+      source: 'detail',
+    });
+  }
+
+  return edges;
+}
+
+/**
+ * Build inferred relationships from a plan:
+ * 1. Parse detail text of each topic for explicit relationships
+ * 2. Compute transitive prerequisites (if A→B and B→C, then A→C)
+ * 3. Inherit prerequisites down the tree (if parent has prereq P, children also effectively depend on P)
+ * @param {object} plan - The plan object
+ * @param {object} options
+ * @param {boolean} options.includeDetailExtraction - Parse detail text (default: true)
+ * @param {boolean} options.includeTransitive - Compute transitive closures (default: true)
+ * @param {boolean} options.includeInherited - Inherit prerequisites to children (default: true)
+ * @returns {Array} All inferred edges
+ */
+export function buildInferredEdges(plan, options = {}) {
+  const {
+    includeDetailExtraction = true,
+    includeTransitive = true,
+    includeInherited = true,
+  } = options;
+
+  const inferredEdges = [];
+  const seen = new Set();
+  const topicMap = {};
+  for (const t of plan.topics) {
+    topicMap[t.id] = t;
+  }
+
+  // 1. Extract from detail text
+  if (includeDetailExtraction) {
+    for (const t of plan.topics) {
+      if (!t.detail) continue;
+      const extracted = extractRelationsFromDetail(t.detail, plan.topics, t.id);
+      for (const e of extracted) {
+        const key = `${e.from}-${e.type}-${e.to}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          inferredEdges.push(e);
+        }
+      }
+    }
+  }
+
+  // 2. Inherit prerequisites to children
+  if (includeInherited) {
+    for (const t of plan.topics) {
+      if (!t.prerequisites) continue;
+      // Find all descendants of this topic
+      const descendants = getTopicDescendants(plan, t.id);
+      for (const preId of t.prerequisites) {
+        for (const desc of descendants) {
+          const key = `${preId}-inheritedPrerequisite-${desc.id}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            inferredEdges.push({
+              from: preId,
+              to: desc.id,
+              type: 'inheritedPrerequisite',
+              description: `父知识点「${topicMap[t.id]?.title || ''}」的前置依赖传递给子知识点`,
+              source: 'inherited',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Compute transitive prerequisites (A→B, B→C => A→C)
+  if (includeTransitive) {
+    // Build adjacency list
+    const prereqOf = {}; // topicId → Set of topics that depend on it
+    for (const t of plan.topics) {
+      if (!t.prerequisites) continue;
+      for (const preId of t.prerequisites) {
+        if (!prereqOf[preId]) prereqOf[preId] = new Set();
+        prereqOf[preId].add(t.id);
+      }
+    }
+
+    // For each topic, BFS to find all transitive dependents
+    for (const t of plan.topics) {
+      const visited = new Set();
+      const queue = [...(t.prerequisites || [])];
+      while (queue.length > 0) {
+        const depId = queue.shift();
+        if (visited.has(depId)) continue;
+        visited.add(depId);
+
+        // Add edge: depId → t.id (already exists as direct, skip)
+        // Instead, find: if depId has its own prerequisites, those are transitive prerequisites of t
+        const depTopic = topicMap[depId];
+        if (depTopic && depTopic.prerequisites) {
+          for (const transPreId of depTopic.prerequisites) {
+            if (transPreId === t.id) continue;
+            // Check this isn't already a direct prerequisite
+            if (t.prerequisites && t.prerequisites.includes(transPreId)) continue;
+            const key = `${transPreId}-transitivePrerequisite-${t.id}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              inferredEdges.push({
+                from: transPreId,
+                to: t.id,
+                type: 'transitivePrerequisite',
+                description: `通过「${topicMap[depId]?.title || ''}」传递的间接前置依赖`,
+                source: 'transitive',
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return inferredEdges;
+}
+
+/**
+ * Build knowledge graph with optional inferred edges.
+ * Extends buildKnowledgeGraph by supporting inferred relationships from detail text,
+ * transitive dependencies, and inherited prerequisites.
+ * @param {object} plan
+ * @param {object} options
+ * @returns {{ nodes: Array, edges: Array, inferredCount: number }}
+ */
+export function buildEnhancedKnowledgeGraph(plan, options = {}) {
+  const base = buildKnowledgeGraph(plan);
+  const inferredEdges = buildInferredEdges(plan, options);
+  const allEdges = [...base.edges, ...inferredEdges];
+  return {
+    nodes: base.nodes,
+    edges: allEdges,
+    baseEdgeCount: base.edges.length,
+    inferredCount: inferredEdges.length,
+  };
+}
+
 export function createPlanWithPhases(name, phases, relations) {
   const id = uuidv4();
   const sortedPhases = phases.map((p, i) => ({
@@ -436,6 +730,10 @@ export function addTopics(planId, titles, options = {}) {
           difficulty: null,
           done: false,
           lastError: null,
+          exercises: [],
+          weakPoints: [],
+          reviewGenerated: null,
+          reviewUpdatedAt: null,
           level: options.level || 1,
           parentId: options.parentId || null,
           prerequisites: [],
@@ -502,6 +800,131 @@ export function addHistory(planId, topicId, role, content) {
 
 export function getTopicHistory(plan, topicId) {
   return plan.history.filter(h => h.topicId === topicId);
+}
+
+/**
+ * Parse exercises from the AI-generated Markdown detail content.
+ * Extracts structured exercise data from the 📝 练习题 section.
+ * @param {string} detail - The Markdown content with exercises
+ * @returns {Array} Parsed exercise objects
+ */
+export function parseExercisesFromDetail(detail) {
+  if (!detail) return [];
+  const exercises = [];
+  const lines = detail.split('\n');
+  let currentExercise = null;
+  let inExerciseSection = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // Detect exercise section start
+    if (line.includes('📝 练习题') || line.match(/^#{1,3}\s*练习题/)) {
+      inExerciseSection = true;
+      continue;
+    }
+
+    if (!inExerciseSection) continue;
+
+    // Detect exercise question (format: > **练习题 X**)
+    const exerciseMatch = line.match(/^>\s*\*\*练习题\s*(\d+)\*\*\s*[（(]([^)）]+)[)）]/);
+    if (exerciseMatch) {
+      if (currentExercise) exercises.push(currentExercise);
+      currentExercise = {
+        id: uuidv4().slice(0, 8),
+        index: parseInt(exerciseMatch[1]),
+        type: exerciseMatch[2] === '选择题' ? 'choice' : 'open',
+        question: '',
+        options: [],
+        answer: '',
+        explanation: '',
+        conceptTag: '',
+        userAnswer: null,
+        correct: null,
+      };
+      // Extract question text after type
+      const qStart = line.indexOf(')') + 1;
+      if (qStart < line.length) {
+        currentExercise.question = line.slice(qStart).replace(/^[）\)]\s*/, '').trim();
+      }
+      continue;
+    }
+
+    if (!currentExercise) continue;
+
+    // Collect options (format: > - A. xxx)
+    const optionMatch = line.match(/^>\s*-\s*([A-D])[.．、]\s*(.+)/);
+    if (optionMatch) {
+      currentExercise.options.push(optionMatch[1] + '. ' + optionMatch[2]);
+      continue;
+    }
+
+    // Answer (format: > > 正确答案：A or > > 参考答案：...)
+    const answerMatch = line.match(/^>\s*>\s*(?:正确答案|参考答案)[：:]\s*(.+)/);
+    if (answerMatch) {
+      currentExercise.answer = answerMatch[1].trim();
+      continue;
+    }
+
+    // Explanation (format: > > 解析：...)
+    const explMatch = line.match(/^>\s*>\s*解析[：:]\s*(.+)/);
+    if (explMatch) {
+      currentExercise.explanation = explMatch[1].trim();
+      continue;
+    }
+
+    // Concept tag (format: > > 关联概念：...)
+    const conceptMatch = line.match(/^>\s*>\s*关联概念[：:]\s*(.+)/);
+    if (conceptMatch) {
+      currentExercise.conceptTag = conceptMatch[1].trim();
+      continue;
+    }
+
+    // Multi-line question continuation (> text without special prefix)
+    if (line.startsWith('> ') && !line.startsWith('> -') && !line.startsWith('> >') && !line.startsWith('> **练习题')) {
+      const text = line.slice(2).trim();
+      if (text && !text.startsWith('**练习题') && !currentExercise.answer) {
+        currentExercise.question += (currentExercise.question ? ' ' : '') + text;
+      }
+    }
+  }
+
+  if (currentExercise) exercises.push(currentExercise);
+  return exercises;
+}
+
+/**
+ * Extract weak points from AI analysis result.
+ * @param {string} analysisJson - JSON string from weak point analysis
+ * @returns {Array} Weak point strings
+ */
+export function extractWeakPoints(analysisJson) {
+  try {
+    const data = JSON.parse(analysisJson);
+    if (!data.weakPoints || !Array.isArray(data.weakPoints)) return [];
+    return data.weakPoints.filter(wp => wp.concept).map(wp => wp.concept);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get topics that need review (have weak points or exercise errors).
+ * @param {object} plan
+ * @returns {Array} Topics needing review with weakPoints summary
+ */
+export function getTopicsNeedingReview(plan) {
+  return plan.topics.filter(t => t.done && (
+    (t.weakPoints && t.weakPoints.length > 0) ||
+    (t.exercises && t.exercises.some(e => e.correct === false))
+  )).map(t => ({
+    id: t.id,
+    title: t.title,
+    weakPoints: t.weakPoints || [],
+    hasExerciseErrors: t.exercises ? t.exercises.some(e => e.correct === false) : false,
+    lastErrorCount: t.exercises ? t.exercises.filter(e => e.correct === false).length : 0,
+    difficulty: t.difficulty,
+  }));
 }
 
 // ─── Notification flag (study-trace pending-checkin pattern) ───
@@ -595,5 +1018,7 @@ export default {
   listPlans, getPlan, createPlan, createPlanWithPhases, deletePlan, removeTopic,
   addTopics, updateTopic, updateTopicTime, reorderTopics, addHistory, getTopicHistory, buildLearningProfile,
   getTopicChildren, getTopicPrerequisites, getTopicDescendants, buildKnowledgeGraph,
+  buildEnhancedKnowledgeGraph, buildInferredEdges, extractRelationsFromDetail,
+  parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview,
   writeFlag, readFlags, clearFlag,
 };

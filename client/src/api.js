@@ -125,8 +125,39 @@ const api = {
     }, true);
   },
   // ─── Knowledge Graph ───
-  async getKnowledgeGraph(planId) {
-    return request(`${API_BASE}/learn/plans/${planId}/graph`);
+  async getKnowledgeGraph(planId, infer = false) {
+    const qs = infer ? '?infer=true' : '';
+    return request(`${API_BASE}/learn/plans/${planId}/graph${qs}`);
+  },
+  async extractRelations(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/extract-relations`);
+  },
+
+  // ─── Exercises & Review (needs API key) ───
+  async generateReview(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/review/${topicId}`,
+      { method: 'POST' }, true);
+  },
+  async submitExercises(planId, topicId, answers) {
+    return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }, true);
+  },
+  async analyzeWeakPoints(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/weak-points`,
+      { method: 'POST' }, true);
+  },
+  async getReviewNeeds(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
+  },
+
+  // ─── Connection Test ───
+  async testConnection(apiKey, baseURL, model) {
+    return request(`${API_BASE}/learn/test-connection`, {
+      method: 'POST',
+      body: JSON.stringify({ apiKey, baseURL, model }),
+    });
   },
 };
 

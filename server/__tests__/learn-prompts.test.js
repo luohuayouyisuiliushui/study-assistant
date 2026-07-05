@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildDeterministicContext, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT } from '../engine/learn-prompts.js';
+import { buildDeterministicContext, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT } from '../engine/learn-prompts.js';
 
 function makePlan(overrides = {}) {
   return {
@@ -157,5 +157,42 @@ describe('buildDeterministicContext', () => {
     const progressLine = result.split('\n').find(l => l.includes('学习进度'));
     assert.ok(progressLine, 'should have progress line');
     assert.ok(progressLine.includes('1'), 'should show 1 done');
+  });
+});
+
+describe('STABLE_REVIEW_SYSTEM_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_REVIEW_SYSTEM_PROMPT === 'string');
+    assert.ok(STABLE_REVIEW_SYSTEM_PROMPT.length > 100);
+  });
+
+  it('should mention key review concepts', () => {
+    assert.ok(STABLE_REVIEW_SYSTEM_PROMPT.includes('复习'));
+    assert.ok(STABLE_REVIEW_SYSTEM_PROMPT.includes('薄弱点'));
+    assert.ok(STABLE_REVIEW_SYSTEM_PROMPT.includes('精简'));
+  });
+});
+
+describe('STABLE_EXERCISE_GRADING_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_EXERCISE_GRADING_PROMPT === 'string');
+    assert.ok(STABLE_EXERCISE_GRADING_PROMPT.length > 100);
+  });
+
+  it('should require JSON output format', () => {
+    assert.ok(STABLE_EXERCISE_GRADING_PROMPT.includes('results'));
+    assert.ok(STABLE_EXERCISE_GRADING_PROMPT.includes('"correct"'));
+  });
+});
+
+describe('STABLE_WEAK_POINT_PROMPT', () => {
+  it('should be a non-empty string', () => {
+    assert.ok(typeof STABLE_WEAK_POINT_PROMPT === 'string');
+    assert.ok(STABLE_WEAK_POINT_PROMPT.length > 100);
+  });
+
+  it('should mention exercise analysis', () => {
+    assert.ok(STABLE_WEAK_POINT_PROMPT.includes('薄弱'));
+    assert.ok(STABLE_WEAK_POINT_PROMPT.includes('confidence'));
   });
 });

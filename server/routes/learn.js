@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning } from '../engine/learn-engine.js';
+import { generateDetail, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -16,6 +16,22 @@ function getProvider(req) {
 function getModel(req) {
   return req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
 }
+
+// ─── Test Connection ───
+
+/**
+ * POST /api/learn/test-connection
+ * Test if the provided API configuration works.
+ */
+router.post('/test-connection', async (req, res) => {
+  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return res.status(400).json({ ok: false, error: '请提供 API Key（可通过请求头 x-api-key、请求体 apiKey 或环境变量 OPENAI_API_KEY 设置）' });
+  }
+  const provider = getProvider(req);
+  const result = await provider.testConnection();
+  res.json(result);
+});
 
 // ─── Plans ───
 
@@ -234,12 +250,44 @@ router.post('/plans/import', async (req, res) => {
 /**
  * GET /api/learn/plans/:id/graph
  * Get knowledge graph data (nodes + edges) for visualization.
+ * Query params:
+ *   infer=true — include inferred edges from detail text, transitive dependencies, and inherited prerequisites
  */
 router.get('/plans/:id/graph', (req, res) => {
   const plan = store.getPlan(req.params.id);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
-  const graph = store.buildKnowledgeGraph(plan);
+
+  const infer = req.query.infer === 'true';
+  let graph;
+  if (infer) {
+    graph = store.buildEnhancedKnowledgeGraph(plan);
+  } else {
+    graph = store.buildKnowledgeGraph(plan);
+  }
   res.json({ graph });
+});
+
+/**
+ * GET /api/learn/plans/:id/extract-relations
+ * Parse AI-generated detail text to extract knowledge relationships,
+ * and return them as suggested edges that can be previewed before saving.
+ */
+router.get('/plans/:id/extract-relations', (req, res) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const inferredEdges = store.buildInferredEdges(plan);
+  const detailEdges = inferredEdges.filter(e => e.source === 'detail');
+  const transitiveEdges = inferredEdges.filter(e => e.source === 'transitive');
+  const inheritedEdges = inferredEdges.filter(e => e.source === 'inherited');
+
+  res.json({
+    edges: inferredEdges,
+    detailCount: detailEdges.length,
+    transitiveCount: transitiveEdges.length,
+    inheritedCount: inheritedEdges.length,
+    totalCount: inferredEdges.length,
+  });
 });
 
 // ─── Generation & Q&A ───
@@ -324,6 +372,83 @@ router.post('/plans/:id/analysis/ask', async (req, res) => {
       res.status(500).end('追问失败');
     }
   }
+});
+
+// ═══════════════════════════════════════════════════════
+//  EXERCISE & REVIEW ROUTES
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/review/:topicId
+ * Generate review content for a completed topic.
+ */
+router.post('/plans/:planId/review/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!topic.done) return res.status(400).json({ error: '该知识点尚未完成学习，无需复习' });
+
+  try {
+    const provider = getProvider(req);
+    const review = await generateReview(provider, plan, req.params.topicId, getModel(req));
+    const exercises = store.parseExercisesFromDetail(review);
+    res.json({ review, exercises });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/exercises/:topicId/submit
+ * Submit exercise answers for AI grading.
+ */
+router.post('/plans/:planId/exercises/:topicId/submit', async (req, res) => {
+  const { answers } = req.body;
+  if (!answers || !Array.isArray(answers) || answers.length === 0) {
+    return res.status(400).json({ error: '请提供练习答案' });
+  }
+
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const results = await gradeExercises(provider, plan, req.params.topicId, answers);
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/weak-points
+ * Analyze weak points across all done topics.
+ */
+router.post('/plans/:planId/weak-points', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const results = await analyzeWeakPoints(provider, plan, getModel(req));
+    res.json({ weakPoints: results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/learn/plans/:planId/review-needs
+ * Get topics needing review with weak point details.
+ */
+router.get('/plans/:planId/review-needs', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const needs = store.getTopicsNeedingReview(plan);
+  res.json({ needs });
 });
 
 /**

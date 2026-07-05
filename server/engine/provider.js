@@ -368,6 +368,66 @@ export function assessPrefixStability(messages) {
   };
 }
 
+// ─── Helper: detect relay-unsupported parameter errors ───
+// (exported for unit testing)
+
+export function isUnsupportedParameterError(err, paramName) {
+  const msg = (err?.message || '').toLowerCase();
+  const param = paramName.toLowerCase();
+  return (
+    msg.includes(`'${param}'`) || msg.includes(`"${param}"`) ||
+    msg.includes(param + ' is not supported') ||
+    msg.includes(param + ' is not a valid') ||
+    msg.includes('does not support') ||
+    msg.includes('unsupported parameter') ||
+    msg.includes('unknown parameter') ||
+    msg.includes('invalid parameter') ||
+    msg.includes('not supported')
+  );
+}
+
+// ─── Helper: format connection errors for relay compatibility ───
+
+export function formatConnectionError(err, baseURL, model) {
+  const msg = err?.message ? String(err.message).toLowerCase() : '';
+
+  if (err.status === 401) return 'API Key 无效或未授权（401）';
+  if (err.status === 403) return `API Key 无权限访问模型 "${model}"（403）`;
+  if (err.status === 404) {
+    return baseURL && !baseURL.endsWith('/v1')
+      ? 'API 地址不正确（404），请检查 Base URL 是否以 /v1 结尾'
+      : 'API 地址不正确（404），请检查 Base URL 和模型名称是否正确';
+  }
+  if (err.status === 429) return '请求过于频繁，请稍后再试（429）';
+  if (err.status === 500) return 'API 服务器内部错误（500），可能是中转站本身的问题';
+
+  // OpenAI SDK connection errors (instanceof-style check via constructor name)
+  const isConnErr = err.constructor?.name === 'APIConnectionError' ||
+    err.constructor?.name === 'APIConnectionTimeoutError';
+
+  if (isConnErr || msg.includes('connection error') || msg.includes('econnrefused')) {
+    if (msg.includes('timeout') || err.constructor?.name === 'APIConnectionTimeoutError') {
+      return '连接超时，请检查 Base URL 是否可达，或网络连接是否正常';
+    }
+    return '无法连接到 API 服务器，请检查 Base URL 是否正确、网络是否畅通';
+  }
+
+  if (err.code === 'ECONNREFUSED') return '无法连接到服务器，请检查 Base URL';
+  if (err.code === 'ENOTFOUND') return '域名解析失败，请检查 Base URL 是否正确';
+  if (err.code === 'ECONNRESET') return '连接被重置，请检查 Base URL 和网络连接';
+  if (err.code === 'ETIMEDOUT' || msg.includes('timeout')) return '连接超时，请检查 Base URL 是否可达';
+
+  if (msg.includes('incorrect api key') || msg.includes('invalid api key')) return 'API Key 不正确';
+  if (msg.includes('auth') || msg.includes('unauthorized')) return '认证失败，请检查 API Key 是否正确';
+  if (msg.includes('insufficient quota') || msg.includes('quota')) return 'API 额度不足，请检查中转站账户余额';
+  if (msg.includes('rate limit') || msg.includes('too many requests')) return '请求频率过高，请稍后再试';
+  if (msg.includes('model not found') || msg.includes('model not exist')) return `模型 "${model}" 不存在，请检查模型名称是否正确`;
+  if (msg.includes('current quota') || msg.includes('balance')) return '中转站余额不足，请充值';
+  if (msg.includes('account balance')) return '账户余额不足';
+
+  return err.message || '未知错误';
+}
+
 // ─── Retry with exponential backoff + jitter ───
 
 const INITIAL_DELAY = 1000;
@@ -480,14 +540,36 @@ export class Provider {
     }
 
     // ── Cache miss → make API call ──
+    let responseFormatFailed = false;
     const result = await retryWithBackoff(async () => {
-      const resp = await this._client.chat.completions.create({
+      const requestOpts = {
         model: this._model,
         messages,
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 4096,
-        ...(opts.responseFormat ? { response_format: opts.responseFormat } : {}),
-      });
+      };
+      if (opts.responseFormat && !responseFormatFailed) {
+        requestOpts.response_format = opts.responseFormat;
+      }
+
+      let resp;
+      try {
+        resp = await this._client.chat.completions.create(requestOpts);
+      } catch (err) {
+        // Relay does not support response_format → retry without it once
+        if (opts.responseFormat && !responseFormatFailed && isUnsupportedParameterError(err, 'response_format')) {
+          console.warn('[provider] ⚠️ Relay does not support response_format, retrying without it');
+          responseFormatFailed = true;
+          resp = await this._client.chat.completions.create({
+            model: this._model,
+            messages,
+            temperature: opts.temperature ?? 0.7,
+            max_tokens: opts.maxTokens ?? 4096,
+          });
+        } else {
+          throw err;
+        }
+      }
 
       const usage = extractUsage(resp);
 
@@ -560,16 +642,8 @@ export class Provider {
 
     this._totalCalls++;
 
-    await retryWithBackoff(async () => {
-      const stream = await this._client.chat.completions.create({
-        model: this._model,
-        messages,
-        temperature: opts.temperature ?? 0.7,
-        max_tokens: opts.maxTokens ?? 8192,
-        stream: true,
-        stream_options: { include_usage: true },
-      });
-
+    // Shared stream reader: accumulates content and usage
+    const readStream = async (stream) => {
       for await (const chunk of stream) {
         if (chunk.usage) {
           finalUsage = chunk.usage;
@@ -580,6 +654,47 @@ export class Provider {
           fullContent += delta;
           if (opts.onChunk) opts.onChunk(delta);
         }
+      }
+    };
+
+    let useStreamOptions = opts.streamOptions !== false;
+    let streamOptionsFailed = false;
+
+    await retryWithBackoff(async () => {
+      const requestOpts = {
+        model: this._model,
+        messages,
+        temperature: opts.temperature ?? 0.7,
+        max_tokens: opts.maxTokens ?? 8192,
+        stream: true,
+      };
+      if (useStreamOptions && !streamOptionsFailed) {
+        requestOpts.stream_options = { include_usage: true };
+      }
+
+      try {
+        const stream = await this._client.chat.completions.create(requestOpts);
+        await readStream(stream);
+      } catch (err) {
+        // Relay does not support stream_options → retry without it once.
+        // NOTE: The fallback path will NOT receive usage data from the API
+        // (no stream_options), so finalUsage stays null and diagnostics
+        // like cache-hit tokens will report zero. This is acceptable for
+        // relay compatibility.
+        if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
+          console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
+          streamOptionsFailed = true;
+          const fallbackStream = await this._client.chat.completions.create({
+            model: this._model,
+            messages,
+            temperature: opts.temperature ?? 0.7,
+            max_tokens: opts.maxTokens ?? 8192,
+            stream: true,
+          });
+          await readStream(fallbackStream);
+          return;
+        }
+        throw err;
       }
     });
 
@@ -709,6 +824,27 @@ export class Provider {
     _diskCache.clear();
     this._lastPrefixHash = null;
     this._prefixChangeCount = 0;
+  }
+
+  /**
+   * Test API connection by sending a minimal request.
+   * Returns { ok, model, error? }.
+   */
+  async testConnection() {
+    try {
+      const resp = await this._client.chat.completions.create({
+        model: this._model,
+        messages: [
+          { role: 'user', content: 'Hi' },
+        ],
+        max_tokens: 1,
+        temperature: 0,
+      });
+      const model_used = resp.model || this._model;
+      return { ok: true, model: model_used };
+    } catch (err) {
+      return { ok: false, error: formatConnectionError(err, this._baseURL, this._model) };
+    }
   }
 
   get model() { return this._model; }

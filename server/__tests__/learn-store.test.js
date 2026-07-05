@@ -382,4 +382,133 @@ describe('learn-store', () => {
       assert.strictEqual(result, null);
     });
   });
+
+  // ═══════════════════════════════════════════════════════
+  //  NEW: parseExercisesFromDetail / extractWeakPoints / getTopicsNeedingReview
+  // ═══════════════════════════════════════════════════════
+  describe('parseExercisesFromDetail', () => {
+    it('should return empty array for null/empty input', () => {
+      assert.strictEqual(store.parseExercisesFromDetail(null).length, 0);
+      assert.strictEqual(store.parseExercisesFromDetail('').length, 0);
+    });
+
+    it('should parse choice exercises from structured markdown', () => {
+      const md = '## 📝 练习题\n' +
+        '> **练习题 1**（选择题）以下哪个是变量？\n' +
+        '> - A. var\n' +
+        '> - B. function\n' +
+        '> - C. class\n' +
+        '> > 正确答案：A\n' +
+        '> > 解析：var 是变量声明关键字\n' +
+        '> > 关联概念：变量声明\n';
+      const result = store.parseExercisesFromDetail(md);
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].type, 'choice');
+      assert.strictEqual(result[0].answer, 'A');
+      assert.strictEqual(result[0].options.length, 3);
+      assert.strictEqual(result[0].conceptTag, '变量声明');
+    });
+
+    it('should parse open-ended exercises', () => {
+      const md = '## 📝 练习题\n' +
+        '> **练习题 1**（简答题）什么是闭包？\n' +
+        '> > 参考答案：闭包是能访问外部函数变量的函数\n' +
+        '> > 解析：闭包核心是函数+词法作用域\n' +
+        '> > 关联概念：闭包\n';
+      const result = store.parseExercisesFromDetail(md);
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].type, 'open');
+      assert.strictEqual(result[0].answer, '闭包是能访问外部函数变量的函数');
+    });
+
+    it('should parse multiple exercises', () => {
+      const md = '## 📝 练习题\n' +
+        '> **练习题 1**（选择题）题1？\n' +
+        '> - A. Opt1\n' +
+        '> - B. Opt2\n' +
+        '> > 正确答案：A\n' +
+        '> > 关联概念：概念1\n' +
+        '> **练习题 2**（简答题）题2？\n' +
+        '> > 参考答案：答案2\n' +
+        '> > 关联概念：概念2\n';
+      const result = store.parseExercisesFromDetail(md);
+      assert.strictEqual(result.length, 2);
+      assert.strictEqual(result[0].index, 1);
+      assert.strictEqual(result[1].index, 2);
+    });
+
+    it('should return empty array when detail has no exercise section', () => {
+      const md = '普通内容，没有练习题\n';
+      const result = store.parseExercisesFromDetail(md);
+      assert.strictEqual(result.length, 0);
+    });
+  });
+
+  describe('extractWeakPoints', () => {
+    it('should extract weak point names from JSON', () => {
+      const json = '{"topicTitle":"JS基础","weakPoints":[{"concept":"闭包","confidence":"high","evidence":"答错练习题"},{"concept":"变量提升","confidence":"medium","evidence":"追问较多"}]}';
+      const result = store.extractWeakPoints(json);
+      assert.deepStrictEqual(result, ['闭包', '变量提升']);
+    });
+
+    it('should return empty array for invalid JSON', () => {
+      assert.deepStrictEqual(store.extractWeakPoints('not json'), []);
+      assert.deepStrictEqual(store.extractWeakPoints(''), []);
+    });
+
+    it('should return empty array for missing weakPoints', () => {
+      const json = '{"topicTitle":"JS基础","weakPoints":[]}';
+      assert.deepStrictEqual(store.extractWeakPoints(json), []);
+    });
+
+    it('should filter out entries without concept', () => {
+      const json = '{"weakPoints":[{"concept":"闭包"},{"confidence":"high"}]}';
+      const result = store.extractWeakPoints(json);
+      assert.deepStrictEqual(result, ['闭包']);
+    });
+  });
+
+  describe('getTopicsNeedingReview', () => {
+    it('should return topics with weakPoints', () => {
+      const plan = {
+        topics: [
+          { id: 't1', title: '主题1', done: true, weakPoints: ['闭包'], exercises: [] },
+          { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [] },
+          { id: 't3', title: '主题3', done: false, weakPoints: ['变量'], exercises: [] },
+        ],
+      };
+      const needs = store.getTopicsNeedingReview(plan);
+      assert.strictEqual(needs.length, 1);
+      assert.strictEqual(needs[0].title, '主题1');
+    });
+
+    it('should return topics with exercise errors', () => {
+      const plan = {
+        topics: [
+          { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [
+            { question: '题1', correct: false, userAnswer: 'A', answer: 'B' },
+          ]},
+          { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [
+            { question: '题2', correct: true, userAnswer: 'A', answer: 'A' },
+          ]},
+        ],
+      };
+      const needs = store.getTopicsNeedingReview(plan);
+      assert.strictEqual(needs.length, 1);
+      assert.strictEqual(needs[0].title, '主题1');
+      assert.strictEqual(needs[0].hasExerciseErrors, true);
+      assert.strictEqual(needs[0].lastErrorCount, 1);
+    });
+
+    it('should return empty array when no topics need review', () => {
+      const plan = {
+        topics: [
+          { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [] },
+          { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [] },
+        ],
+      };
+      const needs = store.getTopicsNeedingReview(plan);
+      assert.strictEqual(needs.length, 0);
+    });
+  });
 });

@@ -344,10 +344,18 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           <span className="stat-label">已评价</span>
         </div>
         {needReview.length > 0 && (
-          <div className="stat-item review-warn" title={needReview.map(t => t.title).join('、')}>
+          <div className="stat-item review-warn" title={needReview.map(t => t.title + (t.weakPoints?.length ? ' (' + t.weakPoints.join(', ') + ')' : '')).join('、')}>
             <span className="stat-icon">📌</span>
             <span className="stat-value">{needReview.length}</span>
             <span className="stat-label">待复习</span>
+            <div className="stat-detail" style={{ fontSize: '11px', color: '#92400e', lineHeight: 1.4, marginTop: '2px' }}>
+              {needReview.slice(0, 3).map(t => (
+                <div key={t.id} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {t.title}{t.weakPoints?.length ? ' (' + t.weakPoints.slice(0, 2).join('/') + ')' : ''}
+                </div>
+              ))}
+              {needReview.length > 3 && <div>...还有 {needReview.length - 3} 个</div>}
+            </div>
           </div>
         )}
       </div>
@@ -382,16 +390,26 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
         {doneTopics.length > 0 && (
           <>
             <div className="section-title" style={{ marginTop: '16px' }}>✅ 已学习</div>
-            {doneTopics.map((t) => (
-              <div key={t.id} className="topic-item done" onClick={() => onSelectTopic(t.id)}>
+            {doneTopics.map((t) => {
+              const hasWeakPoints = (t.weakPoints && t.weakPoints.length > 0);
+              return (
+              <div key={t.id} className="topic-item done" onClick={() => onSelectTopic(t.id)} style={{ cursor: 'pointer' }}>
                 <span className="topic-order">✓</span>
                 <span className="topic-level-badge">
                   {t.level === 1 ? '📘' : t.level === 2 ? '📗' : t.level === 3 ? '📙' : '📄'}
                 </span>
                 <span className="topic-title">{t.title}</span>
+                {hasWeakPoints && (
+                  <span className="topic-weak-badge" title={'薄弱: ' + t.weakPoints.join(', ')}>
+                    📌 {t.weakPoints.length}
+                  </span>
+                )}
                 <span className="topic-done-label">已学习</span>
+                <span className="topic-actions" onClick={e => e.stopPropagation()}>
+                  <button className="btn-tiny" onClick={() => onSelectTopic(t.id)} title="打开知识点详情">📖</button>
+                </span>
               </div>
-            ))}
+            )})}
           </>
         )}
       </div>

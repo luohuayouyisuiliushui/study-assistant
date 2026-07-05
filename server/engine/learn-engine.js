@@ -16,8 +16,10 @@
 
 import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
-import { buildDetailMessages, buildFollowUpMessages } from './learn-prompts.js';
-import { updateTopic, addHistory, getTopicHistory, buildLearningProfile } from './learn-store.js';
+import { buildDetailMessages, buildFollowUpMessages,
+  STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
+  STABLE_WEAK_POINT_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
+import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
 
 /**
  * Global cache monitor for this process.
@@ -205,7 +207,6 @@ export async function analyzeLearning(provider, plan, model = 'gpt-4o-mini', ana
   }
 
   const analysisData = JSON.stringify({ profile, topicQAs }, null, 2);
-  const { ANALYSIS_SYSTEM_PROMPT } = await import('./learn-prompts.js');
   let userContent = '以下是我的学习数据，请进行分析：\n\n```json\n' + analysisData + '\n```';
 
   // Include previous analysis chat as subjective data context
@@ -239,7 +240,6 @@ export async function analyzeLearning(provider, plan, model = 'gpt-4o-mini', ana
  * Answer a follow-up question about a learning analysis.
  */
 export async function answerAnalysisFollowUp(provider, plan, analysis, question, model) {
-  const { ANALYSIS_FOLLOWUP_PROMPT } = await import('./learn-prompts.js');
   const analysisData = JSON.stringify({
     profile: buildLearningProfile(plan),
     planName: plan.name,
@@ -257,6 +257,217 @@ export async function answerAnalysisFollowUp(provider, plan, analysis, question,
   return provider.complete(messages, { maxTokens: 2048, temperature: 0.7, model });
 }
 
+// ═══════════════════════════════════════════════════════
+//  EXERCISE & REVIEW FUNCTIONS
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Generate a concise review for an already-learned knowledge point.
+ * Focuses on weak points and provides targeted practice.
+ */
+export async function generateReview(providerOrConfig, plan, topicId, model = 'gpt-4o-mini') {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+  if (!topic.detail) throw new Error('该知识点还没有讲解内容，无法生成复习');
+
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+
+  // Build review context
+  const weakPointsList = (topic.weakPoints && topic.weakPoints.length > 0)
+    ? topic.weakPoints.join('、')
+    : '无明确薄弱点（进行全面回顾）';
+
+  // Collect recent Q&A for this topic (last 5 pairs)
+  const history = getTopicHistory(plan, topicId);
+  const pairs = [];
+  for (let i = 0; i < history.length; i++) {
+    if (history[i].role === 'user' && i + 1 < history.length && history[i + 1].role === 'ai') {
+      pairs.push({ q: history[i].content, a: history[i + 1].content });
+      i++;
+    }
+  }
+  const recentQa = pairs.slice(-5).map(p => `用户问: ${p.q}\n助手答: ${p.a.slice(0, 200)}`).join('\n\n');
+
+  const context = [
+    '=== 复习上下文 ===',
+    '知识点: ' + topic.title,
+    '薄弱点: ' + weakPointsList,
+    '',
+    '=== 原讲解内容 ===',
+    topic.detail.slice(0, 8000), // trim to fit context window
+    '',
+    '=== 近期追问记录 ===',
+    recentQa || '无追问记录',
+  ].join('\n');
+
+  const messages = [
+    { role: 'system', content: STABLE_REVIEW_SYSTEM_PROMPT },
+    { role: 'user', content: context },
+  ];
+
+  const result = await provider.complete(messages, { maxTokens: 4096, temperature: 0.5 });
+  const reviewContent = result.content || '';
+
+  // Save review to topic
+  await updateTopic(plan.id, topicId, {
+    reviewGenerated: reviewContent,
+    reviewUpdatedAt: Date.now(),
+  });
+  topic.reviewGenerated = reviewContent;
+  topic.reviewUpdatedAt = Date.now();
+
+  return reviewContent;
+}
+
+/**
+ * Grade user's exercise answers using AI.
+ * @param {object} providerOrConfig - Provider or config
+ * @param {object} plan - Plan object
+ * @param {string} topicId - Topic ID
+ * @param {Array} userAnswers - [{ exerciseIndex, userAnswer }, ...]
+ * @returns {Array} Graded results
+ */
+export async function gradeExercises(providerOrConfig, plan, topicId, userAnswers) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  const provider = _resolveProvider(providerOrConfig);
+
+  // Get exercises from topic or parse from detail
+  let exercises = topic.exercises || [];
+  if (exercises.length === 0 && topic.detail) {
+    exercises = parseExercisesFromDetail(topic.detail);
+  }
+  // Merge any existing persisted user answers back (defensive: handles edge case
+  // where topic.exercises was empty but user had prior partial submissions)
+  if (topic.exercises && topic.exercises.length > 0) {
+    for (const existing of topic.exercises) {
+      if (existing.userAnswer !== null || existing.correct !== null) {
+        const match = exercises.find(e => e.id === existing.id);
+        if (match) {
+          if (existing.userAnswer !== null) match.userAnswer = existing.userAnswer;
+          if (existing.correct !== null) match.correct = existing.correct;
+        }
+      }
+    }
+  }
+
+  // Prepare grading context
+  const exerciseContext = {
+    topicTitle: topic.title,
+    exercises: exercises.map((ex, i) => ({
+      index: i,
+      type: ex.type,
+      question: ex.question,
+      options: ex.options,
+      correctAnswer: ex.answer,
+      userAnswer: (userAnswers.find(a => a.exerciseIndex === i) || {}).userAnswer || '',
+    })),
+  };
+
+  const messages = [
+    { role: 'system', content: STABLE_EXERCISE_GRADING_PROMPT },
+    { role: 'user', content: JSON.stringify(exerciseContext, null, 2) },
+  ];
+
+  const result = await provider.complete(messages, {
+    maxTokens: 4096,
+    temperature: 0.3,
+    responseFormat: { type: 'json_object' },
+  });
+
+  let gradingResults;
+  try {
+    gradingResults = JSON.parse(result.content || '{}');
+  } catch {
+    throw new Error('AI 评分结果格式错误');
+  }
+
+  // Update topic exercises with user answers and grading
+  if (gradingResults.results && Array.isArray(gradingResults.results)) {
+    for (const grade of gradingResults.results) {
+      const idx = grade.exerciseIndex;
+      if (idx >= 0 && idx < exercises.length) {
+        exercises[idx].userAnswer = grade.userAnswer || exercises[idx].userAnswer;
+        exercises[idx].correct = grade.correct;
+      }
+    }
+    await updateTopic(plan.id, topicId, { exercises });
+    topic.exercises = exercises;
+  }
+
+  return gradingResults.results || [];
+}
+
+/**
+ * Analyze weak points across all done topics.
+ * Uses exercise errors + Q&A history to identify specific weak sub-concepts.
+ */
+export async function analyzeWeakPoints(providerOrConfig, plan, model = 'gpt-4o-mini') {
+  const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
+
+  const doneTopics = plan.topics.filter(t => t.done && t.detail);
+  const results = [];
+
+  for (const topic of doneTopics) {
+    // Skip if no exercises and no Q&A
+    const hasExercises = (topic.exercises && topic.exercises.length > 0);
+    const history = getTopicHistory(plan, topic.id);
+    const hasQA = history.some(h => h.role === 'user');
+    if (!hasExercises && !hasQA) continue;
+
+    // Build analysis context
+    const exerciseData = (topic.exercises || []).map(e => ({
+      question: e.question,
+      type: e.type,
+      conceptTag: e.conceptTag,
+      userAnswer: e.userAnswer,
+      correct: e.correct,
+      correctAnswer: e.answer,
+    }));
+
+    const qaData = history
+      .filter(h => h.role === 'user')
+      .slice(-10)
+      .map(h => h.content.slice(0, 300));
+
+    const context = {
+      topicTitle: topic.title,
+      detailExcerpt: topic.detail.slice(0, 3000),
+      exercises: exerciseData,
+      recentQuestions: qaData,
+    };
+
+    const messages = [
+      { role: 'system', content: STABLE_WEAK_POINT_PROMPT },
+      { role: 'user', content: JSON.stringify(context, null, 2) },
+    ];
+
+    try {
+      const result = await provider.complete(messages, {
+        maxTokens: 2048,
+        temperature: 0.3,
+        responseFormat: { type: 'json_object' },
+      });
+
+      const analysis = JSON.parse(result.content || '{}');
+      const weakPointNames = (analysis.weakPoints || [])
+        .filter(wp => wp.concept)
+        .map(wp => wp.concept);
+
+      if (weakPointNames.length > 0) {
+        await updateTopic(plan.id, topic.id, { weakPoints: weakPointNames });
+        topic.weakPoints = weakPointNames;
+        results.push({ topicTitle: topic.title, weakPoints: weakPointNames });
+      }
+    } catch (err) {
+      console.warn(`[analyzeWeakPoints] Failed for ${topic.title}: ${err.message}`);
+    }
+  }
+
+  return results;
+}
+
 /**
  * Get cache diagnostics for the engine.
  */
@@ -269,6 +480,9 @@ export default {
   answerFollowUp,
   answerAnalysisFollowUp,
   analyzeLearning,
+  generateReview,
+  gradeExercises,
+  analyzeWeakPoints,
   getEngineCacheDiagnostics,
   createProviderFromConfig,
 };

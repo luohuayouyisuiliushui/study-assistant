@@ -64,6 +64,46 @@ const QaMessages = memo(function QaMessages({ qaList }) {
   );
 });
 
+/** Parse exercises from AI-generated markdown content (client-side) */
+function parseExercisesFromMarkdown(detail) {
+  if (!detail) return [];
+  const exercises = [];
+  const lines = detail.split('\n');
+  let current = null;
+  let inSection = false;
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.includes('📝 练习题') || /^#{1,3}\s*练习题/.test(t)) { inSection = true; continue; }
+    if (!inSection) continue;
+
+    const m = t.match(/^>\s*\*\*练习题\s*(\d+)\*\*\s*[（(]([^)）]+)[)）]/);
+    if (m) {
+      if (current) exercises.push(current);
+      current = { index: parseInt(m[1]), type: m[2] === '选择题' ? 'choice' : 'open', question: '', options: [], answer: '', explanation: '', conceptTag: '', userAnswer: null, correct: null };
+      // Find closing paren (ASCII or full-width) to extract question text
+      const parenEnd = t.search(/[)）]/);
+      if (parenEnd >= 0 && parenEnd + 1 < t.length) current.question = t.slice(parenEnd + 1).replace(/^[）\)\s]*/, '').trim();
+      continue;
+    }
+    if (!current) continue;
+    const opt = t.match(/^>\s*-\s*([A-D])[.．、]\s*(.+)/);
+    if (opt) { current.options.push(opt[1] + '. ' + opt[2]); continue; }
+    const ans = t.match(/^>\s*>\s*(?:正确答案|参考答案)[：:]\s*(.+)/);
+    if (ans) { current.answer = ans[1].trim(); continue; }
+    const exp = t.match(/^>\s*>\s*解析[：:]\s*(.+)/);
+    if (exp) { current.explanation = exp[1].trim(); continue; }
+    const conc = t.match(/^>\s*>\s*关联概念[：:]\s*(.+)/);
+    if (conc) { current.conceptTag = conc[1].trim(); continue; }
+    if (t.startsWith('> ') && !t.startsWith('> -') && !t.startsWith('> >') && !t.startsWith('> **练习题')) {
+      const txt = t.slice(2).trim();
+      if (txt && !current.answer) current.question += (current.question ? ' ' : '') + txt;
+    }
+  }
+  if (current) exercises.push(current);
+  return exercises;
+}
+
 export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
   const [qaInput, setQaInput] = useState('');
   const [qaList, setQaList] = useState([]);
@@ -79,6 +119,19 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
   const lastReportedRef = useRef(0); // seconds already reported to server for this topic
+
+  // ─── Exercise State ───
+  const [exercises, setExercises] = useState([]);
+  const [exerciseAnswers, setExerciseAnswers] = useState({});
+  const [exerciseResults, setExerciseResults] = useState(null);
+  const [exerciseLoading, setExerciseLoading] = useState(false);
+  const [submittedExercises, setSubmittedExercises] = useState(false);
+
+  // ─── Review Mode State ───
+  const [reviewMode, setReviewMode] = useState(false);
+  const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState(null);
 
   // Record time spent — heartbeat every 30s + flush on leave
   useEffect(() => {
@@ -131,6 +184,32 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       return pairs;
     });
   }, [topic?.id]); // removed plan.history to prevent overwrite during polls
+
+  // Parse exercises from detail content
+  useEffect(() => {
+    if (!localDetail || generating) return;
+    // Only parse if we haven't loaded exercises from saved topic data
+    if (topic?.exercises && topic.exercises.length > 0) {
+      setExercises(topic.exercises);
+      // Check if all exercises have been submitted
+      if (topic.exercises.every(e => e.correct !== null)) {
+        setSubmittedExercises(true);
+        setExerciseResults(topic.exercises.map((e, idx) => ({
+          exerciseIndex: idx,
+          correct: e.correct,
+          userAnswer: e.userAnswer,
+          correctAnswer: e.answer,
+          explanation: e.explanation,
+        })));
+      }
+      return;
+    }
+    // Parse from markdown detail
+    const parsed = parseExercisesFromMarkdown(localDetail);
+    if (parsed.length > 0) {
+      setExercises(parsed);
+    }
+  }, [localDetail, generating, topic?.exercises]);
 
   // Scroll chat panel to bottom on new Q&A
   useEffect(() => {
@@ -441,6 +520,52 @@ ${bodyHtml}
     }
   };
 
+  // ─── Exercise Handlers ───
+  const handleExerciseAnswer = (exerciseIndex, answer) => {
+    setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer }));
+  };
+
+  const handleSubmitExercises = async () => {
+    if (exerciseLoading || exercises.length === 0) return;
+    setExerciseLoading(true);
+    try {
+      const answers = Object.entries(exerciseAnswers).map(([idx, answer]) => ({
+        exerciseIndex: parseInt(idx),
+        userAnswer: answer,
+      }));
+      const d = await api.submitExercises(plan.id, topic.id, answers);
+      setExerciseResults(d.results);
+      setSubmittedExercises(true);
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+    } catch (err) {
+      alert('提交失败: ' + err.message);
+    } finally {
+      setExerciseLoading(false);
+    }
+  };
+
+  // ─── Review Mode Handlers ───
+  const handleToggleReview = async () => {
+    if (reviewContent) {
+      setReviewMode(!reviewMode);
+      return;
+    }
+    setReviewLoading(true);
+    setReviewMode(true);
+    try {
+      const d = await api.generateReview(plan.id, topic.id);
+      setReviewContent(d.review);
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+    } catch (err) {
+      setReviewError(err.message);
+      setReviewMode(false);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
   // Compute related topics data
   const prerequisites = topic?.prerequisites?.length
     ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean)
@@ -479,6 +604,11 @@ ${bodyHtml}
         {localDetail && !error && !generating && topic.done === false && (
           <button className="btn btn-sm" onClick={handleComplete} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
             ✅ 学完了
+          </button>
+        )}
+        {localDetail && !error && !generating && topic.done && (
+          <button className="btn btn-sm" onClick={handleToggleReview} style={{ background: reviewMode ? '#6366f1' : '#8b5cf6', color: 'white', borderColor: reviewMode ? '#6366f1' : '#8b5cf6' }} title="复习模式">
+            {reviewLoading ? '⏳' : '🔄'} {reviewMode ? '返回讲解' : '复习'}
           </button>
         )}
       </div>
@@ -611,6 +741,86 @@ ${bodyHtml}
                 </form>
               </div>
             </div>
+
+            {/* ─── Review Mode Content ─── */}
+            {!generating && reviewMode && reviewContent && !reviewLoading && (
+              <div className="review-section">
+                <hr />
+                <div className="review-content">
+                  <ContentArea content={reviewContent} />
+                </div>
+              </div>
+            )}
+            {reviewLoading && (
+              <div className="generating-placeholder" style={{ padding: '16px' }}>
+                <div className="spinner-sm" />
+                <p>AI 正在生成复习内容，针对你的薄弱点进行巩固...</p>
+              </div>
+            )}
+            {/* ─── Exercise Section ─── */}
+            {!generating && !reviewMode && exercises.length > 0 && !submittedExercises && (
+              <div className="exercise-section">
+                <hr />
+                <h3>📝 练习题</h3>
+                {exercises.map((ex, i) => (
+                  <div key={i} className="exercise-card">
+                    <div className="exercise-header">
+                      <span className="exercise-number">练习题 {i + 1}</span>
+                      <span className="exercise-type-badge">{ex.type === 'choice' ? '选择题' : '简答题'}</span>
+                      {ex.conceptTag && <span className="exercise-concept-tag">{ex.conceptTag}</span>}
+                    </div>
+                    <p className="exercise-question">{ex.question}</p>
+                    {ex.type === 'choice' && ex.options && ex.options.length > 0 ? (
+                      <div className="exercise-options">
+                        {ex.options.map((opt, oi) => (
+                          <label key={oi} className={"exercise-option" + (exerciseAnswers[i] === opt.charAt(0) ? ' selected' : '')}>
+                            <input
+                              type="radio"
+                              name={"ex-" + i}
+                              value={opt.charAt(0)}
+                              checked={exerciseAnswers[i] === opt.charAt(0)}
+                              onChange={() => handleExerciseAnswer(i, opt.charAt(0))}
+                            />
+                            <span>{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <textarea
+                        className="exercise-text-input"
+                        placeholder="输入你的答案..."
+                        value={exerciseAnswers[i] || ''}
+                        onChange={e => handleExerciseAnswer(i, e.target.value)}
+                        rows={3}
+                      />
+                    )}
+                  </div>
+                ))}
+                <button className="btn btn-primary" onClick={handleSubmitExercises} disabled={exerciseLoading || Object.keys(exerciseAnswers).length === 0}>
+                  {exerciseLoading ? '⏳ 批改中...' : '📤 提交答案'}
+                </button>
+              </div>
+            )}
+            {/* ─── Exercise Results ─── */}
+            {!generating && !reviewMode && submittedExercises && exerciseResults && (
+              <div className="exercise-results">
+                <hr />
+                <h3>📊 练习结果</h3>
+                {exerciseResults.map((res, i) => (
+                  <div key={i} className={"exercise-result-card " + (res.correct ? 'correct' : 'wrong')}>
+                    <div className="exercise-result-header">
+                      <span className="exercise-result-icon">{res.correct ? '✅' : '❌'}</span>
+                      <span className="exercise-result-label">练习题 {i + 1}</span>
+                    </div>
+                    <p className="exercise-result-detail">
+                      <strong>你的答案：</strong>{res.userAnswer || '未作答'}
+                      {!res.correct && <><br /><strong>正确答案：</strong>{res.correctAnswer}</>}
+                    </p>
+                    {res.explanation && <p className="exercise-explanation">💡 {res.explanation}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Difficulty self-rating */}
             {!generating && (
