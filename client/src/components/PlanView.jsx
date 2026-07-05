@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import api from '../api';
 import KnowledgeGraphModal from './KnowledgeGraphModal';
+import MindMapModal from './MindMapModal';
 import { detectEncoding } from '../utils/encoding';
 
 export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTopic, onGenerate }) {
@@ -16,6 +17,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const [analysisChatLoading, setAnalysisChatLoading] = useState(false);
   const analysisChatRef = useRef(null);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [mindMapOpen, setMindMapOpen] = useState(false);
   const [expandedTopics, setExpandedTopics] = useState({});
 
   // Toggle expand/collapse for a parent topic
@@ -246,6 +248,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           <button className="btn btn-sm" onClick={() => setGraphOpen(true)} title="知识图谱">
             🕸️ 知识图谱
           </button>
+          <button className="btn btn-sm" onClick={() => setMindMapOpen(true)} title="思维导图">
+            🧠 思维导图
+          </button>
         </div>
       </div>
 
@@ -453,6 +458,13 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           onClose={() => setGraphOpen(false)}
           onSelectTopic={onSelectTopic}
           onGenerate={onGenerate}
+        />
+      )}
+      {mindMapOpen && (
+        <MindMapModal
+          plan={plan}
+          onClose={() => setMindMapOpen(false)}
+          onSelectTopic={onSelectTopic}
         />
       )}
     </div>
