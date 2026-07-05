@@ -473,10 +473,69 @@ export async function analyzeWeakPoints(providerOrConfig, plan, model = 'gpt-4o-
 }
 
 /**
- * Get cache diagnostics for the engine.
+ * Build a rich, detailed image generation prompt based on the topic title.
+ * Uses keyword analysis to determine illustration type and composition.
  */
+function buildImagePrompt(title) {
+  const lower = (title || '').toLowerCase();
+
+  let illType = 'conceptual diagram';
+  let style = 'Modern flat vector illustration, clean minimalist design, soft color palette with pastel blues and greens';
+  let composition = 'Center a clear visual representation with supporting elements around it';
+  let details = 'Well-structured layout, visually appealing, suitable for academic study notes';
+
+  if (/流程|步骤|过程|workflow|pipeline|flow|build|deploy/.test(lower)) {
+    illType = 'process flow diagram';
+    composition = 'Left-to-right connected steps with directional arrows, each step as a distinct labeled box';
+    details = 'Clear flow direction, sequential numbering, organized pipeline layout';
+  } else if (/架构|结构|体系|分层|stack|architecture|layer|hierarchy/.test(lower)) {
+    illType = 'architecture diagram';
+    composition = 'Layered blocks stacked vertically with connecting lines, each layer distinctly colored and labeled';
+    details = 'Clean hierarchical structure, well-organized layers';
+  } else if (/对比|区别|vs|versus|比较|comparison|diff/.test(lower)) {
+    illType = 'comparison diagram';
+    composition = 'Side-by-side layout with two columns, contrasting colors, key attributes listed';
+    details = 'Symmetrical balanced layout, clear visual comparison';
+  } else if (/网络|连接|通信|protocol|network|connect|link/.test(lower)) {
+    illType = 'network diagram';
+    composition = 'Interconnected nodes or devices with labeled connection paths, distinct node types';
+    details = 'Clean network topology, organized node layout';
+  } else if (/编译|部署|构建|交叉|toolchain|compile|cross/.test(lower)) {
+    illType = 'development workflow';
+    composition = 'Host machine on left, target device on right, transformation arrows between showing compile-link-deploy flow';
+    details = 'Clear host-to-target pipeline, developer workstation visualization';
+  } else if (/硬件|设备|芯片|电路|board|hardware|chip|embedded/.test(lower)) {
+    illType = 'hardware diagram';
+    composition = 'Isometric hardware device view with labeled components and annotations around it';
+    details = 'Technical hardware representation, clean annotated parts diagram';
+  } else if (/编程|代码|语法|函数|class|function|code|variable/.test(lower)) {
+    illType = 'code visualization';
+    composition = 'Code blocks as colored tokens, flow of execution indicated by arrows, syntax elements visually distinct';
+    details = 'Clean code representation with syntax highlighting colors';
+  } else if (/调试|排查|错误|debug|error|bug|fix/.test(lower)) {
+    illType = 'debug process diagram';
+    composition = 'Diagnostic workflow with inspection points, tools, and resolution paths';
+    details = 'Clear problem-solving visual flow';
+  } else if (/概念|原理|理论|基础|theory|concept|principle/.test(lower)) {
+    illType = 'concept mind map';
+    composition = 'Central concept with radiating color-coded sub-concepts connected by lines, organized radially';
+    details = 'Clean mind map layout, hierarchical concept organization';
+  }
+
+  return [
+    `Professional educational ${illType} about "${title}".`,
+    `${style}.`,
+    `${composition}.`,
+    `${details}.`,
+    'High quality, sharp details, flat vector art style, clean lines.',
+    'Light cream or white background, no text errors or typos.',
+    'Suitable for printing and digital display, 4K detail level.',
+    'No photorealistic humans, no 3D rendering, no dark backgrounds.',
+  ].join(' ');
+}
+
 /**
- * Generate an illustration for a knowledge point using SiliconFlow's image generation API.
+ * Generate an illustration for a knowledge point using SiliconFlow API.
  * Calls the text-to-image model, downloads the result, and saves it to server/data/images/.
  * @param {object} topic - The topic object (must have id and title)
  * @param {string} imageApiKey - SiliconFlow API key
@@ -488,8 +547,8 @@ export async function generateTopicImage(topic, imageApiKey, model) {
 
   const imageModel = model || 'black-forest-labs/FLUX.1-dev';
 
-  // Build a prompt for the image based on the topic title
-  const prompt = `Educational illustration for the topic: ${topic.title}. Clean, professional diagram style with Chinese labels, suitable for a study note. Flat vector design, light background, no text errors.`;
+  // Build a structured prompt based on the topic title
+  const prompt = buildImagePrompt(topic.title);
 
   const imageDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'images');
   fs.mkdirSync(imageDir, { recursive: true });

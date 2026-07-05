@@ -1259,10 +1259,25 @@ body {
 
 /* ─── Topic Illustration ─── */
 .topic-illustration {
-  display: flex; justify-content: center; margin: 16px 0;
+  margin: 16px 0;
+}
+.topic-illustration-header {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 500; color: var(--text-secondary);
+  margin-bottom: 8px;
 }
 .topic-illustration-img {
   max-width: 100%; max-height: 400px;
   border-radius: var(--radius-sm);
   box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  display: block;
+}
+.topic-illustration-placeholder {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; margin: 16px 0; padding: 24px;
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  background: #fafafa;
+}
+.topic-illustration-placeholder .field-hint {
+  font-size: 12px; color: var(--text-secondary);
 }

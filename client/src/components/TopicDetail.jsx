@@ -118,7 +118,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
-  const lastReportedRef = useRef(0); // seconds already reported to server for this topic
+  const lastReportedRef = useRef(0);
+  const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
 
   // ─── Exercise State ───
   const [exercises, setExercises] = useState([]);
@@ -246,6 +247,24 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       api.generateDetail(plan.id, topic.id).catch(() => {});
     }
   }, [topic?.id]);
+
+  // Regenerate only the illustration image for this topic
+  const handleGenerateImage = async (topicId) => {
+    setGenerating(true);
+    try {
+      await api.generateDetail(plan.id, topicId);
+      // Wait a moment then refresh
+      setTimeout(async () => {
+        const fresh = await api.getPlan(plan.id);
+        if (fresh.plan) {
+          setTopic(fresh.plan.topics.find(t => t.id === topicId));
+        }
+        setGenerating(false);
+      }, 5000);
+    } catch {
+      setGenerating(false);
+    }
+  };
 
   // Auto-focus Q&A input when generation completes
   useEffect(() => {
@@ -680,11 +699,32 @@ ${bodyHtml}
         {localDetail && !error && (
           <div className="topic-content">
             {/* Generated illustration */}
-            {topic.imageUrl && (
-              <div className="topic-illustration">
-                <img src={topic.imageUrl} alt={topic.title} className="topic-illustration-img" />
-              </div>
-            )}
+            <div className="topic-illustration-section">
+              {topic.imageUrl ? (
+                <div className="topic-illustration">
+                  <div className="topic-illustration-header">
+                    <span>📊 知识点配图</span>
+                    <button
+                      className="btn-tiny"
+                      onClick={() => handleGenerateImage(topic.id)}
+                      disabled={generating}
+                      title="重新生成配图"
+                    >🔄</button>
+                  </div>
+                  <img src={topic.imageUrl} alt={topic.title} className="topic-illustration-img" />
+                </div>
+              ) : localDetail && !generating && settings.imageApiKey && (
+                <div className="topic-illustration-placeholder">
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => handleGenerateImage(topic.id)}
+                  >
+                    🎨 生成配图
+                  </button>
+                  <span className="field-hint">使用硅基流动 AI 为知识点生成插图</span>
+                </div>
+              )}
+            </div>
             <ContentArea content={localDetail} />
             {generating && <div className="streaming-indicator">⏳ 继续生成中...</div>}
 
