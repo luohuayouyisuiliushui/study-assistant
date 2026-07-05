@@ -20,6 +20,9 @@ server/cache/
 .reasonix/
 reasonix.toml
 
+# 项目上下文（AI 提示词，不公开）
+项目上下文.md
+
 # 操作系统
 .DS_Store
 Thumbs.db
