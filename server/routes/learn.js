@@ -142,22 +142,48 @@ router.post('/plans/import', async (req, res) => {
 
     const parsed = JSON.parse(result.content || '{}');
     const planName = overrideName || parsed.name || '导入的学习计划';
-    const phases = (parsed.phases && parsed.phases.length > 0)
+
+    // Handle both old format (topics as string arrays) and new format (topics as objects with level/subtopics)
+    const rawPhases = (parsed.phases && parsed.phases.length > 0)
       ? parsed.phases
       : [{ name: '核心内容', topics: [] }];
+
+    // Convert old format to new format if needed (topics is array of strings)
+    const phases = rawPhases.map(p => {
+      if (p.topics && p.topics.length > 0 && typeof p.topics[0] === 'string') {
+        // Old format: ["知识1", "知识2"] → new format: [{ title: "知识1", level: 1 }, ...]
+        return { ...p, topics: p.topics.map(t => ({ title: t, level: 1 })) };
+      }
+      return p;
+    });
 
     const hasTopics = phases.some(p => p.topics && p.topics.length > 0);
     if (!hasTopics) {
       const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.match(/^[#*\-=~]+$/));
-      phases[0].topics = lines.map(l => l.replace(/^[-*\d\s.]+/, '').trim()).filter(Boolean);
+      phases[0].topics = lines.map(l => ({
+        title: l.replace(/^[-*\d\s.]+/, '').trim(),
+        level: 1,
+      })).filter(t => t.title);
     }
 
-    const plan = store.createPlanWithPhases(planName, phases);
+    const relations = parsed.relations || [];
+    const plan = store.createPlanWithPhases(planName, phases, relations);
     res.json({ plan });
   } catch (err) {
     console.error('[import]', err);
     res.status(500).json({ error: '解析失败: ' + err.message });
   }
+});
+
+/**
+ * GET /api/learn/plans/:id/graph
+ * Get knowledge graph data (nodes + edges) for visualization.
+ */
+router.get('/plans/:id/graph', (req, res) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  const graph = store.buildKnowledgeGraph(plan);
+  res.json({ graph });
 });
 
 // ─── Generation & Q&A ───

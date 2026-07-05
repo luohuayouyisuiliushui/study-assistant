@@ -140,6 +140,7 @@ export default function App() {
             topic={activeTopic}
             onBack={() => setActiveTopicId(null)}
             onRefresh={(plan) => setCurrentPlan(plan)}
+            onSelectTopic={(id) => setActiveTopicId(id)}
           />
         )}
       </main>

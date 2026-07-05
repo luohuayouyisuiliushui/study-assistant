@@ -124,6 +124,10 @@ const api = {
       body: JSON.stringify({ question, analysis }),
     }, true);
   },
+  // ─── Knowledge Graph ───
+  async getKnowledgeGraph(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/graph`);
+  },
 };
 
 export default api;

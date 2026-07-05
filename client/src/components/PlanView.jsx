@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import api from '../api';
+import KnowledgeGraphModal from './KnowledgeGraphModal';
 
 export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTopic, onGenerate }) {
   const [bulkInput, setBulkInput] = useState('');
@@ -13,6 +14,13 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const [analysisChatInput, setAnalysisChatInput] = useState('');
   const [analysisChatLoading, setAnalysisChatLoading] = useState(false);
   const analysisChatRef = useRef(null);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [expandedTopics, setExpandedTopics] = useState({});
+
+  // Toggle expand/collapse for a parent topic
+  const toggleExpand = (topicId) => {
+    setExpandedTopics(prev => ({ ...prev, [topicId]: !prev[topicId] }));
+  };
 
   // Scroll analysis chat to bottom
   useEffect(() => {
@@ -121,9 +129,10 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   };
 
   const doneTopics = plan.topics.filter(t => t.done);
-  const pendingTopics = plan.topics.filter(t => !t.done);
+  const inProgressTopics = plan.topics.filter(t => !t.done && t.detail && t.detail.length > 0);
+  const notStartedTopics = plan.topics.filter(t => !t.done && (!t.detail || t.detail.length === 0));
 
-  // Group pending topics by phase (only if plan has phases)
+  // Group topics by phase (only if plan has phases)
   const phases = plan.phases || [];
   const hasPhases = phases.length > 0;
   const getPhaseName = (phaseId) => {
@@ -131,17 +140,22 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     return p ? p.name : null;
   };
 
-  // Group pending topics by phase
-  const grouped = {};
-  if (hasPhases) {
-    for (const t of pendingTopics) {
-      const phaseName = getPhaseName(t.phaseId);
-      if (phaseName) {
-        if (!grouped[phaseName]) grouped[phaseName] = [];
-        grouped[phaseName].push(t);
+  // Group topics by phase
+  const groupByPhase = (topics) => {
+    const grouped = {};
+    if (hasPhases) {
+      for (const t of topics) {
+        const phaseName = getPhaseName(t.phaseId);
+        if (phaseName) {
+          if (!grouped[phaseName]) grouped[phaseName] = [];
+          grouped[phaseName].push(t);
+        }
       }
     }
-  }
+    return grouped;
+  };
+  const inProgressGrouped = groupByPhase(inProgressTopics);
+  const notStartedGrouped = groupByPhase(notStartedTopics);
 
   // Compute learning stats
   const totalTime = plan.topics.reduce((s, t) => s + (t.timeSpent || 0), 0);
@@ -162,6 +176,53 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     return Math.round(sec / 360) / 10 + '小时';
   }
 
+  // Render topic tree for a set of topics (grouped by phase if applicable)
+  const renderPhaseTopics = (grouped, topics, hasPhases) => {
+    const renderTree = (items, depth) => items.map(t => {
+      const children = topics.filter(c => c.parentId === t.id).sort((a, b) => a.order - b.order);
+      const hasChildren = children.length > 0;
+      const isExpanded = expandedTopics[t.id] !== false;
+      const levelIcon = t.level === 1 ? '📘' : t.level === 2 ? '📗' : t.level === 3 ? '📙' : '📄';
+
+      return (
+        <div key={t.id}>
+          <div className="topic-item pending" style={{ paddingLeft: (depth * 20 + 8) + 'px' }}>
+            {hasChildren && (
+              <span className="topic-expand" onClick={() => toggleExpand(t.id)}>
+                {isExpanded ? '▼' : '▶'}
+              </span>
+            )}
+            {!hasChildren && <span className="topic-expand-placeholder"> </span>}
+            <span className="topic-level-badge" title={'Lv.' + (t.level || 1)}>{levelIcon}</span>
+            <span className="topic-title">{t.title}</span>
+            <div className="topic-actions">
+              <button className="btn-tiny primary" onClick={() => onGenerate(t.id)}>
+                生成讲解
+              </button>
+              <button className="btn-tiny danger" onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>✕</button>
+            </div>
+          </div>
+          {hasChildren && isExpanded && renderTree(children, depth + 1)}
+        </div>
+      );
+    });
+
+    if (hasPhases && Object.keys(grouped).length > 0) {
+      return Object.entries(grouped).map(([phaseName, phaseTopics]) => {
+        const topLevel = phaseTopics.filter(t => t.parentId === null || t.parentId === undefined).sort((a, b) => a.order - b.order);
+        return (
+          <div key={phaseName} className="phase-group">
+            <div className="phase-title">{phaseName}</div>
+            {renderTree(topLevel, 0)}
+          </div>
+        );
+      });
+    }
+
+    // Flat list (no phases)
+    return renderTree(topics, 0);
+  };
+
   return (
     <div className="plan-view">
       <div className="plan-view-header">
@@ -170,6 +231,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           <span className="plan-progress">{doneTopics.length}/{plan.topics.length} 已完成</span>
           <button className="btn btn-sm" onClick={handleAnalysis} disabled={analysisLoading}>
             {analysisLoading ? '⏳' : '📊'} 学习分析
+          </button>
+          <button className="btn btn-sm" onClick={() => setGraphOpen(true)} title="知识图谱">
+            🕸️ 知识图谱
           </button>
         </div>
       </div>
@@ -279,51 +343,46 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
 
       <div className="plan-topics">
         <div className="section-title">知识点列表</div>
-        {pendingTopics.length === 0 && doneTopics.length === 0 && (
+        {notStartedTopics.length === 0 && inProgressTopics.length === 0 && doneTopics.length === 0 && (
           <div className="plan-empty-tip">还没有知识点，从下方添加或导入文件</div>
         )}
-        {Object.keys(grouped).length > 0 ? (
-          // Show grouped by phase
-          Object.entries(grouped).map(([phaseName, topics]) => (
-            <div key={phaseName} className="phase-group">
-              <div className="phase-title">{phaseName}</div>
-              {topics.map((t, i) => (
-                <div key={t.id} className="topic-item pending">
-                  <span className="topic-order">{i + 1}</span>
-                  <span className="topic-title">{t.title}</span>
-                  <div className="topic-actions">
-                    <button className="btn-tiny primary" onClick={() => onGenerate(t.id)}>
-                      生成讲解
-                    </button>
-                    <button className="btn-tiny danger" onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>✕</button>
-                  </div>
-                </div>
-              ))}
+
+        {/* Not Started section */}
+        {notStartedTopics.length > 0 && (
+          <>
+            <div className="phase-title" style={{ fontSize: '13px', color: '#94a3b8', marginTop: '8px' }}>
+              ⏸️ 未开始（{notStartedTopics.length}）
             </div>
-          ))
-        ) : (
-          // Flat list (no phases)
-          pendingTopics.map((t, i) => (
-            <div key={t.id} className="topic-item pending">
-              <span className="topic-order">{doneTopics.length + i + 1}</span>
-              <span className="topic-title">{t.title}</span>
-              <div className="topic-actions">
-                <button className="btn-tiny primary" onClick={() => onGenerate(t.id)}>
-                  生成讲解
-                </button>
-                <button className="btn-tiny danger" onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>✕</button>
-              </div>
-            </div>
-          ))
+            {renderPhaseTopics(notStartedGrouped, notStartedTopics, hasPhases)}
+          </>
         )}
 
-        {doneTopics.map((t, i) => (
-          <div key={t.id} className="topic-item done" onClick={() => onSelectTopic(t.id)}>
-            <span className="topic-order">✓</span>
-            <span className="topic-title">{t.title}</span>
-            <span className="topic-done-label">已学习</span>
-          </div>
-        ))}
+        {/* In Progress section */}
+        {inProgressTopics.length > 0 && (
+          <>
+            <div className="phase-title" style={{ fontSize: '13px', color: '#f59e0b', marginTop: '12px' }}>
+              🔄 学习中（{inProgressTopics.length}）
+            </div>
+            {renderPhaseTopics(inProgressGrouped, inProgressTopics, hasPhases)}
+          </>
+        )}
+
+        {/* Done section */}
+        {doneTopics.length > 0 && (
+          <>
+            <div className="section-title" style={{ marginTop: '16px' }}>✅ 已学习</div>
+            {doneTopics.map((t) => (
+              <div key={t.id} className="topic-item done" onClick={() => onSelectTopic(t.id)}>
+                <span className="topic-order">✓</span>
+                <span className="topic-level-badge">
+                  {t.level === 1 ? '📘' : t.level === 2 ? '📗' : t.level === 3 ? '📙' : '📄'}
+                </span>
+                <span className="topic-title">{t.title}</span>
+                <span className="topic-done-label">已学习</span>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="plan-add">
@@ -350,6 +409,14 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           />
         </div>
       </div>
+      {graphOpen && (
+        <KnowledgeGraphModal
+          plan={plan}
+          onClose={() => setGraphOpen(false)}
+          onSelectTopic={onSelectTopic}
+          onGenerate={onGenerate}
+        />
+      )}
     </div>
   );
 }

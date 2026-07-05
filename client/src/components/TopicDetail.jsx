@@ -64,7 +64,7 @@ const QaMessages = memo(function QaMessages({ qaList }) {
   );
 });
 
-export default function TopicDetail({ plan, topic, onBack, onRefresh }) {
+export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
   const [qaInput, setQaInput] = useState('');
   const [qaList, setQaList] = useState([]);
   const [qaLoading, setQaLoading] = useState(false);
@@ -441,6 +441,24 @@ ${bodyHtml}
     }
   };
 
+  // Compute related topics data
+  const prerequisites = topic?.prerequisites?.length
+    ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean)
+    : [];
+  const childrenTopics = plan.topics.filter(t => t.parentId === topic?.id).sort((a, b) => a.order - b.order);
+  const nextTopics = plan.topics.filter(t =>
+    t.prerequisites?.includes(topic?.id)
+  ).sort((a, b) => a.order - b.order);
+  const relatedTopics = topic?.relatedTopics?.length
+    ? topic.relatedTopics.map(id => plan.topics.find(t => t.id === id)).filter(Boolean)
+    : [];
+
+  // Handle navigation to a related topic
+  const handleNavigateToTopic = (targetTopicId) => {
+    onBack();
+    if (onSelectTopic) onSelectTopic(targetTopicId);
+  };
+
   return (
     <div className="topic-detail">
       <div className="topic-detail-header">
@@ -466,6 +484,51 @@ ${bodyHtml}
       </div>
 
       <div className="topic-detail-body">
+        {/* Relationship section (shown when not generating) */}
+        {!generating && (prerequisites.length > 0 || childrenTopics.length > 0 || nextTopics.length > 0 || relatedTopics.length > 0) && (
+          <div className="topic-relations">
+            {prerequisites.length > 0 && (
+              <div className="relation-section">
+                <span className="relation-label">📖 前置知识：</span>
+                {prerequisites.map(p => (
+                  <span key={p.id} className="relation-chip" onClick={() => handleNavigateToTopic(p.id)} title="跳转到该知识点">
+                    {p.title} {p.done ? '✅' : '⏳'}
+                  </span>
+                ))}
+              </div>
+            )}
+            {childrenTopics.length > 0 && (
+              <div className="relation-section">
+                <span className="relation-label">📂 子知识点：</span>
+                {childrenTopics.map(c => (
+                  <span key={c.id} className="relation-chip" onClick={() => handleNavigateToTopic(c.id)} title="跳转到该知识点">
+                    {c.title} {c.done ? '✅' : '⏳'}
+                  </span>
+                ))}
+              </div>
+            )}
+            {nextTopics.length > 0 && (
+              <div className="relation-section">
+                <span className="relation-label">➡️ 后续知识点：</span>
+                {nextTopics.map(n => (
+                  <span key={n.id} className="relation-chip" onClick={() => handleNavigateToTopic(n.id)} title="跳转到该知识点">
+                    {n.title} {n.done ? '✅' : '⏳'}
+                  </span>
+                ))}
+              </div>
+            )}
+            {relatedTopics.length > 0 && (
+              <div className="relation-section">
+                <span className="relation-label">🔗 相关知识：</span>
+                {relatedTopics.map(r => (
+                  <span key={r.id} className="relation-chip" onClick={() => handleNavigateToTopic(r.id)} title="跳转到该知识点">
+                    {r.title} {r.done ? '✅' : '⏳'}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {/* Generating — show spinner + any intermediate content */}
         {generating && !localDetail && (
           <div className="generating-placeholder">
@@ -522,7 +585,7 @@ ${bodyHtml}
                 <QaMessages qaList={qaList} />
               </div>
               <div className="chat-input">
-                <form onSubmit={e => { e.preventDefault(); handleAsk(); }}>
+                <form onSubmit={e => { e.preventDefault(); }}>
                   <textarea
                     ref={qaInputRef}
                     value={qaInput}
@@ -536,8 +599,13 @@ ${bodyHtml}
                     placeholder="输入你的追问...（Shift+Enter 换行，Enter 发送）"
                     disabled={qaLoading}
                     rows={1}
+                    onInput={e => {
+                      // Auto-resize textarea
+                      e.target.style.height = 'auto';
+                      e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+                    }}
                   />
-                  <button type="submit" className="chat-send-btn" disabled={!qaInput.trim() || qaLoading}>
+                  <button type="button" className="chat-send-btn" onClick={handleAsk} disabled={!qaInput.trim() || qaLoading}>
                     {qaLoading ? <span className="typing-text">思考中...</span> : '➤'}
                   </button>
                 </form>

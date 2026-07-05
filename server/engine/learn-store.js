@@ -156,39 +156,227 @@ export function deletePlan(planId) {
  * Create a plan with pre-structured phases and topics (from AI import).
  * phases: [{ name, topics: [title, ...] }]
  */
-export function createPlanWithPhases(name, phases) {
+/**
+ * Flatten a nested phase/topics structure into a flat topics array
+ * with level, parentId, prerequisites, and relatedTopics.
+ *
+ * Input format (from AI import):
+ *   phases: [{ name, topics: [{
+ *     title, level, prerequisites?: [],
+ *     subtopics?: [{ title, level, prerequisites?: [], subtopics?: [...] }]
+ *   }] }]
+ *   relations?: [{ from: title, to: title, type: 'prerequisite'|'related' }]
+ *
+ * Returns: { topics: [...], relationMap: { fromTitle: { toTitle: type, ... }, ... } }
+ */
+function flattenTopics(phases, phasesById) {
+  const topics = [];
+  const titleToId = {};
+  const relationPairs = [];
+  let globalOrder = 0;
+
+  function walk(items, parentId, phaseId) {
+    for (const item of items) {
+      // Support both string items (old format: ['知识1', '知识2'])
+      // and object items (new format: [{ title: '知识1', level: 1, subtopics: [...] }])
+      const title = typeof item === 'string' ? item : item.title;
+      if (!title) continue;
+
+      const id = uuidv4().slice(0, 8);
+      const topic = {
+        id,
+        title,
+        phaseId,
+        level: (typeof item === 'object' && item.level) || 1,
+        parentId: parentId || null,
+        order: globalOrder++,
+        detail: null,
+        difficulty: null,
+        done: false,
+        lastError: null,
+        prerequisites: [],
+        relatedTopics: [],
+      };
+      topics.push(topic);
+      titleToId[title] = id;
+
+      // Collect relation pairs from prerequisites field (only for object items)
+      if (typeof item === 'object' && item.prerequisites && Array.isArray(item.prerequisites)) {
+        for (const pre of item.prerequisites) {
+          relationPairs.push({ from: pre, to: title, type: 'prerequisite' });
+        }
+      }
+
+      // Recurse into subtopics (only for object items)
+      if (typeof item === 'object' && item.subtopics && Array.isArray(item.subtopics)) {
+        walk(item.subtopics, id, phaseId);
+      }
+    }
+  }
+
+  for (const phase of phases) {
+    const phaseId = phasesById[phase.name];
+    if (phase.topics && Array.isArray(phase.topics)) {
+      walk(phase.topics, null, phaseId);
+    }
+  }
+
+  // Resolve relation pairs to IDs
+  for (const pair of relationPairs) {
+    const fromId = titleToId[pair.from];
+    const toId = titleToId[pair.to];
+    if (fromId && toId) {
+      const toTopic = topics.find(t => t.id === toId);
+      if (toTopic && !toTopic.prerequisites.includes(fromId)) {
+        toTopic.prerequisites.push(fromId);
+      }
+      if (pair.type === 'related') {
+        const fromTopic = topics.find(t => t.id === fromId);
+        if (fromTopic && !fromTopic.relatedTopics.includes(toId)) {
+          fromTopic.relatedTopics.push(toId);
+        }
+        if (toTopic && !toTopic.relatedTopics.includes(fromId)) {
+          toTopic.relatedTopics.push(fromId);
+        }
+      }
+    }
+  }
+
+  return { topics, titleToId };
+}
+
+/**
+ * Get children topics for a given parent topic.
+ */
+export function getTopicChildren(plan, parentId) {
+  return plan.topics.filter(t => t.parentId === parentId).sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Get topic prerequisites (topics that should be learned first).
+ */
+export function getTopicPrerequisites(plan, topicId) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic || !topic.prerequisites?.length) return [];
+  return topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean);
+}
+
+/**
+ * Get topic descendants (recursively) for tree operations.
+ */
+export function getTopicDescendants(plan, parentId) {
+  const result = [];
+  const children = getTopicChildren(plan, parentId);
+  for (const child of children) {
+    result.push(child);
+    result.push(...getTopicDescendants(plan, child.id));
+  }
+  return result;
+}
+
+/**
+ * Build a knowledge graph data structure for visualization.
+ * Returns { nodes: [...], edges: [...] }
+ */
+export function buildKnowledgeGraph(plan) {
+  const nodes = plan.topics.map(t => ({
+    id: t.id,
+    title: t.title,
+    phaseId: t.phaseId,
+    level: t.level || 1,
+    done: t.done,
+    difficulty: t.difficulty,
+  }));
+
+  const edges = [];
+  const seen = new Set();
+
+  // Parent-child edges
+  for (const t of plan.topics) {
+    if (t.parentId) {
+      const key = `${t.parentId}-parentOf-${t.id}`;
+      if (!seen.has(key)) {
+        edges.push({ from: t.parentId, to: t.id, type: 'parentOf' });
+        seen.add(key);
+      }
+    }
+  }
+
+  // Prerequisite edges
+  for (const t of plan.topics) {
+    if (t.prerequisites) {
+      for (const preId of t.prerequisites) {
+        const key = `${preId}-prerequisite-${t.id}`;
+        if (!seen.has(key)) {
+          edges.push({ from: preId, to: t.id, type: 'prerequisite' });
+          seen.add(key);
+        }
+      }
+    }
+  }
+
+  // Related edges (undirected, show as bidirectional)
+  for (const t of plan.topics) {
+    if (t.relatedTopics) {
+      for (const relId of t.relatedTopics) {
+        const key = [t.id, relId].sort().join('-related-');
+        if (!seen.has(key)) {
+          edges.push({ from: t.id, to: relId, type: 'related' });
+          seen.add(key);
+        }
+      }
+    }
+  }
+
+  return { nodes, edges };
+}
+
+export function createPlanWithPhases(name, phases, relations) {
   const id = uuidv4();
+  const sortedPhases = phases.map((p, i) => ({
+    id: uuidv4().slice(0, 8),
+    name: p.name,
+    order: i,
+  }));
+  const phaseIdMap = {};
+  for (const p of sortedPhases) phaseIdMap[p.name] = p.id;
+
+  const { topics, titleToId } = flattenTopics(phases, phaseIdMap);
+
+  // Process external relations from AI import (cross-topic prerequisite/related links)
+  if (relations && Array.isArray(relations)) {
+    for (const rel of relations) {
+      const fromId = titleToId[rel.from];
+      const toId = titleToId[rel.to];
+      if (!fromId || !toId) continue;
+      if (rel.type === 'prerequisite') {
+        const toTopic = topics.find(t => t.id === toId);
+        if (toTopic && !toTopic.prerequisites.includes(fromId)) {
+          toTopic.prerequisites.push(fromId);
+        }
+      } else if (rel.type === 'related') {
+        const fromTopic = topics.find(t => t.id === fromId);
+        const toTopic = topics.find(t => t.id === toId);
+        if (fromTopic && !fromTopic.relatedTopics.includes(toId)) {
+          fromTopic.relatedTopics.push(toId);
+        }
+        if (toTopic && !toTopic.relatedTopics.includes(fromId)) {
+          toTopic.relatedTopics.push(fromId);
+        }
+      }
+    }
+  }
+
   const plan = {
     id,
     name,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    phases: phases.map((p, i) => ({
-      id: uuidv4().slice(0, 8),
-      name: p.name,
-      order: i,
-    })),
-    topics: [],
+    phases: sortedPhases,
+    topics,
     history: [],
   };
-  const phaseIdMap = {};
-  for (const p of plan.phases) phaseIdMap[p.name] = p.id;
-  let order = 0;
-  for (const p of phases) {
-    const phaseId = phaseIdMap[p.name];
-    for (const title of (p.topics || [])) {
-      plan.topics.push({
-        id: uuidv4().slice(0, 8),
-        title,
-        phaseId,
-        order: order++,
-        detail: null,
-        difficulty: null,
-        done: false,
-        lastError: null,
-      });
-    }
-  }
+
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();
   index.push({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: plan.topics.length });
@@ -217,7 +405,7 @@ function writePlan(planId, fn) {
   });
 }
 
-export function addTopics(planId, titles) {
+export function addTopics(planId, titles, options = {}) {
   return writePlan(planId, (plan) => {
     const existingTitles = new Set(plan.topics.map(t => t.title));
     for (const title of titles) {
@@ -230,6 +418,10 @@ export function addTopics(planId, titles) {
           difficulty: null,
           done: false,
           lastError: null,
+          level: options.level || 1,
+          parentId: options.parentId || null,
+          prerequisites: [],
+          relatedTopics: [],
         });
         existingTitles.add(title);
       }
@@ -384,5 +576,6 @@ export function buildLearningProfile(plan) {
 export default {
   listPlans, getPlan, createPlan, createPlanWithPhases, deletePlan, removeTopic,
   addTopics, updateTopic, updateTopicTime, reorderTopics, addHistory, getTopicHistory, buildLearningProfile,
+  getTopicChildren, getTopicPrerequisites, getTopicDescendants, buildKnowledgeGraph,
   writeFlag, readFlags, clearFlag,
 };
