@@ -18,9 +18,13 @@ describe('learn-store', () => {
   let createdPlanIds = _testPlanIds;
 
   after(() => {
-    // Cleanup test plans
+    // Cleanup test plans from active index
     for (const id of _testPlanIds) {
       try { store.deletePlan(id); } catch {}
+    }
+    // Also clean up any plans that ended up in trash
+    for (const tp of store.listTrash()) {
+      try { store.permanentlyDeleteTrash(tp.id); } catch {}
     }
   });
 
@@ -383,6 +387,65 @@ describe('learn-store', () => {
       store.deletePlan(plan.id);
       const result = store.getPlan(plan.id);
       assert.strictEqual(result, null);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════
+  //  NEW: Trash / Recycle Bin
+  // ═══════════════════════════════════════════════════════
+  describe('trashPlan / listTrash / restorePlan', () => {
+    it('should move plan to trash on delete', () => {
+      const plan = store.createPlan('trash-test-1');
+      createdPlanIds.push(plan.id);
+      store.deletePlan(plan.id);
+      // Plan should not be in active list
+      assert.strictEqual(store.getPlan(plan.id), null);
+      // But should appear in trash
+      const trash = store.listTrash();
+      const entry = trash.find(t => t.id === plan.id);
+      assert.ok(entry, 'plan should be in trash');
+      assert.ok(entry.deletedAt > 0);
+      assert.ok(entry.expiresAt > entry.deletedAt);
+      assert.strictEqual(entry.hasData, false);
+    });
+
+    it('should restore plan from trash', () => {
+      const plan = store.createPlan('trash-test-2');
+      createdPlanIds.push(plan.id);
+      store.deletePlan(plan.id);
+      assert.strictEqual(store.getPlan(plan.id), null);
+      store.restorePlan(plan.id);
+      const restored = store.getPlan(plan.id);
+      assert.ok(restored, 'plan should be restored');
+      assert.strictEqual(restored.name, 'trash-test-2');
+      const afterRestore = store.listTrash();
+      assert.strictEqual(afterRestore.find(t => t.id === plan.id), undefined);
+    });
+
+    it('should permanently delete from trash', () => {
+      const plan = store.createPlan('trash-test-3');
+      createdPlanIds.push(plan.id);
+      store.deletePlan(plan.id);
+      store.permanentlyDeleteTrash(plan.id);
+      const after = store.listTrash();
+      assert.strictEqual(after.find(t => t.id === plan.id), undefined);
+    });
+
+    it('should flag hasData for plans with learning content', () => {
+      const plan = store.createPlan('trash-test-4');
+      createdPlanIds.push(plan.id);
+      store.addTopics(plan.id, ['知识点A']);
+      const fresh = store.getPlan(plan.id);
+      const tid = fresh.topics[0].id;
+      store.updateTopic(plan.id, tid, { detail: '这是一个讲解内容' });
+      store.addHistory(plan.id, tid, 'user', '一个提问');
+      store.addHistory(plan.id, tid, 'ai', '一个回答');
+      store.deletePlan(plan.id);
+      const trash = store.listTrash();
+      const entry = trash.find(t => t.id === plan.id);
+      assert.ok(entry, 'plan should be in trash');
+      assert.strictEqual(entry.hasData, true, 'plan with detail/history should be flagged');
+      store.permanentlyDeleteTrash(plan.id);
     });
   });
 

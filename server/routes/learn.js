@@ -87,8 +87,12 @@ router.post('/trash/:id/restore', (req, res) => {
  * Permanently delete a plan from the recycle bin.
  */
 router.delete('/trash/:id', (req, res) => {
-  store.permanentlyDeleteTrash(req.params.id);
-  res.json({ success: true });
+  try {
+    store.permanentlyDeleteTrash(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/plans/:id/profile', (req, res) => {

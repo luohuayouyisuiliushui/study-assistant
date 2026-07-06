@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { detectEncoding } from '../utils/encoding';
 import api from '../api';
 
@@ -12,6 +12,11 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
   const [trashPlans, setTrashPlans] = useState([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Preload trash count on mount
+  useEffect(() => {
+    api.listTrash().then(d => setTrashPlans(d.plans || [])).catch(() => {});
+  }, []);
 
   const filteredPlans = searchQuery.trim()
     ? plans.filter(p => p.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
@@ -73,12 +78,10 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
   const handleRestore = async (id) => {
     try {
       await api.restorePlan(id);
-      // Refresh both trash list and active plans
+      // Refresh trash list
       const d = await api.listTrash();
       setTrashPlans(d.plans || []);
-      // Trigger parent to refresh plans
-      const plansRes = await api.listPlans();
-      // Update plans via the parent's state — pass through a callback
+      // Notify parent to refresh active plans
       window.dispatchEvent(new CustomEvent('plan-restored'));
       alert('计划已恢复');
     } catch (err) {

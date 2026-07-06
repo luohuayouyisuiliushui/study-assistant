@@ -343,9 +343,13 @@ function writeTrashIndex(index) {
 function findTrashFile(planId) {
   try {
     if (!fs.existsSync(TRASH_DIR)) return null;
+    // First try exact match
+    const exact = path.join(TRASH_DIR, `${planId}.json`);
+    if (fs.existsSync(exact)) return exact;
+    // Fallback: scan for planId + timestamp variants (e.g. abc_1742000000000.json)
     for (const f of fs.readdirSync(TRASH_DIR)) {
       if (f === 'index.json') continue;
-      if (f.startsWith(planId)) return path.join(TRASH_DIR, f);
+      if (f.startsWith(planId + '_')) return path.join(TRASH_DIR, f);
     }
   } catch {}
   return null;
