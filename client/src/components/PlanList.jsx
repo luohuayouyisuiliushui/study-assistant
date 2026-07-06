@@ -99,6 +99,18 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
     }
   };
 
+  const handleEmptyTrash = async () => {
+    if (trashPlans.length === 0) return;
+    if (!confirm(`确定要一键清空回收站吗？（共 ${trashPlans.length} 个计划，此操作不可撤销）`)) return;
+    try {
+      await api.emptyTrash();
+      setTrashPlans([]);
+      alert('回收站已清空');
+    } catch (err) {
+      alert('清空失败: ' + err.message);
+    }
+  };
+
   const formatExpiry = (expiresAt) => {
     const remaining = expiresAt - Date.now();
     if (remaining <= 0) return '即将到期';
@@ -234,7 +246,12 @@ Python 基础教程
             <div className="trash-header">
               <h3>🗑️ 回收站</h3>
               <span className="trash-hint">计划在 30 天后自动清除{trashPlans.some(p => p.hasData) ? '（有学习数据的计划会保留数据文件）' : ''}</span>
-              <button className="btn-close" onClick={() => setTrashOpen(false)}>✕</button>
+              <div className="trash-header-actions">
+                {trashPlans.length > 0 && (
+                  <button className="btn btn-sm btn-danger" onClick={handleEmptyTrash}>一键清空</button>
+                )}
+                <button className="btn-close" onClick={() => setTrashOpen(false)}>✕</button>
+              </div>
             </div>
             <div className="trash-body">
               {trashLoading ? (

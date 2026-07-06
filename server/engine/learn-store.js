@@ -297,6 +297,21 @@ export function permanentlyDeleteTrash(planId) {
 }
 
 /**
+ * Empty the entire recycle bin — permanently delete all trash entries.
+ */
+export function emptyTrash() {
+  const trashIndex = readTrashIndex();
+  for (const entry of trashIndex) {
+    const trashFile = findTrashFile(entry.id);
+    if (trashFile) {
+      try { fs.unlinkSync(trashFile); } catch {}
+    }
+  }
+  writeTrashIndex([]);
+  console.log(`[learn-store] 🗑️ Emptied recycle bin (${trashIndex.length} items)`);
+}
+
+/**
  * Clean up expired trash entries (older than TRASH_TTL_DAYS).
  * Plans flagged with hasData keep their data file but lose the index entry.
  * Plans without data get their file permanently deleted.
@@ -1324,5 +1339,5 @@ export default {
   buildEnhancedKnowledgeGraph, buildInferredEdges, extractRelationsFromDetail,
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview,
   writeFlag, readFlags, clearFlag,
-  listTrash, restorePlan, permanentlyDeleteTrash, cleanExpiredTrash,
+  listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
 };

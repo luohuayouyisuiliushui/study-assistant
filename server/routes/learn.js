@@ -83,6 +83,19 @@ router.post('/trash/:id/restore', (req, res) => {
 });
 
 /**
+ * DELETE /api/learn/trash
+ * Empty the entire recycle bin.
+ */
+router.delete('/trash', (req, res) => {
+  try {
+    store.emptyTrash();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * DELETE /api/learn/trash/:id
  * Permanently delete a plan from the recycle bin.
  */

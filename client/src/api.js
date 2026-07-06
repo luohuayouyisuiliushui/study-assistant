@@ -70,6 +70,9 @@ const api = {
   async permanentlyDeleteTrash(id) {
     return request(`${API_BASE}/learn/trash/${id}`, { method: 'DELETE' });
   },
+  async emptyTrash() {
+    return request(`${API_BASE}/learn/trash`, { method: 'DELETE' });
+  },
 
   // ─── Learning Profile ───
   async getProfile(planId) {
