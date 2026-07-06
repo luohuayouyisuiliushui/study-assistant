@@ -220,7 +220,7 @@ Python 基础教程
             </div>
             <button
               className="btn-delete"
-              onClick={e => { e.stopPropagation(); if (confirm('确定将计划「' + plan.name + '」移入回收站吗？可在30天内恢复。')) onDelete(plan.id); }}}
+              onClick={e => { e.stopPropagation(); if (confirm('确定将计划「' + plan.name + '」移入回收站吗？可在30天内恢复。')) onDelete(plan.id); }}
               title="删除"
             >✕</button>
           </div>
