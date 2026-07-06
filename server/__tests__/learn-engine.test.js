@@ -980,3 +980,4 @@ describe('Interactive mode - edge cases', () => {
     store.deletePlan(plan.id);
   });
 });
+

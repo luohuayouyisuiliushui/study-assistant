@@ -581,3 +581,4 @@ describe('Edge cases', () => {
     assert.strictEqual(result.topics.length, 0);
   });
 });
+
