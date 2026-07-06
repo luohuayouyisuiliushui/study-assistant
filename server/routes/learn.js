@@ -490,7 +490,11 @@ router.post('/tts', async (req, res) => {
 });
 
 /**
- * POST /api/learn/plans/:planId/ask/:topicId', async (req, res) => {
+ * POST /api/learn/plans/:planId/ask/:topicId
+ * Ask a follow-up question on a topic.
+ * Body: { question }
+ */
+router.post('/plans/:planId/ask/:topicId', async (req, res) => {
   const { question } = req.body;
   if (!question || !question.trim()) {
     return res.status(400).json({ error: '请输入问题' });
