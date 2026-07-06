@@ -53,9 +53,6 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     return () => { mountedRef.current = false; };
   }, []);
 
-  const planIdRef = useRef(plan?.id);
-  planIdRef.current = plan?.id;
-
   const loadGraph = useCallback(async () => {
     const pid = planIdRef.current;
     if (!pid) return;

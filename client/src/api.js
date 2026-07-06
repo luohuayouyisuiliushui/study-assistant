@@ -60,6 +60,17 @@ const api = {
     return request(`${API_BASE}/learn/plans/${id}`, { method: 'DELETE' });
   },
 
+  // ─── Trash / Recycle Bin ───
+  async listTrash() {
+    return request(`${API_BASE}/learn/trash`);
+  },
+  async restorePlan(id) {
+    return request(`${API_BASE}/learn/trash/${id}/restore`, { method: 'POST' });
+  },
+  async permanentlyDeleteTrash(id) {
+    return request(`${API_BASE}/learn/trash/${id}`, { method: 'DELETE' });
+  },
+
   // ─── Learning Profile ───
   async getProfile(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/profile`);

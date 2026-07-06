@@ -28,6 +28,13 @@ export default function App() {
   }, []);
   useEffect(() => { refreshPlans(); }, [refreshPlans]);
 
+  // Refresh plans when restored from trash (custom event from PlanList)
+  useEffect(() => {
+    const handler = () => refreshPlans();
+    window.addEventListener('plan-restored', handler);
+    return () => window.removeEventListener('plan-restored', handler);
+  }, [refreshPlans]);
+
   // Load current plan (auto-refresh for generation progress)
   useEffect(() => {
     if (!currentPlanId) { setCurrentPlan(null); return; }

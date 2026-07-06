@@ -21,9 +21,13 @@ import { v4 as uuidv4 } from 'uuid';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '..', 'data', 'learn');
 const PLANS_INDEX = path.join(DATA, 'plans.json');
+const TRASH_DIR = path.join(DATA, 'trash');
+const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
+const TRASH_TTL_DAYS = 30;
 
 function ensureDir() {
   fs.mkdirSync(path.join(DATA, 'plans'), { recursive: true });
+  fs.mkdirSync(TRASH_DIR, { recursive: true });
 }
 ensureDir();
 
@@ -154,21 +158,202 @@ export function createPlan(name) {
   return plan;
 }
 
+// ─── Trash / Recycle Bin ───
+
 export function deletePlan(planId) {
+  trashPlan(planId);
+}
+
+/**
+ * Move a plan to the recycle bin instead of permanent deletion.
+ * The plan file is moved to the trash directory; the index entry is removed.
+ * Plans with rich learning data (history, detail, exercises) are flagged so
+ * the data file is preserved even after the 30-day auto-cleanup.
+ */
+export function trashPlan(planId) {
   writeQueues.delete(planId); // discard pending writes for deleted plan
-  const p = planPath(planId);
-  if (fs.existsSync(p)) fs.unlinkSync(p);
-  // Also delete .tmp files if any
+  const src = planPath(planId);
+  if (!fs.existsSync(src)) {
+    // Plan file may already be gone — just remove from index
+    const index = readIndex().filter(e => e.id !== planId);
+    writeIndex(index);
+    return;
+  }
+
+  // Read the plan to assess data richness
+  let plan = null;
+  let hasData = false;
   try {
-    const dir = path.dirname(p);
-    const prefix = path.basename(p);
+    plan = JSON.parse(fs.readFileSync(src, 'utf-8'));
+    if (plan) {
+      const hasDetail = plan.topics && plan.topics.some(t => t.detail);
+      const hasHistory = plan.history && plan.history.length > 0;
+      const hasExercises = plan.topics && plan.topics.some(t => t.exercises && t.exercises.length > 0);
+      hasData = hasDetail || hasHistory || hasExercises;
+    }
+  } catch { /* best-effort read */ }
+
+  // Move plan file to trash directory
+  const dest = path.join(TRASH_DIR, `${planId}.json`);
+  try {
+    // If dest exists already, append timestamp to avoid collision
+    const finalDest = fs.existsSync(dest)
+      ? path.join(TRASH_DIR, `${planId}_${Date.now()}.json`)
+      : dest;
+    fs.renameSync(src, finalDest);
+  } catch (err) {
+    console.warn(`[learn-store] Failed to move plan to trash: ${err.message}`);
+    // Fall back to deleting the file
+    try { fs.unlinkSync(src); } catch {}
+  }
+
+  // Remove .tmp files
+  try {
+    const dir = path.dirname(src);
+    const prefix = path.basename(src);
     for (const f of fs.readdirSync(dir)) {
       if (f.startsWith(prefix + '.tmp')) fs.unlinkSync(path.join(dir, f));
     }
   } catch {}
+
+  // Remove from active index
   const index = readIndex().filter(e => e.id !== planId);
   writeIndex(index);
+
+  // Add to trash index
+  const now = Date.now();
+  const trashEntry = {
+    id: planId,
+    name: plan?.name || '未知计划',
+    topicCount: plan?.topics?.length || 0,
+    deletedAt: now,
+    expiresAt: now + TRASH_TTL_DAYS * 24 * 60 * 60 * 1000,
+    hasData,
+  };
+  const trashIndex = readTrashIndex();
+  trashIndex.push(trashEntry);
+  writeTrashIndex(trashIndex);
 }
+
+/**
+ * Read the trash index (sorted by deletion time, newest first).
+ */
+export function listTrash() {
+  return readTrashIndex().sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+}
+
+/**
+ * Restore a plan from the recycle bin back to active plans.
+ */
+export function restorePlan(planId) {
+  const trashIndex = readTrashIndex();
+  const entry = trashIndex.find(e => e.id === planId);
+  if (!entry) throw new Error(`回收站中未找到计划: ${planId}`);
+
+  // Move file back
+  const trashFile = findTrashFile(planId);
+  if (trashFile) {
+    try {
+      fs.renameSync(trashFile, planPath(planId));
+    } catch (err) {
+      throw new Error(`恢复计划文件失败: ${err.message}`);
+    }
+  }
+
+  // Re-add to active index — read plan to get current topicCount
+  const plan = getPlan(planId);
+  if (plan) {
+    const index = readIndex();
+    index.push({
+      id: plan.id,
+      name: plan.name,
+      createdAt: plan.createdAt,
+      updatedAt: Date.now(),
+      topicCount: plan.topics?.length || 0,
+    });
+    writeIndex(index);
+
+    // Restore notification flag
+    writeFlag(planId);
+  }
+
+  // Remove from trash index
+  const updated = trashIndex.filter(e => e.id !== planId);
+  writeTrashIndex(updated);
+}
+
+/**
+ * Permanently delete a plan from the recycle bin.
+ */
+export function permanentlyDeleteTrash(planId) {
+  // Delete the file from trash
+  const trashFile = findTrashFile(planId);
+  if (trashFile) {
+    try { fs.unlinkSync(trashFile); } catch {}
+  }
+  // Remove from trash index
+  const trashIndex = readTrashIndex().filter(e => e.id !== planId);
+  writeTrashIndex(trashIndex);
+}
+
+/**
+ * Clean up expired trash entries (older than TRASH_TTL_DAYS).
+ * Plans flagged with hasData keep their data file but lose the index entry.
+ * Plans without data get their file permanently deleted.
+ */
+export function cleanExpiredTrash() {
+  const now = Date.now();
+  const trashIndex = readTrashIndex();
+  const remaining = [];
+  let cleaned = 0;
+  for (const entry of trashIndex) {
+    if (entry.expiresAt && entry.expiresAt <= now) {
+      cleaned++;
+      // Delete file only if plan has no valuable data
+      if (!entry.hasData) {
+        const trashFile = findTrashFile(entry.id);
+        if (trashFile) {
+          try { fs.unlinkSync(trashFile); } catch {}
+        }
+      }
+      // If hasData, keep the file but remove from index
+    } else {
+      remaining.push(entry);
+    }
+  }
+  if (cleaned > 0) {
+    writeTrashIndex(remaining);
+    console.log(`[learn-store] 🗑️ Cleaned ${cleaned} expired trash entries`);
+  }
+}
+
+// ─── Internal trash helpers ───
+
+function readTrashIndex() {
+  return readJSON(TRASH_INDEX) || [];
+}
+
+function writeTrashIndex(index) {
+  writeAtomic(TRASH_INDEX, JSON.stringify(index, null, 2));
+}
+
+/**
+ * Find a trash file for the given plan ID, trying possible name variants.
+ */
+function findTrashFile(planId) {
+  try {
+    if (!fs.existsSync(TRASH_DIR)) return null;
+    for (const f of fs.readdirSync(TRASH_DIR)) {
+      if (f === 'index.json') continue;
+      if (f.startsWith(planId)) return path.join(TRASH_DIR, f);
+    }
+  } catch {}
+  return null;
+}
+
+// ─── Auto-cleanup: run every hour ───
+setInterval(() => cleanExpiredTrash(), 60 * 60 * 1000);
+cleanExpiredTrash(); // also run once on startup
 
 /**
  * Create a plan with pre-structured phases and topics (from AI import).
@@ -1135,4 +1320,5 @@ export default {
   buildEnhancedKnowledgeGraph, buildInferredEdges, extractRelationsFromDetail,
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview,
   writeFlag, readFlags, clearFlag,
+  listTrash, restorePlan, permanentlyDeleteTrash, cleanExpiredTrash,
 };

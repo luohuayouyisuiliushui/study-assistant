@@ -59,6 +59,38 @@ router.delete('/plans/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Trash / Recycle Bin ───
+
+/**
+ * GET /api/learn/trash
+ * List all plans in the recycle bin.
+ */
+router.get('/trash', (req, res) => {
+  res.json({ plans: store.listTrash() });
+});
+
+/**
+ * POST /api/learn/trash/:id/restore
+ * Restore a plan from the recycle bin.
+ */
+router.post('/trash/:id/restore', (req, res) => {
+  try {
+    store.restorePlan(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/learn/trash/:id
+ * Permanently delete a plan from the recycle bin.
+ */
+router.delete('/trash/:id', (req, res) => {
+  store.permanentlyDeleteTrash(req.params.id);
+  res.json({ success: true });
+});
+
 router.get('/plans/:id/profile', (req, res) => {
   const plan = store.getPlan(req.params.id);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
