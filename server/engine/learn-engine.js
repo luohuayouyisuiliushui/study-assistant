@@ -395,8 +395,94 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
 // ═══════════════════════════════════════════════════════
 
 /**
- * Analyze generated detail content for intentionally subtle errors.
- * Called when user clicks \"学完了\" to reveal any missed errors.
+ * Build Q&A context summary for error checking from plan history.
+ * Extracts recent user questions and AI responses related to the topic.
+ */
+function buildQaContextForCheck(plan, topicId) {
+  const history = (plan.history || []).filter(h => h.topicId === topicId);
+  if (history.length === 0) return '';
+
+  // Pair user + ai messages into Q&A blocks
+  const pairs = [];
+  for (let i = 0; i < history.length; i++) {
+    if (history[i].role === 'user' && i + 1 < history.length && history[i + 1].role === 'ai') {
+      pairs.push({ question: history[i].content, answer: history[i + 1].content });
+      i++;
+    }
+  }
+  if (pairs.length === 0) return '';
+
+  // Take last 10 pairs
+  const recentPairs = pairs.slice(-10);
+  const lines = ['\n\n## 用户追问记录（扩展讨论）'];
+  for (const p of recentPairs) {
+    // Truncate long Q&A to keep prompt size manageable
+    const q = p.question.length > 200 ? p.question.slice(0, 200) + '...' : p.question;
+    const a = p.answer.length > 300 ? p.answer.slice(0, 300) + '...' : p.answer;
+    lines.push('- 用户问：' + q);
+    lines.push('  AI答：' + a);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Extract confirmed errors from Q&A history.
+ * Looks for patterns where the user pointed out an error and the AI confirmed it.
+ */
+function extractErrorsFromQA(plan, topicId) {
+  const history = (plan.history || []).filter(h => h.topicId === topicId);
+  const errors = [];
+
+  for (let i = 0; i < history.length - 1; i++) {
+    const userEntry = history[i];
+    const aiEntry = history[i + 1];
+    if (userEntry.role !== 'user' || aiEntry.role !== 'ai') continue;
+
+    const question = userEntry.content;
+    const answer = aiEntry.content;
+
+    // Check if user is pointing out a potential error
+    const userPointsToError = /不对|错了|错误|应该是|不是这样|有问题|说错了|纠正|不对吧|应该是.*而不是|难道不是|你写错了|代码错|概念错|逻辑错/i.test(question);
+
+    // Check if AI confirms the error
+    const aiConfirmsError = /你说得对|确实错了|感谢指正|抱歉.*错|是我的错|你说的是对的|确实是我|正确的理解是|感谢你的纠正|你发现了一个错误|这是个好问题.*确实|我的表述不准确|此处确实|我犯了个错误|你的理解是正确的.*我的/i.test(answer);
+
+    if (userPointsToError && aiConfirmsError) {
+      errors.push({
+        location: '扩展讨论',
+        description: '用户在追问中发现：' + (question.length > 80 ? question.slice(0, 80) + '...' : question),
+        correction: answer.length > 300 ? answer.slice(0, 300) + '...' : answer,
+        type: '用户发现',
+        source: 'qa',
+      });
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Deduplicate errors by comparing description similarity.
+ */
+function deduplicateErrors(errors) {
+  const unique = [];
+  const seen = new Set();
+
+  for (const err of errors) {
+    // Normalize description for comparison
+    const key = err.description.replace(/\s+/g, '').slice(0, 40);
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(err);
+    }
+  }
+
+  return unique;
+}
+
+/**
+ * Analyze generated detail content for errors (both intentional and unintentional),
+ * incorporating Q&A history. Called when user clicks "学完了" to reveal any missed errors.
  */
 export async function revealEmbeddedErrors(providerOrConfig, plan, topicId, model) {
   const topic = plan.topics.find(t => t.id === topicId);
@@ -405,14 +491,24 @@ export async function revealEmbeddedErrors(providerOrConfig, plan, topicId, mode
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
 
+  // Step 1: Extract user-discovered errors from Q&A history
+  const userDiscoveredErrors = extractErrorsFromQA(plan, topicId);
+
+  // Step 2: Build Q&A context for the AI check
+  const qaContext = buildQaContextForCheck(plan, topicId);
+
+  // Step 3: Improved prompt — check for BOTH intentional planted errors AND genuine AI errors
   const prompt =
-    '你是一位学习内容审查专家。以下是一篇AI生成的讲解内容。请仔细检查其中是否有故意埋下的微妙错误。\n\n' +
+    '你是一位学习内容审查专家。以下是一篇AI生成的讲解内容。请仔细检查其中是否存在任何错误。\n\n' +
     '注意：\n' +
-    '- 有些错误是AI故意加入来考验学习者的（如边界条件偏差、概念近似但不精确、逻辑陷阱等）\n' +
+    '- **故意埋下的错误**：AI有意加入来考验学习者的（如边界条件偏差、概念近似但不精确、逻辑陷阱、代码错误等）\n' +
+    '- **无意产生的错误**：AI生成时出现的真实错误（如事实性错误、代码bug、逻辑谬误、概念混淆等）\n' +
     '- 有些内容是完全正确的\n' +
-    '- 你的任务是识别出所有**可能是故意埋下的错误**\n\n' +
-    '请以JSON格式返回：{"errors": [{"location": "错误所在章节", "description": "错误描述", "correction": "正确版本", "type": "边界条件|概念偏差|逻辑陷阱|代码错误"}], "hasErrors": true/false}\n\n' +
-    '讲解内容：\n\n' + topic.detail.slice(0, 10000);
+    '- 用户通过追问可能也发现了问题——参考下面提供的追问记录辅助判断\n' +
+    '- 你的任务是识别出所有**可能存在问题**的地方\n\n' +
+    '请以JSON格式返回：{"errors": [{"location": "错误所在章节", "description": "错误描述", "correction": "正确版本", "type": "边界条件|概念偏差|逻辑陷阱|代码错误|事实错误|用户发现"}], "hasErrors": true/false}\n\n' +
+    '讲解内容：\n\n' + topic.detail.slice(0, 10000) +
+    (qaContext ? qaContext : '');
 
   const messages = [
     { role: 'system', content: '你是一位严格但友好的学习内容审查专家。只输出JSON。' },
@@ -420,15 +516,88 @@ export async function revealEmbeddedErrors(providerOrConfig, plan, topicId, mode
   ];
 
   try {
+    // First pass: identify candidate errors
     const result = await provider.complete(messages, { maxTokens: 2048, temperature: 0.3, responseFormat: { type: 'json_object' } });
     const parsed = JSON.parse(result.content || '{}');
+    const candidateErrors = Array.isArray(parsed.errors) ? parsed.errors : [];
+
+    // Step 4: Secondary verification — reduce false positives
+    let verifiedErrors = candidateErrors;
+    if (candidateErrors.length > 0) {
+      try {
+        verifiedErrors = await verifyErrorCandidates(provider, topic.detail.slice(0, 6000), candidateErrors);
+      } catch {
+        // If verification fails, use original candidates
+        verifiedErrors = candidateErrors;
+      }
+    }
+
+    // Step 5: Merge AI-discovered errors with user-discovered errors from Q&A
+    const allErrors = deduplicateErrors([...verifiedErrors, ...userDiscoveredErrors]);
+
     return {
-      errors: Array.isArray(parsed.errors) ? parsed.errors : [],
-      hasErrors: parsed.hasErrors === true && Array.isArray(parsed.errors) && parsed.errors.length > 0,
+      errors: allErrors,
+      hasErrors: allErrors.length > 0,
     };
   } catch (err) {
     console.warn('[revealEmbeddedErrors] Analysis failed:', err?.message);
-    return { errors: [], hasErrors: false };
+    // Fallback: return user-discovered errors even if AI analysis fails
+    return {
+      errors: userDiscoveredErrors,
+      hasErrors: userDiscoveredErrors.length > 0,
+    };
+  }
+}
+
+/**
+ * Secondary verification pass — review candidate errors to reduce false positives.
+ * Asks the AI to confirm each error and provide a confidence level.
+ */
+async function verifyErrorCandidates(provider, detailSnippet, candidates) {
+  const candidatesJson = JSON.stringify(candidates.map((c, i) => ({
+    index: i,
+    location: c.location,
+    description: c.description,
+    type: c.type,
+  })), null, 2);
+
+  const verifyPrompt =
+    '你是一位严格的学习内容审查专家。以下是一份AI讲解内容的片段，以及一份候选错误列表。\n\n' +
+    '请逐一判断每个候选错误是否**确实是真正的错误**（不是过度解读或误判）。\n\n' +
+    '注意事项：\n' +
+    '- 只有当你非常确信某个候选确实是错误时，才保留它\n' +
+    '- 如果候选只是表述不够完美但本质正确，或者是不存在的假阳性，请排除\n' +
+    '- 重点关注：事实性错误、逻辑矛盾、代码bug、概念混淆\n\n' +
+    '请以JSON格式返回：{"verifiedErrors": [{"index": 0, "isRealError": true/false, "reason": "判断理由（一句话）"}], "hasVerifiedErrors": true/false}\n\n' +
+    '讲解内容片段：\n' + detailSnippet + '\n\n' +
+    '候选错误列表：\n' + candidatesJson;
+
+  const messages = [
+    { role: 'system', content: '你是一位严格的学习内容审查专家。只输出JSON。谨防假阳性。' },
+    { role: 'user', content: verifyPrompt },
+  ];
+
+  try {
+    const result = await provider.complete(messages, { maxTokens: 1024, temperature: 0.2, responseFormat: { type: 'json_object' } });
+    const parsed = JSON.parse(result.content || '{}');
+    const verifiedResults = Array.isArray(parsed.verifiedErrors) ? parsed.verifiedErrors : [];
+
+    if (verifiedResults.length === 0) {
+      // Verification response doesn't match expected format — keep all candidates as-is
+      return candidates;
+    }
+
+    // Only keep candidates that passed verification
+    const keepIndices = new Set(
+      verifiedResults.filter(v => v.isRealError === true).map(v => v.index)
+    );
+
+    const filtered = candidates.filter((_, i) => keepIndices.has(i));
+    // If filtering removed everything, keep original (verification may be too aggressive)
+    return filtered.length > 0 ? filtered : candidates;
+  } catch {
+    // Verification failed — keep all candidates as-is
+    return candidates;
   }
 }
 
