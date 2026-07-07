@@ -27,14 +27,15 @@ app.use('/images', express.static(IMAGES_DIR));
 // Serve built React app in production
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
-app.get('*', (req, res) => {
+app.get('*splat', (req, res) => {
   // Only serve index.html for non-API routes
   if (!req.path.startsWith('/api')) {
     res.sendFile(path.join(clientDist, 'index.html'));
   }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, (err) => {
+  if (err) throw err;
   console.log(`📖 知识点学习助手已启动: http://localhost:${PORT}`);
   console.log(`   API 端点: http://localhost:${PORT}/api`);
   if (!process.env.OPENAI_API_KEY) {
