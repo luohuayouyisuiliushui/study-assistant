@@ -19,7 +19,8 @@ import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA = path.join(__dirname, '..', 'data', 'learn');
+// core.js lives in store/ subdirectory, need two levels up to reach server/
+const DATA = path.join(__dirname, '..', '..', 'data', 'learn');
 const PLANS_INDEX = path.join(DATA, 'plans.json');
 const TRASH_DIR = path.join(DATA, 'trash');
 const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
