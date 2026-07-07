@@ -136,7 +136,15 @@ function readJSON(filePath) {
 
 function readIndex() {
   const idx = readJSON(PLANS_INDEX);
-  if (idx && idx.length > 0) return idx;
+  if (idx && idx.length > 0) {
+    // 防御性去重：防止历史遗留的重复条目影响运行
+    const seen = new Set();
+    return idx.filter(e => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+  }
   // 索引为空或缺失 → 从 plans/ 重建
   return rebuildIndex();
 }
@@ -178,7 +186,14 @@ function writeIndex(index) {
 }
 
 function updateIndex(planId, updates) {
-  const index = readIndex();
+  let index = readIndex();
+  // 按 ID 去重：保留第一个匹配的条目，移除其余重复
+  const seen = new Set();
+  index = index.filter(e => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
   const entry = index.find(e => e.id === planId);
   if (entry) Object.assign(entry, updates);
   writeIndex(index);

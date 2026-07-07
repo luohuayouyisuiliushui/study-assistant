@@ -465,6 +465,39 @@ function isRetryableError(err) {
   return status === 429 || status >= 500;
 }
 
+/**
+ * Wrap an async iterable with an idle timeout.
+ * Throws if no chunk is received for `timeoutMs` milliseconds.
+ * Each successful chunk resets the idle timer.
+ */
+async function* withStreamTimeout(iterable, timeoutMs = 120_000) {
+  const iterator = iterable[Symbol.asyncIterator]();
+  let lastActivity = Date.now();
+
+  const nextWithTimeout = async () => {
+    const elapsed = Date.now() - lastActivity;
+    const remaining = Math.max(1, timeoutMs - elapsed);
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Stream idle timeout: no data for ${timeoutMs / 1000}s`)), remaining)
+    );
+
+    return Promise.race([iterator.next(), timeoutPromise]);
+  };
+
+  try {
+    while (true) {
+      const result = await nextWithTimeout();
+      if (result.done) break;
+      lastActivity = Date.now();
+      yield result.value;
+    }
+  } finally {
+    // If we exit early (error/break), the iterator might still be pending.
+    // The underlying stream will be cleaned up by GC/Node.js on connection close.
+  }
+}
+
 async function retryWithBackoff(fn, attempt = 0) {
   try {
     return await fn();
@@ -670,7 +703,7 @@ export class Provider {
 
     // Shared stream reader: accumulates content and usage
     const readStream = async (stream) => {
-      for await (const chunk of stream) {
+      for await (const chunk of withStreamTimeout(stream)) {
         if (chunk.usage) {
           finalUsage = chunk.usage;
           continue;
@@ -776,7 +809,7 @@ export class Provider {
     this._totalCalls++;
 
     const readStream = async (stream) => {
-      for await (const chunk of stream) {
+      for await (const chunk of withStreamTimeout(stream)) {
         if (chunk.usage) {
           finalUsage = chunk.usage;
           continue;

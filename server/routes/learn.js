@@ -272,6 +272,11 @@ router.post('/plans/import', async (req, res) => {
       const retryPrompt =
         '之前你分析了这份材料但没有成功提取出知识点。请重新认真分析以下资料。\n\n' +
         '⚠️ 重要：不要逐行拆分！你需要先理解整篇内容的逻辑，再提取核心知识点（3-15 个），而不是每一行/每一句都列出来。\n\n' +
+        '## 核心要求\n' +
+        '- **Phase（学习阶段）**：通常只有 1 个（除非资料明确分阶段），不要把每个章节都当成一个 phase\n' +
+        '- **Level=1（主要章节）**：每个 phase 下 3-6 个，反映资料的核心模块\n' +
+        '- **Level=2（子知识点）**：每个 level=1 下 2-5 个\n' +
+        '- 确保知识层级统帅关系清晰：level=1 统领 level=2\n\n' +
         '输出 JSON 时，第一个字段必须是 "documentAnalysis"：先写一段对整份资料的完整理解总结（主题、逻辑结构、内容风格），再输出知识点结构。\n\n' +
         '请严格按照以下结构输出 JSON：\n' +
         '{\n' +
@@ -279,9 +284,13 @@ router.post('/plans/import', async (req, res) => {
         '  "name": "学习计划名称",\n' +
         '  "phases": [\n' +
         '    {\n' +
-        '      "name": "阶段名称",\n' +
+        '      "name": "核心内容",\n' +
         '      "topics": [\n' +
-        '        { "title": "知识点1", "level": 1, "subtopics": [\n' +
+        '        { "title": "主要章节1", "level": 1, "subtopics": [\n' +
+        '          { "title": "子知识点1", "level": 2 },\n' +
+        '          { "title": "子知识点2", "level": 2 }\n' +
+        '        ]},\n' +
+        '        { "title": "主要章节2", "level": 1, "subtopics": [\n' +
         '          { "title": "子知识点", "level": 2 }\n' +
         '        ]}\n' +
         '      ]\n' +
@@ -326,7 +335,56 @@ router.post('/plans/import', async (req, res) => {
     }
 
     relations = parsed.relations || [];
+
+    // ── Post-processing: validate and normalize phases structure ──
+    // Filter out empty phases and fix common AI mistakes
+    const chapterPattern = /^第[一二三四五六七八九十\d一二三四五六七八九十百]+[章节篇部]/;
+    phases = phases
+      .filter(p => p.topics && p.topics.length > 0)
+      .map(p => {
+        // If a single-phase result has a raw chapter name as phase title, rename generically
+        if (phases.length === 1 && chapterPattern.test(p.name)) {
+          return { ...p, name: '核心内容' };
+        }
+        return p;
+      });
+
+    // ── Title cleanup: strip "Sprint X:", "Part X", "第X章" etc. from all topic titles ──
+    const titlePrefixPattern = /^(Sprint\s*\d+\s*[：:]\s*|Sprint\s*\d+\s*[-—–]\s*|第[一二三四五六七八九十\d]+[章节篇部][：:\s]*|Part\s*\d+\s*[：:]\s*|Phase\s*\d+\s*[：:]\s*|Chapter\s*\d+\s*[：:]\s*)/i;
+    const cleanTitle = (title) => title.replace(titlePrefixPattern, '').trim();
+    const cleanTopicsRecursive = (topics) => {
+      if (!topics) return topics;
+      return topics.map(t => ({
+        ...t,
+        title: cleanTitle(t.title),
+        subtopics: t.subtopics ? cleanTopicsRecursive(t.subtopics) : t.subtopics,
+      }));
+    };
+    phases = phases.map(p => ({ ...p, topics: cleanTopicsRecursive(p.topics) }));
+
     const plan = store.createPlanWithPhases(planName, phases, relations);
+
+    // ── Infer missing prerequisites from topic ordering ──
+    // If AI didn't output explicit relations, infer basic prerequisite chains:
+    // topics earlier in the same phase are prerequisites for later ones
+    if ((!relations || relations.length === 0) && plan.topics.length > 1) {
+      const sorted = [...plan.topics].sort((a, b) => a.order - b.order);
+      const phaseGroups = {};
+      for (const t of sorted) {
+        if (!phaseGroups[t.phaseId]) phaseGroups[t.phaseId] = [];
+        phaseGroups[t.phaseId].push(t);
+      }
+      for (const group of Object.values(phaseGroups)) {
+        for (let i = 1; i < group.length; i++) {
+          const prev = group[i - 1];
+          const curr = group[i];
+          if (!curr.prerequisites || curr.prerequisites.length === 0) {
+            await store.updateTopic(plan.id, curr.id, { prerequisites: [prev.id] });
+          }
+        }
+      }
+    }
+
     res.json({ plan });
   } catch (err) {
     console.error('[import]', err);

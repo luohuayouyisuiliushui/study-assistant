@@ -292,7 +292,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     if (!topic.detail && !topic.done && !topic.lastError) {
       genTriggered.current = true;
       setGenerating(true);
-      api.generateDetail(plan.id, topic.id).catch(() => {});
+      api.generateDetail(plan.id, topic.id).catch(err => {
+        console.error('[TopicDetail] generateDetail failed:', err);
+        setGenerating(false);
+        setError(err.message || '加载失败');
+      });
     }
   }, [topic?.id]);
 

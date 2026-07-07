@@ -32,6 +32,18 @@ describe('STABLE_DETAIL_SYSTEM_PROMPT', () => {
     assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('质量标准'));
     assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('资源引用规范'));
   });
+
+  it('should enforce 与相关知识点的联系 as mandatory', () => {
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('必须存在的段落，不可省略'));
+  });
+
+  it('should enforce Mermaid for process/architecture content', () => {
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('必须使用 Mermaid 图表绘制'));
+  });
+
+  it('should emphasize practical implementation details', () => {
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('注重实操细节'));
+  });
 });
 
 describe('STABLE_FOLLOWUP_SYSTEM_PROMPT', () => {
