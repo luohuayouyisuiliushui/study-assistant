@@ -135,7 +135,42 @@ function readJSON(filePath) {
 // ─── Index ───
 
 function readIndex() {
-  return readJSON(PLANS_INDEX) || [];
+  const idx = readJSON(PLANS_INDEX);
+  if (idx && idx.length > 0) return idx;
+  // 索引为空或缺失 → 从 plans/ 重建
+  return rebuildIndex();
+}
+
+function rebuildIndex() {
+  try {
+    const plansDir = path.join(DATA, 'plans');
+    if (!fs.existsSync(plansDir)) return [];
+    const files = fs.readdirSync(plansDir).filter(f => f.endsWith('.json') && !f.endsWith('.bak') && !f.includes('.tmp.'));
+    if (files.length === 0) return [];
+    const index = [];
+    for (const f of files) {
+      try {
+        const plan = readJSON(path.join(plansDir, f));
+        if (plan && plan.id && plan.name) {
+          index.push({
+            id: plan.id,
+            name: plan.name,
+            createdAt: plan.createdAt || Date.now(),
+            updatedAt: plan.updatedAt || Date.now(),
+            topicCount: plan.topics?.length || 0,
+          });
+        }
+      } catch {}
+    }
+    if (index.length > 0) {
+      writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2));
+      console.log(`[learn-store] 🔄 Rebuilt index from ${files.length} plan files → ${index.length} entries`);
+    }
+    return index;
+  } catch (err) {
+    console.warn('[learn-store] Index rebuild failed:', err.message);
+    return [];
+  }
 }
 
 function writeIndex(index) {
