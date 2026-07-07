@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+﻿const API_BASE = '/api';
 
 /** Read API settings from localStorage (set by SettingsModal) */
 function getApiSettings() {
@@ -133,10 +133,69 @@ const api = {
     }, true);
   },
 
+  /** SSE streaming: start interactive mode. Calls onEvent for each SSE event (chunk, pause, done, error). */
+  async startInteractiveSSE(planId, topicId, mode, onEvent) {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const headers = { 'Content-Type': 'application/json' };
+    const body = JSON.stringify({ mode, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-start-sse/${topicId}`, {
+      method: 'POST', headers, body,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: '启动失败' }));
+      throw new Error(err.error || '启动失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    }
+  },
+
+  /** SSE streaming: continue interactive mode. Calls onEvent for each SSE event. */
+  async continueInteractiveSSE(planId, topicId, mode, feedback, onEvent) {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const headers = { 'Content-Type': 'application/json' };
+    const body = JSON.stringify({ mode, feedback, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-continue-sse/${topicId}`, {
+      method: 'POST', headers, body,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: '继续失败' }));
+      throw new Error(err.error || '继续失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    }
+  },
+
   // ─── Challenge: Reveal Embedded Errors ───
-  async revealErrors(planId, topicId) {
+  async revealErrors(planId, topicId, recognizedErrors = []) {
     return request(`${API_BASE}/learn/plans/${planId}/reveal-errors/${topicId}`, {
       method: 'POST',
+      body: JSON.stringify({ recognizedErrors }),
     }, true);
   },
 
@@ -211,6 +270,60 @@ const api = {
   },
   async getReviewNeeds(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
+  },
+
+  // ─── Exam Paper ───
+  async generateExam(planId, topicIds, config = {}) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ topicIds, config }),
+    }, true);
+  },
+  /** Stream exam generation via SSE. Calls onEvent for each SSE event. */
+  async generateExamStream(planId, topicIds, config = {}, onEvent) {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const headers = { 'Content-Type': 'application/json' };
+    const body = JSON.stringify({ topicIds, config, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const response = await fetch(`${API_BASE}/learn/plans/${planId}/exam/generate-stream`, {
+      method: 'POST', headers, body,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: '生成失败' }));
+      throw new Error(err.error || '生成失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    }
+  },
+  async submitExam(planId, examId, answers) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }, true);
+  },
+  async listExams(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/exams`);
+  },
+  async deleteExam(planId, examId) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}`, { method: 'DELETE' });
+  },
+  async generateExamPractice(planId, examId, count = 5) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/practice`, {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    }, true);
   },
 
   // ─── Connection Test ───

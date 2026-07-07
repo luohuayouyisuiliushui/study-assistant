@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Data model & persistence for the learning assistant.
  *
  * Structure:
@@ -160,8 +160,60 @@ export function createPlan(name) {
 
 // ─── Trash / Recycle Bin ───
 
-export function deletePlan(planId) {
-  trashPlan(planId);
+export async function deletePlan(planId) {
+  await trashPlan(planId);
+}
+
+/**
+ * Permanently delete a plan — removes the file, removes from index, skips trash.
+ * Also cleans up any trash entry for the same plan ID.
+ */
+export function permanentlyDeletePlan(planId) {
+  writeQueues.delete(planId); // discard pending writes
+
+  // Delete plan file from plans/
+  const src = planPath(planId);
+  try {
+    if (fs.existsSync(src)) fs.unlinkSync(src);
+  } catch (err) {
+    console.warn(`[learn-store] Failed to delete plan file: ${err.message}`);
+  }
+
+  // Delete .tmp files
+  try {
+    const dir = path.dirname(src);
+    const prefix = path.basename(src);
+    for (const f of fs.readdirSync(dir)) {
+      if (f.startsWith(prefix + '.tmp')) fs.unlinkSync(path.join(dir, f));
+    }
+  } catch {}
+
+  // Delete backup file if exists
+  try {
+    const bak = src + '.bak';
+    if (fs.existsSync(bak)) fs.unlinkSync(bak);
+  } catch {}
+
+  // Remove from active index
+  const index = readIndex().filter(e => e.id !== planId);
+  writeIndex(index);
+
+  // Also remove from trash if present
+  const trashFile = findTrashFile(planId);
+  if (trashFile) {
+    try { fs.unlinkSync(trashFile); } catch {}
+  }
+  const trashIndex = readTrashIndex().filter(e => e.id !== planId);
+  writeTrashIndex(trashIndex);
+}
+
+/**
+ * Batch-delete multiple plans permanently by their IDs.
+ */
+export function deletePlansByIds(planIds) {
+  for (const id of planIds) {
+    permanentlyDeletePlan(id);
+  }
 }
 
 /**
@@ -170,8 +222,14 @@ export function deletePlan(planId) {
  * Plans with rich learning data (history, detail, exercises) are flagged so
  * the data file is preserved even after the 30-day auto-cleanup.
  */
-export function trashPlan(planId) {
-  writeQueues.delete(planId); // discard pending writes for deleted plan
+export async function trashPlan(planId) {
+  // Drain pending writes before moving to trash — otherwise hasData
+  // check reads a stale file (writes are queued as promise microtasks).
+  const queue = writeQueues.get(planId);
+  if (queue) {
+    try { await queue; } catch { /* ignore queue errors — we're deleting anyway */ }
+  }
+  writeQueues.delete(planId);
   const src = planPath(planId);
   if (!fs.existsSync(src)) {
     // Plan file may already be gone — just remove from index
@@ -1228,19 +1286,38 @@ export function extractWeakPoints(analysisJson) {
 
 /**
  * Get topics that need review (have weak points or exercise errors).
+ * Also considers exam paper results for identifying weak areas.
  * @param {object} plan
  * @returns {Array} Topics needing review with weakPoints summary
  */
 export function getTopicsNeedingReview(plan) {
+  // Collect topics with weak points from exam results
+  const examWeakTopics = new Set();
+  if (plan.examPapers) {
+    for (const exam of plan.examPapers) {
+      if (!exam.results) continue;
+      for (const result of exam.results) {
+        if (result.correct === false) {
+          const question = exam.questions?.[result.exerciseIndex];
+          if (question?.topicId) {
+            examWeakTopics.add(question.topicId);
+          }
+        }
+      }
+    }
+  }
+
   return plan.topics.filter(t => t.done && (
     (t.weakPoints && t.weakPoints.length > 0) ||
-    (t.exercises && t.exercises.some(e => e.correct === false))
+    (t.exercises && t.exercises.some(e => e.correct === false)) ||
+    examWeakTopics.has(t.id)
   )).map(t => ({
     id: t.id,
     title: t.title,
     weakPoints: t.weakPoints || [],
     hasExerciseErrors: t.exercises ? t.exercises.some(e => e.correct === false) : false,
     lastErrorCount: t.exercises ? t.exercises.filter(e => e.correct === false).length : 0,
+    hasExamErrors: examWeakTopics.has(t.id),
     difficulty: t.difficulty,
   }));
 }
@@ -1332,12 +1409,111 @@ export function buildLearningProfile(plan) {
   };
 }
 
+// ═══════════════════════════════════════════════════════
+//  EXAM PAPER STORE FUNCTIONS
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Add a new exam paper to a plan.
+ * @param {string} planId
+ * @param {object} examData - { id, title, config, paper, questions }
+ * @returns {object} Updated plan
+ */
+export function addExamPaper(planId, examData) {
+  const plan = getPlan(planId);
+  if (!plan) throw new Error('计划不存在');
+
+  if (!plan.examPapers) plan.examPapers = [];
+  plan.examPapers.push({
+    id: examData.id,
+    title: examData.title,
+    createdAt: Date.now(),
+    config: examData.config,
+    paper: examData.paper,
+    questions: examData.questions,
+    results: null,
+    gradedAt: null,
+  });
+  plan.updatedAt = Date.now();
+
+  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+  updateIndex(planId, { updatedAt: plan.updatedAt });
+  writeFlag(planId);
+  return plan;
+}
+
+/**
+ * Get all exam papers for a plan.
+ * @param {string} planId
+ * @returns {Array} Exam papers
+ */
+export function getExamPapers(planId) {
+  const plan = getPlan(planId);
+  if (!plan) return [];
+  return plan.examPapers || [];
+}
+
+/**
+ * Update exam results after grading.
+ * @param {string} planId
+ * @param {string} examId
+ * @param {Array} results - Grading results array
+ */
+export function updateExamResults(planId, examId, results) {
+  const plan = getPlan(planId);
+  if (!plan) throw new Error('计划不存在');
+  if (!plan.examPapers) throw new Error('该计划没有试卷');
+
+  const exam = plan.examPapers.find(e => e.id === examId);
+  if (!exam) throw new Error('试卷不存在');
+
+  exam.results = results;
+  exam.gradedAt = Date.now();
+  plan.updatedAt = Date.now();
+
+  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+  updateIndex(planId, { updatedAt: plan.updatedAt });
+  writeFlag(planId);
+  return plan;
+}
+
+/**
+ * Delete an exam paper.
+ * @param {string} planId
+ * @param {string} examId
+ */
+export function deleteExamPaper(planId, examId) {
+  const plan = getPlan(planId);
+  if (!plan) throw new Error('计划不存在');
+  if (!plan.examPapers) return;
+
+  plan.examPapers = plan.examPapers.filter(e => e.id !== examId);
+  plan.updatedAt = Date.now();
+
+  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+  updateIndex(planId, { updatedAt: plan.updatedAt });
+}
+
+/**
+ * Persist the teaching errors revealed for a topic (used for weak-point linkage).
+ * Stores under topic.teachingErrors for later analysis of unrecognized errors.
+ */
+export function recordTeachingErrors(planId, topicId, errors) {
+  return writePlan(planId, (plan) => {
+    const topic = plan.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`Topic not found: `);
+    topic.teachingErrors = Array.isArray(errors) ? errors : [];
+    topic.teachingErrorsUpdatedAt = Date.now();
+  });
+}
+
 export default {
-  listPlans, getPlan, createPlan, createPlanWithPhases, deletePlan, removeTopic,
+  listPlans, getPlan, createPlan, createPlanWithPhases, deletePlan, permanentlyDeletePlan, deletePlansByIds, removeTopic,
   addTopics, updateTopic, updateTopicTime, reorderTopics, addHistory, getTopicHistory, buildLearningProfile,
   getTopicChildren, getTopicPrerequisites, getTopicDescendants, buildKnowledgeGraph,
   buildEnhancedKnowledgeGraph, buildInferredEdges, extractRelationsFromDetail,
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview,
+  addExamPaper, getExamPapers, updateExamResults, deleteExamPaper, recordTeachingErrors,
   writeFlag, readFlags, clearFlag,
   listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
 };

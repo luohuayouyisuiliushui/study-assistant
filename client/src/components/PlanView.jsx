@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import api from '../api';
 import KnowledgeGraphModal from './KnowledgeGraphModal';
 import MindMapModal from './MindMapModal';
+import ExamPaperModal from './ExamPaperModal';
 import { detectEncoding } from '../utils/encoding';
 
 export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTopic, onGenerate }) {
@@ -18,6 +19,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const analysisChatRef = useRef(null);
   const [graphOpen, setGraphOpen] = useState(false);
   const [mindMapOpen, setMindMapOpen] = useState(false);
+  const [examOpen, setExamOpen] = useState(false);
   const [decomposingId, setDecomposingId] = useState(null);
   const [expandedTopics, setExpandedTopics] = useState({});
 
@@ -77,7 +79,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
 
     if (analysisChat.length > 0) {
       md += `---\n\n## 💬 追问记录\n\n`;
-      analysisChat.forEach((msg, i) => {
+      analysisChat.forEach((msg, _i) => {
         if (msg.role === 'user') {
           md += `### 追问\n\n${msg.content}\n\n`;
         } else {
@@ -115,12 +117,12 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     }
 
     // Detect format: if most lines start with -/*/numbered, strip those prefixes
-    const bulletCount = lines.filter(l => /^[-*]\s/.test(l) || /^\d+[\.\)]\s/.test(l)).length;
+    const bulletCount = lines.filter(l => /^[-*]\s/.test(l) || /^\d+[.)]\s/.test(l)).length;
     const isBulleted = bulletCount > lines.length * 0.5;
 
     const clean = lines
       .filter(l => !l.startsWith('#'))  // skip markdown headers
-      .map(l => isBulleted ? l.replace(/^[-*]\s*/, '').replace(/^\d+[\.\)]\s*/, '') : l)
+      .map(l => isBulleted ? l.replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '') : l)
       .filter(Boolean);
     if (clean.length === 0) return;
     onAddTopics(clean);
@@ -274,6 +276,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           </button>
           <button className="btn btn-sm" onClick={() => setMindMapOpen(true)} title="思维导图">
             🧠 思维导图
+          </button>
+          <button className="btn btn-sm" onClick={() => setExamOpen(true)} title="组卷">
+            📝 组卷
           </button>
         </div>
       </div>
@@ -489,6 +494,12 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           plan={plan}
           onClose={() => setMindMapOpen(false)}
           onSelectTopic={onSelectTopic}
+        />
+      )}
+      {examOpen && (
+        <ExamPaperModal
+          plan={plan}
+          onClose={() => setExamOpen(false)}
         />
       )}
     </div>

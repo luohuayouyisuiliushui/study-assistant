@@ -1,6 +1,6 @@
-import { describe, it } from 'node:test';
+﻿import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildDeterministicContext, buildDetailMessages, buildFollowUpMessages, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
+import { buildDeterministicContext, buildDetailMessages, buildFollowUpMessages, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, IMPORT_PLAN_PROMPT, MISCONCEPTION_TAXONOMY, STABLE_TEACHING_ERROR_EXAM_PROMPT, buildTeachingErrorSpec } from '../engine/learn-prompts.js';
 
 function makePlan(overrides = {}) {
   return {
@@ -204,7 +204,7 @@ describe('STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT', () => {
   });
 
   it('should contain stepwise teaching keywords', () => {
-    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('分段输出'));
+    assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('ask_user_to_continue'));
     assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('等待用户'));
     assert.ok(STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT.includes('[SESSION_END]'));
   });
@@ -341,4 +341,56 @@ describe('buildFollowUpMessages', () => {
     assert.ok(!msgs[0].content.includes('练习题'));
   });
 });
+
+describe('MISCONCEPTION_TAXONOMY', () => {
+  it('exposes bloom levels and error types', () => {
+    assert.ok(Array.isArray(MISCONCEPTION_TAXONOMY.bloomLevels));
+    assert.strictEqual(MISCONCEPTION_TAXONOMY.bloomLevels.length, 6);
+    assert.ok(MISCONCEPTION_TAXONOMY.bloomLevels.includes('应用'));
+    assert.ok(Array.isArray(MISCONCEPTION_TAXONOMY.errorTypes));
+    assert.ok(MISCONCEPTION_TAXONOMY.errorTypes.length >= 6);
+    for (const t of MISCONCEPTION_TAXONOMY.errorTypes) {
+      assert.ok(typeof t.code === 'string' && t.code.length > 0);
+      assert.ok(typeof t.label === 'string' && t.label.length > 0);
+    }
+  });
+
+  it('is frozen (stable constant)', () => {
+    assert.ok(Object.isFrozen(MISCONCEPTION_TAXONOMY));
+  });
+});
+
+describe('buildTeachingErrorSpec', () => {
+  it('returns a spec string binding misconception + bloomLevel + errorType', () => {
+    const spec = buildTeachingErrorSpec();
+    assert.ok(typeof spec === 'string');
+    assert.ok(spec.includes('misconception'));
+    assert.ok(spec.includes('bloomLevel'));
+    assert.ok(spec.includes('errorType'));
+    // Uses real newlines, not literal backslash-n
+    assert.ok(spec.includes('\n'));
+    assert.ok(!spec.includes('\\n'));
+    // References taxonomy codes
+    assert.ok(spec.includes('boundary'));
+  });
+});
+
+describe('STABLE_TEACHING_ERROR_EXAM_PROMPT', () => {
+  it('is a non-empty JSON-oriented examination prompt', () => {
+    assert.ok(typeof STABLE_TEACHING_ERROR_EXAM_PROMPT === 'string');
+    assert.ok(STABLE_TEACHING_ERROR_EXAM_PROMPT.length > 200);
+    assert.ok(STABLE_TEACHING_ERROR_EXAM_PROMPT.includes('pedagogicalValue'));
+    assert.ok(STABLE_TEACHING_ERROR_EXAM_PROMPT.includes('misconception'));
+    assert.ok(STABLE_TEACHING_ERROR_EXAM_PROMPT.includes('reviewed'));
+  });
+});
+
+describe('STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT taxonomy binding', () => {
+  it('references error type codes and misconception/bloomLevel', () => {
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('boundary'));
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('misconception'));
+    assert.ok(STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT.includes('bloomLevel'));
+  });
+});
+
 

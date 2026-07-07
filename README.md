@@ -1,6 +1,6 @@
 # 📚 Study Assistant — AI 知识点学习助手
 
-> **当前版本: v1.3.0** — 全面测试覆盖 + 交互模式增强
+> **当前版本: v1.4.0** — 教学错误系统 + 组卷系统 + 知识图谱
 
 一个基于 AI 的交互式自学辅助工具。用户创建学习计划、添加知识点列表，AI 逐个生成详细的 Markdown 讲解，支持追问、练习题、复习模式和 Mermaid 图表。
 
@@ -36,6 +36,13 @@
 - 📂 **文件导入** — UTF-8 / GBK 自动检测，支持批量导入知识点
 - 🔌 **中转站兼容** — 自动适配不支持的 API 参数（response_format / stream_options 降级）
 - 🔍 **连接测试** — 设置页一键测试 API Key 是否可用
+- 🧠 **知识图谱** — D3 + Mermaid 双引擎渲染，展示知识点关联关系
+- 🗺️ **思维导图** — markmap 内嵌渲染，支持 XMind 导出
+- 📋 **AI 组卷** — 智能组卷系统，支持选择题/填空题，自动评分 + 解析
+- 🎓 **教学错误** — Erroneous Examples 教学法，AI 埋错 → 学生发现 → 薄弱点联动
+- 🎤 **语音输入** — 支持语音转文字提问（Web Speech API）
+- 🎯 **交互模式** — stepwise/realtime/challenge/scaffold 四种 AI 教学模式
+- ♻️ **回收站** — 误删计划可恢复，30 天自动清理
 
 ## 技术栈
 
@@ -99,7 +106,7 @@ npm start
 
 ```bash
 cd server
-node --test --test-concurrency=1 --test-force-exit __tests__/
+node --test --test-concurrency=1 --test-force-exit "__tests__/*.test.js"
 ```
 
 > 注意：由于 Windows 文件锁问题，跑全部测试时需要 `--test-concurrency=1` 串行执行。
@@ -118,7 +125,7 @@ study-assistant/
 │   │   ├── learn-engine.js         # AI 生成引擎（讲解/追问/练习/复习/分析）
 │   │   ├── learn-prompts.js        # Prompt 模板（含 Mermaid 指引）
 │   │   └── cache-diagnostics.js    # 缓存性能诊断
-│   ├── __tests__/                  # 单元测试（共 111 个）
+│   ├── __tests__/                  # 单元测试（共 221 个）
 │   │   ├── provider.test.js        # Provider 兼容性 + Mock 测试
 │   │   ├── learn-engine.test.js    # 引擎功能测试
 │   │   ├── learn-store.test.js     # 数据层测试
@@ -136,6 +143,9 @@ study-assistant/
 │       │   ├── PlanView.jsx        # 知识点列表 + 文件导入 + 薄弱点标记
 │       │   ├── TopicDetail.jsx     # 知识点详情 + 追问 + 练习题 + 复习
 │       │   ├── MermaidDiagram.jsx  # Mermaid 图表渲染组件
+│       │   ├── KnowledgeGraphModal.jsx  # 知识图谱（Mermaid + D3）
+│       │   ├── MindMapModal.jsx    # 思维导图（markmap）
+│       │   ├── ExamPaperModal.jsx  # AI 组卷 + 考试
 │       │   └── SettingsModal.jsx   # API 设置弹窗（含连接测试）
 │       └── styles/
 │           └── app.css             # 样式

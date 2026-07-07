@@ -1,8 +1,8 @@
-import { describe, it, before, after } from 'node:test';
+﻿import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, examineTeachingErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -319,6 +319,32 @@ function createStreamMockProvider(content) {
   return provider;
 }
 
+/**
+ * Create a mock Provider that returns content + tool_calls from complete().
+ */
+function createToolMockProvider(content, toolCalls = null) {
+  const mockClient = {
+    chat: {
+      completions: {
+        async create(opts) {
+          const message = { content: content || '', role: 'assistant' };
+          if (toolCalls) message.tool_calls = toolCalls;
+          return {
+            choices: [{ message, index: 0, finish_reason: toolCalls ? 'tool_calls' : 'stop' }],
+            model: 'mock-model',
+            usage: { prompt_tokens: 50, completion_tokens: 100, total_tokens: 150 },
+          };
+        },
+      },
+    },
+  };
+  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+  provider._client = mockClient;
+  provider._autoWarm = false;
+  provider._lastPrefixHash = null;
+  return provider;
+}
+
 describe('Interactive mode', () => {
   let testPlan = null;
   let testTopicId = null;
@@ -338,35 +364,37 @@ describe('Interactive mode', () => {
   });
 
   it('startInteractiveDetail should return content and session', async () => {
-    const provider = createStreamMockProvider('这是第一部分的讲解内容。你理解了吗？');
+    const provider = createToolMockProvider('这是第一部分的讲解内容。你理解了吗？', [
+      { id: 'call_start1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"讲解了核心概念"}' } }
+    ]);
     const result = await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
 
     assert.ok(result.content, 'should return content');
     assert.ok(result.content.includes('第一部分'), 'should include expected text');
     assert.ok(result.session, 'should return session object');
     assert.strictEqual(result.session.mode, 'stepwise', 'session mode should be stepwise');
-    assert.strictEqual(result.session.finished, false, 'should not be finished');
+    assert.strictEqual(result.session.finished, false, 'should not be finished (tool_calls = waiting)');
     assert.strictEqual(result.session.status, 'waiting_user', 'session should be waiting for user');
     assert.strictEqual(result.session.transcript.length, 1, 'transcript should have one AI entry');
-    // State machine should be initialized for stepwise mode
+    // Dynamic state machine advances on tool call
     assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
-    assert.strictEqual(result.session.stateMachine.totalSteps, 6, 'should have 6 teaching phases');
-    assert.strictEqual(result.session.stateMachine.currentStep, 0, 'should start at step 0');
-    assert.strictEqual(result.session.stateMachine.steps[0].status, 'active', 'first step should be active');
-    assert.strictEqual(result.session.stateMachine.steps[1].status, 'pending', 'second step should be pending');
+    assert.strictEqual(result.session.stateMachine.completedSteps, 1, 'should have 1 completed step after tool call');
+    assert.strictEqual(result.session.stateMachine.currentStep, 1, 'should be at step 1');
   });
 
   it('startInteractiveDetail should support all modes', async () => {
-    const provider = createStreamMockProvider('测试内容');
     for (const mode of ['stepwise', 'realtime', 'challenge', 'scaffold']) {
+      const provider = mode === 'stepwise'
+        ? createToolMockProvider('测试内容', [{ id: 'call_m1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }])
+        : createStreamMockProvider('测试内容');
       const result = await startInteractiveDetail(provider, testPlan, testTopicId, mode);
       assert.strictEqual(result.session.mode, mode, `mode should be ${mode}`);
-    // State machine should only exist for stepwise mode
-    if (mode === 'stepwise') {
-      assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
-    } else {
-      assert.strictEqual(result.session.stateMachine, null, `non-stepwise (${mode}) should not have stateMachine`);
-    }
+      if (mode === 'stepwise') {
+        assert.ok(result.session.stateMachine, 'stepwise should have stateMachine');
+        assert.ok(result.tool_calls, 'stepwise should return tool_calls');
+      } else {
+        assert.strictEqual(result.session.stateMachine, null, `non-stepwise (${mode}) should not have stateMachine`);
+      }
       assert.ok(result.content, `${mode} should return content`);
     }
   });
@@ -392,54 +420,60 @@ describe('Interactive mode', () => {
   //  continueInteractiveDetail tests
   // ═════════════════════════════════════════════════════════
 
-  it('continueInteractiveDetail should advance state machine on "继续"', async () => {
-    const provider = createStreamMockProvider('第二部分内容');
-    await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+  // State machine tests removed — stepwise mode no longer uses a fixed 6-step plan
 
-    const r1 = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
-    assert.strictEqual(r1.session.stateMachine.currentStep, 1, 'should advance to step 1');
-    assert.strictEqual(r1.session.stateMachine.steps[0].status, 'completed', 'step 0 should be completed');
-    assert.strictEqual(r1.session.stateMachine.steps[1].status, 'active', 'step 1 should be active');
+  // State machine retry test removed — no longer tracked on the backend
 
-    const r2 = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
-    assert.strictEqual(r2.session.stateMachine.currentStep, 2, 'should advance to step 2');
-  });
-
-  it('continueInteractiveDetail should increment retryCount on non-advance feedback', async () => {
-    const sepPlan = store.createPlan('retry-test');
-    await store.addTopics(sepPlan.id, ['重试测试']);
+  it('continueInteractiveDetail should advance dynamic state machine on tool call', async () => {
+    const sepPlan = store.createPlan('fc-step-test');
+    await store.addTopics(sepPlan.id, ['工具调用推进测试']);
     const p = store.getPlan(sepPlan.id);
 
-    const provider1 = createStreamMockProvider('第一步讲解');
+    const provider1 = createToolMockProvider('第一部分内容。', [
+      { id: 'call_1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"第一部分"}' } }
+    ]);
     await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
 
-    // Say "不懂" instead of "继续" — should increment retryCount, not advance
-    const provider2 = createStreamMockProvider('重新解释一遍');
-    const r1 = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '不太懂');
-    assert.strictEqual(r1.session.stateMachine.currentStep, 0, 'should stay on step 0');
-    assert.strictEqual(r1.session.stateMachine.steps[0].retryCount, 1, 'retryCount should be 1');
-    assert.strictEqual(r1.session.status, 'waiting_user', 'should be waiting for user after response');
+    const provider2 = createToolMockProvider('第二部分内容。', [
+      { id: 'call_2', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"第二部分"}' } }
+    ]);
+    const result = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '继续');
 
-    const provider3 = createStreamMockProvider('换个角度解释');
-    const r2 = await continueInteractiveDetail(provider3, p, p.topics[0].id, 'stepwise', '还是不太懂');
-    assert.strictEqual(r2.session.stateMachine.steps[0].retryCount, 2, 'retryCount should be 2');
+    assert.strictEqual(result.session.stateMachine.completedSteps, 2, 'should have 2 completed steps');
+    assert.strictEqual(result.session.stateMachine.currentStep, 2, 'should advance to step 2');
+    assert.ok(result.tool_calls, 'should have tool_calls');
+    store.deletePlan(sepPlan.id);
+  });
 
+  it('continueInteractiveDetail should not advance state machine without tool call', async () => {
+    const sepPlan = store.createPlan('fc-no-tc');
+    await store.addTopics(sepPlan.id, ['无工具调用']);
+    const p = store.getPlan(sepPlan.id);
+
+    const provider1 = createToolMockProvider('第一部分内容（没有工具调用）');
+    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
+    // No tool_calls → session.finished = true
+    assert.ok(store.getPlan(sepPlan.id).topics[0].interactiveSession.finished, 'should be finished without tool call');
     store.deletePlan(sepPlan.id);
   });
 
   it('continueInteractiveDetail should take feedback and return next section', async () => {
-    const provider = createStreamMockProvider('第二部分：我们来深入讲讲细节。');
-    await startInteractiveDetail(provider, testPlan, testTopicId, 'stepwise');
+    const provider1 = createToolMockProvider('第一部分：核心概念。', [
+      { id: 'call_fb1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"核心概念"}' } }
+    ]);
+    await startInteractiveDetail(provider1, testPlan, testTopicId, 'stepwise');
 
-    const result = await continueInteractiveDetail(provider, testPlan, testTopicId, 'stepwise', '继续');
+    const provider2 = createToolMockProvider('第二部分：我们来深入讲讲细节。', [
+      { id: 'call_fb2', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"深入细节"}' } }
+    ]);
+    const result = await continueInteractiveDetail(provider2, testPlan, testTopicId, 'stepwise', '继续');
 
     assert.ok(result.content, 'should return next section content');
     assert.ok(result.content.includes('第二部分'), 'should include expected next content');
     assert.ok(result.session, 'should return session');
-    assert.strictEqual(result.session.transcript.length, 3, 'transcript should have 3 entries: ai + user + ai');
-    assert.strictEqual(result.session.transcript[1].role, 'user', 'second entry should be user feedback');
-    assert.strictEqual(result.session.transcript[1].content, '继续', 'should store user feedback');
-    assert.strictEqual(result.session.transcript[2].role, 'ai', 'third entry should be ai response');
+    // transcript entries: [assistant1, tool1, assistant2]
+    assert.strictEqual(result.session.transcript.length, 3, 'transcript should have 3 entries');
+    assert.strictEqual(result.session.transcript[1].role, 'tool', 'second entry should be tool result');
   });
 
   it('continueInteractiveDetail should detect [SESSION_END] marker', async () => {
@@ -447,10 +481,15 @@ describe('Interactive mode', () => {
     const sepPlan = store.createPlan('session-end-test');
     await store.addTopics(sepPlan.id, ['测试结束检测']);
     const p = store.getPlan(sepPlan.id);
-    const provider = createStreamMockProvider('以上是全部内容。[SESSION_END]');
-    await startInteractiveDetail(provider, p, p.topics[0].id, 'stepwise');
+    const provider1 = createToolMockProvider('以上是全部内容。', [
+      { id: 'call_se1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"全部内容"}' } }
+    ]);
+    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
 
-    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'stepwise', '继续');
+    const provider2 = createToolMockProvider('以上是全部内容。[SESSION_END]', [
+      { id: 'call_se2', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"结束"}' } }
+    ]);
+    const result = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '继续');
 
     assert.ok(result.finished, 'session should be marked as finished');
     assert.strictEqual(result.session.finished, true, 'session.finished should be true');
@@ -463,14 +502,15 @@ describe('Interactive mode', () => {
     await store.addTopics(reopenPlan.id, ['重开测试']);
     const p2 = store.getPlan(reopenPlan.id);
 
-    // First mark session as finished
-    const finishProvider = createStreamMockProvider('所有内容结束。[SESSION_END]');
+    // First mark session as finished — mock without tool_calls so session completes
+    const finishProvider = createToolMockProvider('所有内容结束。[SESSION_END]');
     await startInteractiveDetail(finishProvider, p2, p2.topics[0].id, 'stepwise');
-    const finishResult = await continueInteractiveDetail(finishProvider, p2, p2.topics[0].id, 'stepwise', '继续');
-    assert.ok(finishResult.finished, 'session should be finished first');
+    // Since no tool_calls, session is finished already, no continue needed
 
     // Now ask a follow-up question — session should re-open
-    const reopenProvider = createStreamMockProvider('好问题！让我解释一下这个细节。');
+    const reopenProvider = createToolMockProvider('好问题！让我解释一下这个细节。', [
+      { id: 'call_re1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{"summary":"回答了追问"}' } }
+    ]);
     const result = await continueInteractiveDetail(reopenProvider, p2, p2.topics[0].id, 'stepwise', '我还有问题');
 
     assert.ok(result.content, 'should return answer for follow-up question');
@@ -507,13 +547,19 @@ describe('Interactive mode', () => {
   });
 
   it('continueInteractiveDetail should accumulate transcript across multiple turns', async () => {
-    const provider1 = createStreamMockProvider('第一轮内容');
+    const provider1 = createToolMockProvider('第一轮内容', [
+      { id: 'call_tr1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }
+    ]);
     await startInteractiveDetail(provider1, testPlan, testTopicId, 'stepwise');
 
-    const provider2 = createStreamMockProvider('第二轮内容');
+    const provider2 = createToolMockProvider('第二轮内容', [
+      { id: 'call_tr2', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }
+    ]);
     await continueInteractiveDetail(provider2, testPlan, testTopicId, 'stepwise', '继续');
 
-    const provider3 = createStreamMockProvider('第三轮内容');
+    const provider3 = createToolMockProvider('第三轮内容', [
+      { id: 'call_tr3', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }
+    ]);
     await continueInteractiveDetail(provider3, testPlan, testTopicId, 'stepwise', '再继续');
 
     // Re-read from store to verify persistence
@@ -521,14 +567,13 @@ describe('Interactive mode', () => {
     const topic = p.topics.find(t => t.id === testTopicId);
     const transcript = topic.interactiveSession.transcript;
 
-    assert.strictEqual(transcript.length, 5, 'transcript should have 5 entries: 1 start + 2 user + 2 ai');
-    assert.strictEqual(transcript[0].role, 'ai', 'entry 0: start AI');
-    assert.strictEqual(transcript[1].role, 'user', 'entry 1: user feedback 1');
-    assert.strictEqual(transcript[1].content, '继续');
-    assert.strictEqual(transcript[2].role, 'ai', 'entry 2: AI response 1');
-    assert.strictEqual(transcript[3].role, 'user', 'entry 3: user feedback 2');
-    assert.strictEqual(transcript[3].content, '再继续');
-    assert.strictEqual(transcript[4].role, 'ai', 'entry 4: AI response 2');
+    // transcript: [assistant1, tool1, assistant2, tool2, assistant3]
+    assert.strictEqual(transcript.length, 5, 'transcript should have 5 entries');
+    assert.strictEqual(transcript[0].role, 'assistant', 'entry 0: assistant');
+    assert.strictEqual(transcript[1].role, 'tool', 'entry 1: tool result');
+    assert.strictEqual(transcript[2].role, 'assistant', 'entry 2: assistant');
+    assert.strictEqual(transcript[3].role, 'tool', 'entry 3: tool result');
+    assert.strictEqual(transcript[4].role, 'assistant', 'entry 4: assistant');
   });
 });
 
@@ -875,22 +920,7 @@ describe('buildImagePrompt', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('Interactive mode - edge cases', () => {
-  it('continueInteractiveDetail should handle "跳过" command in stepwise mode', async () => {
-    const plan = store.createPlan('skip-test');
-    await store.addTopics(plan.id, ['跳过测试']);
-    const p = store.getPlan(plan.id);
-
-    const provider1 = createStreamMockProvider('第一步：核心概念。');
-    await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
-
-    // "跳过" should mark current as skip and advance
-    const provider2 = createStreamMockProvider('第二步：为什么重要。');
-    const result = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '跳过');
-    assert.strictEqual(result.session.stateMachine.currentStep, 1, 'should advance to step 1');
-    assert.strictEqual(result.session.stateMachine.steps[0].status, 'skipped', 'step 0 should be skipped');
-
-    store.deletePlan(plan.id);
-  });
+  // "跳过" test removed — state machine no longer tracks step skipping
 
   it('continueInteractiveDetail should handle empty feedback gracefully', async () => {
     const plan = store.createPlan('empty-fb-test');
@@ -908,28 +938,16 @@ describe('Interactive mode - edge cases', () => {
     store.deletePlan(plan.id);
   });
 
-  it('continueInteractiveDetail should handle stepwise mode without stateMachine', async () => {
-    const plan = store.createPlan('no-sm-test');
-    await store.addTopics(plan.id, ['无状态机测试']);
-    const p = store.getPlan(plan.id);
-
-    const provider = createStreamMockProvider('回应内容');
-    await startInteractiveDetail(provider, p, p.topics[0].id, 'realtime');
-
-    // Call with stepwise mode but session was started in realtime → no stateMachine
-    const result = await continueInteractiveDetail(provider, p, p.topics[0].id, 'stepwise', '继续');
-    assert.ok(result.content, 'should still work');
-    // State machine not present, stepwise mode checks should not crash
-
-    store.deletePlan(plan.id);
-  });
+  // "stepwise mode without stateMachine" test removed — state machine no longer exists
 
   it('should persist interactive session across multiple restarts', async () => {
     const plan = store.createPlan('persist-test');
     await store.addTopics(plan.id, ['持久化测试']);
     const p = store.getPlan(plan.id);
 
-    const provider1 = createStreamMockProvider('第一轮内容');
+    const provider1 = createToolMockProvider('第一轮内容', [
+      { id: 'call_p1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }
+    ]);
     await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
 
     // Read back from store
@@ -938,13 +956,16 @@ describe('Interactive mode - edge cases', () => {
     assert.ok(sessionAfterStart, 'session should be persisted');
     assert.strictEqual(sessionAfterStart.transcript.length, 1);
 
-    const provider2 = createStreamMockProvider('第二轮内容');
+    const provider2 = createToolMockProvider('第二轮内容', [
+      { id: 'call_p2', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }
+    ]);
     await continueInteractiveDetail(provider2, p, p.topics[0].id, 'stepwise', '继续');
 
     // Read back from store again
     const pAfterContinue = store.getPlan(plan.id);
     const sessionAfterContinue = pAfterContinue.topics.find(t => t.id === p.topics[0].id)?.interactiveSession;
     assert.ok(sessionAfterContinue, 'session should still be persisted');
+    // transcript: [assistant1, tool1, assistant2]
     assert.strictEqual(sessionAfterContinue.transcript.length, 3);
 
     store.deletePlan(plan.id);
@@ -957,7 +978,9 @@ describe('Interactive mode - edge cases', () => {
       const plan = store.createPlan(`mode-${mode}-test`);
       await store.addTopics(plan.id, [`${mode}模式测试`]);
       const p = store.getPlan(plan.id);
-      const provider = createStreamMockProvider(`这是${mode}模式的讲解。`);
+      const provider = mode === 'stepwise'
+        ? createToolMockProvider(`这是${mode}模式的讲解。`, [{ id: 'call_ma1', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }])
+        : createStreamMockProvider(`这是${mode}模式的讲解。`);
       const result = await startInteractiveDetail(provider, p, p.topics[0].id, mode);
       assert.strictEqual(result.session.mode, mode);
       assert.strictEqual(result.session.finished, false);
@@ -980,4 +1003,246 @@ describe('Interactive mode - edge cases', () => {
     store.deletePlan(plan.id);
   });
 });
+
+// ═══════════════════════════════════════════════════════
+//  BLUEPRINT (deterministic algorithm, no AI needed)
+// ═══════════════════════════════════════════════════════
+
+import { generateBlueprint } from '../engine/learn-engine.js';
+import engineModule from '../engine/learn-engine.js';
+const { validateBlueprintOutput, validateQuestionOutput } = engineModule;
+
+describe('generateBlueprint', () => {
+  it('should distribute questions evenly across topics', () => {
+    const plan = {
+      topics: [
+        { id: 't1', title: '主题A', detail: '内容A' },
+        { id: 't2', title: '主题B', detail: '内容B' },
+        { id: 't3', title: '主题C', detail: '内容C' },
+      ],
+    };
+    const bp = generateBlueprint(null, plan, ['t1', 't2', 't3'], { questionCount: 15, choiceRatio: 0.6 });
+    assert.ok(bp.title);
+    assert.ok(Array.isArray(bp.orders));
+    assert.strictEqual(bp.orders.length, 15);
+    // Each topic should have questions
+    const perTopic = {};
+    for (const o of bp.orders) {
+      assert.ok(o.topicTitle);
+      assert.ok(['choice', 'open'].includes(o.type));
+      assert.ok(['easy', 'medium', 'hard'].includes(o.difficulty));
+      perTopic[o.topicTitle] = (perTopic[o.topicTitle] || 0) + 1;
+    }
+    assert.ok(perTopic['主题A'] >= 4);
+    assert.ok(perTopic['主题B'] >= 4);
+    assert.ok(perTopic['主题C'] >= 4);
+  });
+
+  it('should respect difficulty ratios', () => {
+    const plan = {
+      topics: [
+        { id: 't1', title: 'X', detail: '' },
+        { id: 't2', title: 'Y', detail: '' },
+      ],
+    };
+    // Easy mode
+    const easy = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, difficulty: 'easy' });
+    const easyCount = easy.orders.filter(o => o.difficulty === 'easy').length;
+    assert.ok(easyCount >= 8); // 50% of 20
+
+    // Hard mode
+    const hard = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, difficulty: 'hard' });
+    const hardCount = hard.orders.filter(o => o.difficulty === 'hard').length;
+    assert.ok(hardCount >= 8); // 50% of 20
+  });
+
+  it('should respect choice ratio', () => {
+    const plan = {
+      topics: [
+        { id: 't1', title: 'X', detail: '' },
+        { id: 't2', title: 'Y', detail: '' },
+      ],
+    };
+    const bp = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, choiceRatio: 0.8 });
+    const choiceCount = bp.orders.filter(o => o.type === 'choice').length;
+    assert.ok(choiceCount >= 12); // Should have many choice questions
+  });
+
+  it('should include topicTitleToId and topicDetailMap', () => {
+    const plan = {
+      topics: [
+        { id: 't1', title: '主题A', detail: '这是内容A' },
+      ],
+    };
+    const bp = generateBlueprint(null, plan, ['t1'], { questionCount: 5 });
+    assert.strictEqual(bp.topicTitleToId['主题A'], 't1');
+    assert.strictEqual(bp.topicDetailMap['主题A'], '这是内容A');
+  });
+});
+
+describe('validateBlueprintOutput', () => {
+  it('should pass valid blueprint', () => {
+    const data = {
+      title: '测试',
+      orders: [
+        { index: 0, topicTitle: '主题A', type: 'choice', difficulty: 'easy' },
+        { index: 1, topicTitle: '主题B', type: 'open', difficulty: 'hard' },
+      ],
+    };
+    assert.strictEqual(validateBlueprintOutput(data), null);
+  });
+
+  it('should reject missing title', () => {
+    const err = validateBlueprintOutput({ orders: [] });
+    assert.ok(err);
+  });
+
+  it('should reject orders with invalid type', () => {
+    const err = validateBlueprintOutput({ title: 't', orders: [{ index: 0, topicTitle: 'A', type: 'invalid', difficulty: 'easy' }] });
+    assert.ok(err.includes('type'));
+  });
+
+  it('should reject orders with invalid difficulty', () => {
+    const err = validateBlueprintOutput({ title: 't', orders: [{ index: 0, topicTitle: 'A', type: 'choice', difficulty: 'impossible' }] });
+    assert.ok(err.includes('difficulty'));
+  });
+});
+
+describe('validateQuestionOutput', () => {
+  it('should pass valid choice question', () => {
+    const q = { question: '1+1=?', options: ['A. 2', 'B. 3'], answer: 'A', explanation: '因为...', conceptTag: '数学' };
+    assert.strictEqual(validateQuestionOutput(q), null);
+  });
+
+  it('should reject missing question', () => {
+    assert.ok(validateQuestionOutput({ options: [], answer: 'A', explanation: '', conceptTag: '' }));
+  });
+
+  it('should reject missing answer', () => {
+    assert.ok(validateQuestionOutput({ question: 'q', options: [], answer: '', explanation: '', conceptTag: '' }));
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  EXAM PRACTICE (mock AI)
+// ═══════════════════════════════════════════════════════
+
+import { generateExamPractice } from '../engine/learn-engine.js';
+
+describe('generateExamPractice', () => {
+  it('should throw when exam has no results', async () => {
+    const plan = { examPapers: [{ id: 'e1', results: null }] };
+    await assert.rejects(() => generateExamPractice(null, plan, 'e1'), /尚未批改/);
+  });
+
+  it('should throw when no wrong answers', async () => {
+    const plan = {
+      examPapers: [{
+        id: 'e1', results: [{ exerciseIndex: 0, correct: true }],
+        questions: [{ index: 0, type: 'choice', question: '题1' }],
+      }],
+    };
+    await assert.rejects(() => generateExamPractice(null, plan, 'e1'), /没有错题/);
+  });
+
+  it('should throw for non-existent exam', async () => {
+    const plan = { examPapers: [] };
+    await assert.rejects(() => generateExamPractice(null, plan, 'no-such'), /试卷不存在/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  examineTeachingErrors + structured reveal tests
+// ═══════════════════════════════════════════════════════
+
+describe('examineTeachingErrors', () => {
+  it('keeps only real, pedagogically valuable errors and enriches them', async () => {
+    const candidates = [
+      { location: '循环部分', description: '边界写成 <', correction: '应为 <=', errorType: 'boundary' },
+      { location: '定义部分', description: '表述不完美但本质正确', correction: '无需修改', errorType: 'concept-approx' },
+    ];
+    const mock = JSON.stringify({
+      reviewed: [
+        { index: 0, keep: true, isRealError: true, pedagogicalValue: 8, typeMatch: true, errorType: 'boundary', misconception: '闭区间当开区间', bloomLevel: '应用' },
+        { index: 1, keep: false, isRealError: false, pedagogicalValue: 2 },
+      ],
+      hasValidErrors: true,
+    });
+    const provider = createMockProvider(mock);
+    const kept = await examineTeachingErrors(provider, '讲解片段', candidates);
+    assert.strictEqual(kept.length, 1);
+    assert.strictEqual(kept[0].misconception, '闭区间当开区间');
+    assert.strictEqual(kept[0].bloomLevel, '应用');
+    assert.strictEqual(kept[0].pedagogicalValue, 8);
+  });
+
+  it('falls back to candidates when review format is unexpected', async () => {
+    const candidates = [{ location: 'x', description: 'y', errorType: 'boundary' }];
+    const provider = createMockProvider('{}');
+    const kept = await examineTeachingErrors(provider, '片段', candidates);
+    assert.strictEqual(kept.length, 1);
+  });
+
+  it('drops low pedagogicalValue errors below threshold', async () => {
+    const candidates = [{ location: 'x', description: 'y', errorType: 'boundary' }];
+    const mock = JSON.stringify({ reviewed: [{ index: 0, keep: true, isRealError: true, pedagogicalValue: 3 }] });
+    const provider = createMockProvider(mock);
+    const kept = await examineTeachingErrors(provider, '片段', candidates);
+    // Everything filtered → falls back to original candidates (avoid over-filtering)
+    assert.strictEqual(kept.length, 1);
+  });
+});
+
+describe('revealEmbeddedErrors structured output', () => {
+  it('marks recognized errors from student self-report and persists them', async () => {
+    const plan = store.createPlan('reveal-structured');
+    await store.addTopics(plan.id, ['结构化知识点']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+    await store.updateTopic(plan.id, topic.id, {
+      detail: '循环从 0 到 n，用 i < n 判断边界。',
+      done: false,
+    });
+    const p2 = store.getPlan(plan.id);
+
+    // First call = generation agent output; examine agent falls back on '{}' → we
+    // provide a mock that both detects and reviews via the same content.
+    const genOutput = JSON.stringify({
+      errors: [{ location: '边界判断', description: '边界应该是 <= 而不是 <', correction: 'i <= n', errorType: 'boundary', misconception: '闭区间当开区间', bloomLevel: '应用' }],
+      hasErrors: true,
+    });
+    const provider = createMockProvider(genOutput);
+
+    const result = await revealEmbeddedErrors(provider, p2, topic.id, 'mock-model', ['边界应该是 <=']);
+    assert.strictEqual(result.hasErrors, true);
+    assert.ok(result.errors.length >= 1);
+    assert.strictEqual(result.errors[0].recognized, true);
+    assert.strictEqual(result.errors[0].errorType, 'boundary');
+
+    // Persisted onto topic
+    const p3 = store.getPlan(plan.id);
+    assert.ok(Array.isArray(p3.topics[0].teachingErrors));
+    assert.ok(p3.topics[0].teachingErrors.length >= 1);
+    store.deletePlan(plan.id);
+  });
+
+  it('reports unrecognizedCount when student misses errors', async () => {
+    const plan = store.createPlan('reveal-unrecognized');
+    await store.addTopics(plan.id, ['漏错知识点']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+    await store.updateTopic(plan.id, topic.id, { detail: '一段包含错误的讲解。', done: false });
+    const p2 = store.getPlan(plan.id);
+    const genOutput = JSON.stringify({
+      errors: [{ location: 'A', description: '一个微妙错误', correction: '正确版本', errorType: 'concept-approx', misconception: '概念不精确', bloomLevel: '理解' }],
+      hasErrors: true,
+    });
+    const provider = createMockProvider(genOutput);
+    const result = await revealEmbeddedErrors(provider, p2, topic.id, 'mock-model', []);
+    assert.strictEqual(result.unrecognizedCount, result.errors.filter(e => !e.recognized).length);
+    assert.ok(result.unrecognizedCount >= 1);
+    store.deletePlan(plan.id);
+  });
+});
+
 

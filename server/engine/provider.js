@@ -570,6 +570,8 @@ export class Provider {
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 4096,
       };
+      if (opts.tools) requestOpts.tools = opts.tools;
+      if (opts.tool_choice) requestOpts.tool_choice = opts.tool_choice;
       if (opts.responseFormat && !responseFormatFailed) {
         requestOpts.response_format = opts.responseFormat;
       }
@@ -593,10 +595,12 @@ export class Provider {
         }
       }
 
+      const message = resp.choices[0]?.message;
       const usage = extractUsage(resp);
 
       return {
-        content: resp.choices[0]?.message?.content || '',
+        content: message?.content || '',
+        tool_calls: message?.tool_calls || null,
         usage,
         diagnostics: {
           prefixHash,
@@ -750,6 +754,127 @@ export class Provider {
     _diskCache.markSeen(prefixHash, this._model);
 
     return fullContent;
+  }
+
+  /**
+   * Streaming completion with tool calling support.
+   * Detects tool_call deltas mid-stream and accumulates them.
+   *
+   * Returns { content, tool_calls, usage } where tool_calls is null
+   * unless the model finishes with reason 'tool_calls'.
+   *
+   * Calls opts.onChunk(delta) for each content chunk during streaming
+   * and opts.onToolCall(tool_calls) when a complete tool call is detected.
+   */
+  async streamWithTools(messages, opts = {}) {
+    const prefixHash = computePrefixHash(this._model, messages);
+    let fullContent = '';
+    let finalUsage = null;
+    let toolCallsAccumulator = null;
+    let finishReason = null;
+
+    this._totalCalls++;
+
+    const readStream = async (stream) => {
+      for await (const chunk of stream) {
+        if (chunk.usage) {
+          finalUsage = chunk.usage;
+          continue;
+        }
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+
+        const delta = choice.delta;
+        // Accumulate content
+        if (delta?.content) {
+          fullContent += delta.content;
+          if (opts.onChunk) opts.onChunk(delta.content);
+        }
+        // Accumulate tool call deltas
+        if (delta?.tool_calls) {
+          for (const tcDelta of delta.tool_calls) {
+            if (!toolCallsAccumulator) toolCallsAccumulator = [];
+            const idx = tcDelta.index || 0;
+            if (!toolCallsAccumulator[idx]) {
+              toolCallsAccumulator[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+            }
+            if (tcDelta.id) toolCallsAccumulator[idx].id += tcDelta.id;
+            if (tcDelta.function?.name) toolCallsAccumulator[idx].function.name += tcDelta.function.name;
+            if (tcDelta.function?.arguments) toolCallsAccumulator[idx].function.arguments += tcDelta.function.arguments;
+          }
+        }
+        // Track finish reason
+        if (choice.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+      }
+    };
+
+    let streamOptionsFailed = false;
+
+    await retryWithBackoff(async () => {
+      const apiMessages = messages.map(m =>
+        m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
+      );
+      const requestOpts = {
+        model: this._model,
+        messages: apiMessages,
+        temperature: opts.temperature ?? 0.7,
+        max_tokens: opts.maxTokens ?? 8192,
+        stream: true,
+      };
+      if (opts.tools) requestOpts.tools = opts.tools;
+      if (opts.tool_choice) requestOpts.tool_choice = opts.tool_choice;
+      if (!streamOptionsFailed) {
+        requestOpts.stream_options = { include_usage: true };
+      }
+
+      try {
+        const stream = await this._client.chat.completions.create(requestOpts);
+        await readStream(stream);
+      } catch (err) {
+        if (!streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
+          console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
+          streamOptionsFailed = true;
+          const fallbackOpts = { ...requestOpts };
+          delete fallbackOpts.stream_options;
+          const fallbackStream = await this._client.chat.completions.create(fallbackOpts);
+          await readStream(fallbackStream);
+          return;
+        }
+        throw err;
+      }
+    });
+
+    const usage = extractUsage({ usage: finalUsage || {} });
+    const prefixChanged = this._lastPrefixHash && this._lastPrefixHash !== prefixHash;
+
+    if (prefixChanged) this._prefixChangeCount++;
+    this._lastPrefixHash = prefixHash;
+
+    this.diagnostics.totalCalls++;
+    this.diagnostics.totalCacheHitTokens += usage.cacheHitTokens;
+    this.diagnostics.totalCacheMissTokens += usage.cacheMissTokens;
+    if (prefixChanged) this.diagnostics.prefixChanges++;
+
+    if (this._debugCache) {
+      const pfx = prefixChanged ? '⚠️ PREFIX CHANGED' : '✅ CACHE FRIENDLY';
+      console.log(
+        '[provider] ' + pfx + ' | stream(tools) cache: ' + usage.cacheHitTokens + 'H/' +
+        usage.cacheMissTokens + 'M ' +
+        '(' + (usage.cacheHitRatio * 100).toFixed(1) + '%) | prefix: ' + shortId(prefixHash)
+      );
+    }
+
+    if (opts.onUsage) opts.onUsage(usage);
+
+    _diskCache.markSeen(prefixHash, this._model);
+
+    const toolCalls = (finishReason === 'tool_calls' && toolCallsAccumulator) ? toolCallsAccumulator : null;
+
+    if (toolCalls && opts.onToolCall) opts.onToolCall(toolCalls);
+
+    return { content: fullContent, tool_calls: toolCalls, usage };
   }
 
   /**

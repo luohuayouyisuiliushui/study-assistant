@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+// ReactMarkdown and remarkGfm imported for future use in node detail popups
+// import ReactMarkdown from 'react-markdown';
+// import remarkGfm from 'remark-gfm';
 import api from '../api';
 
 // Phase colors for Mermaid graph nodes
@@ -28,7 +29,7 @@ const FILTER_GROUPS = [
   { key: 'association', label: '关联关系',   types: ['related', 'extends', 'exampleOf', 'contrasts', 'references'] },
 ];
 
-export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGenerate }) {
+export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onSelectTopic, onGenerate: _onGenerate }) {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -219,7 +220,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       const nodeId = 'n' + n.id.replace(/-/g, '_');
       const label = n.title
         .replace(/"/g, '\u0027')
-        .replace(/[\[\]]/g, '')
+        .replace(/[[\]]/g, '')
         .substring(0, 30) + (n.title.length > 30 ? '...' : '');
       def += `    ${nodeId}["${label}"];\n`;
     }
@@ -228,7 +229,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     for (const phaseId of sortedPhaseIds) {
       const phaseNodes = nodesByPhase[phaseId];
       const phaseName = phaseNames[phaseId] || `阶段 ${phaseId}`;
-      const colorIdx = phaseIndex[phaseId] || 0;
+      const _colorIdx = phaseIndex[phaseId] || 0;
 
       def += `\n    subgraph sg_${phaseId}["${phaseName}"]\n`;
 
@@ -236,7 +237,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
         const nodeId = 'n' + n.id.replace(/-/g, '_');
         const label = n.title
           .replace(/"/g, '\u0027')
-          .replace(/[\[\]]/g, '')
+          .replace(/[[\]]/g, '')
           .substring(0, 30) + (n.title.length > 30 ? '...' : '');
         def += `        ${nodeId}["${label}"];\n`;
       }
@@ -277,7 +278,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
       const toId = 'n' + e.to.replace(/-/g, '_');
       const typeInfo = RELATION_TYPES[e.type] || RELATION_TYPES.related;
       const edgeLabel = typeInfo.label;
-      const isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
+      const _isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
 
       // Choose connector based on directionality and line style
       const isBidirectional = e.type === 'related' || e.type === 'contrasts' ||
@@ -297,7 +298,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic, onGe
     for (let i = 0; i < edges.length; i++) {
       const e = edges[i];
       const typeInfo = RELATION_TYPES[e.type] || RELATION_TYPES.related;
-      const isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
+      const _isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
       const dashPattern = typeInfo.style === 'dashed' ? '8,4' :
                           typeInfo.style === 'dotted' ? '4,4' : '0,0';
       // Use weight for stroke thickness (weight 0-1, default 0.5)

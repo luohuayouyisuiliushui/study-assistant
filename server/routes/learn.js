@@ -1,6 +1,6 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, streamInteractiveStart, streamInteractiveContinue, revealEmbeddedErrors, decomposeTopic, textToSpeech, generateExam, generateExamStream, gradeExam, generateExamPractice } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -54,9 +54,47 @@ router.get('/plans/:id', (req, res) => {
   res.json({ plan });
 });
 
-router.delete('/plans/:id', (req, res) => {
-  store.deletePlan(req.params.id);
+router.delete('/plans/:id', async (req, res) => {
+  await store.deletePlan(req.params.id);
   res.json({ success: true });
+});
+
+/**
+ * POST /api/learn/plans/batch-delete
+ * Permanently delete multiple plans by their IDs (skips trash).
+ * Body: { ids: ["id1", "id2", ...] }
+ */
+router.post('/plans/batch-delete', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: '请提供要删除的计划 ID 数组' });
+  }
+  store.deletePlansByIds(ids);
+  res.json({ success: true, deleted: ids.length });
+});
+
+/**
+ * POST /api/learn/plans/delete-test-data
+ * Permanently delete all test/automatically created plans (name contains 'test' or 'engine-test' etc.)
+ * Keeps only user-created plans with meaningful names.
+ */
+router.post('/plans/delete-test-data', (req, res) => {
+  const plans = store.listPlans();
+  const testPlanNames = [
+    'engine-test-plan', 'empty-topic-plan', 'empty-topics-test',
+    'time-edge-test', 'dup-edge', 'remove-nonexist', 'empty-graph',
+    'special-chars', 'reopen-test', 'pre-test', 'no-pre-test', 'graph-test',
+  ];
+  const toDelete = plans.filter(p => testPlanNames.includes(p.name)).map(p => p.id);
+
+  // Also clean up trash items with test names
+  const trashItems = store.listTrash();
+  const trashToDelete = trashItems.filter(t => testPlanNames.includes(t.name)).map(t => t.id);
+
+  const allIds = [...new Set([...toDelete, ...trashToDelete])];
+  store.deletePlansByIds(allIds);
+
+  res.json({ success: true, deleted: allIds.length });
 });
 
 // ─── Trash / Recycle Bin ───
@@ -423,6 +461,108 @@ router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => 
   }
 });
 
+/**
+ * POST /api/learn/plans/:planId/interactive-start-sse/:topicId
+ * SSE streaming version: start an interactive session and stream content.
+ * Body: { mode: 'stepwise'|'realtime' }
+ * Events: chunk, pause (tool_calls), done, error
+ */
+router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const mode = req.body?.mode || 'stepwise';
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge 或 scaffold' });
+  }
+
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
+
+    const timeout = setTimeout(() => {
+      try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
+    }, 120_000);
+
+    let aborted = false;
+    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+
+    const provider = getProvider(req);
+    const writeEvent = (event) => { if (aborted) return; try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; } };
+
+    await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
+      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
+      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
+      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session }),
+      onError: (err) => writeEvent({ type: 'error', data: err.message }),
+    });
+
+    clearTimeout(timeout);
+    if (!aborted) res.end();
+  } catch (err) {
+    console.error('[interactive-start-sse]', err);
+    if (!res.headersSent) return res.status(500).json({ error: err.message });
+    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/interactive-continue-sse/:topicId
+ * SSE streaming version: continue an interactive session.
+ * Body: { mode: 'stepwise'|'realtime', feedback: '...' }
+ * Events: chunk, pause (tool_calls), done, error
+ */
+router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const { mode, feedback } = req.body;
+  if (!mode || !feedback || !feedback.trim()) {
+    return res.status(400).json({ error: '请提供 mode 和 feedback 参数' });
+  }
+
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
+
+    const timeout = setTimeout(() => {
+      try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
+    }, 120_000);
+
+    let aborted = false;
+    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+
+    const provider = getProvider(req);
+    const writeEvent = (event) => { if (aborted) return; try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; } };
+
+    await streamInteractiveContinue(provider, plan, req.params.topicId, mode, feedback.trim(), {
+      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
+      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
+      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
+      onError: (err) => writeEvent({ type: 'error', data: err.message }),
+    });
+
+    clearTimeout(timeout);
+    if (!aborted) res.end();
+  } catch (err) {
+    console.error('[interactive-continue-sse]', err);
+    if (!res.headersSent) return res.status(500).json({ error: err.message });
+    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
+  }
+});
+
 // ═══════════════════════════════════════════════════════
 //  CHALLENGE: reveal embedded errors on completion
 // ═══════════════════════════════════════════════════════
@@ -437,7 +577,8 @@ router.post('/plans/:planId/reveal-errors/:topicId', async (req, res) => {
 
   try {
     const provider = getProvider(req);
-    const result = await revealEmbeddedErrors(provider, plan, req.params.topicId, provider.model);
+    const recognizedErrors = Array.isArray(req.body && req.body.recognizedErrors) ? req.body.recognizedErrors : [];
+    const result = await revealEmbeddedErrors(provider, plan, req.params.topicId, provider.model, recognizedErrors);
     res.json(result);
   } catch (err) {
     console.error('[reveal-errors]', err);
@@ -635,6 +776,154 @@ router.get('/plans/:planId/review-needs', (req, res) => {
   const needs = store.getTopicsNeedingReview(plan);
   res.json({ needs });
 });
+
+// ═══════════════════════════════════════════════════════
+//  EXAM PAPER ROUTES
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/exam/generate
+ * Generate an exam paper covering selected topics.
+ * Body: { topicIds: string[], config: { questionCount, choiceRatio } }
+ */
+router.post('/plans/:planId/exam/generate', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const { topicIds, config } = req.body;
+  if (!topicIds || !Array.isArray(topicIds) || topicIds.length === 0) {
+    return res.status(400).json({ error: '请选择至少一个知识点' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const exam = await generateExam(provider, plan, topicIds, config || {}, getModel(req));
+    res.json({ exam });
+  } catch (err) {
+    console.error('[exam/generate]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/exam/:examId/submit
+ * Submit exam answers for AI grading.
+ * Body: { answers: [{ exerciseIndex, userAnswer }] }
+ */
+router.post('/plans/:planId/exam/:examId/submit', async (req, res) => {
+  const { answers } = req.body;
+  if (!answers || !Array.isArray(answers) || answers.length === 0) {
+    return res.status(400).json({ error: '请提供试卷答案' });
+  }
+
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const results = await gradeExam(provider, plan, req.params.examId, answers);
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/exam/generate-stream
+ * Generate exam with SSE streaming (questions arrive progressively).
+ * Body: { topicIds: string[], config: { questionCount, choiceRatio } }
+ */
+router.post('/plans/:planId/exam/generate-stream', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  const { topicIds, config } = req.body;
+  if (!topicIds || !Array.isArray(topicIds) || topicIds.length === 0) {
+    return res.status(400).json({ error: '请选择至少一个知识点' });
+  }
+  if (topicIds.length > 50) {
+    return res.status(400).json({ error: '一次性最多选择50个知识点' });
+  }
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    
+    // Connection keepalive: send initial event
+    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
+
+    // Timeout protection: abort after 120 seconds
+    const timeout = setTimeout(() => {
+      try {
+        res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时，请重试' }) + '\n\n');
+        res.end();
+      } catch {}
+    }, 120_000);
+
+    // Client disconnect cleanup
+    let aborted = false;
+    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+
+    const provider = getProvider(req);
+    const writeEvent = (event) => {
+      if (aborted) return;
+      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
+    };
+    await generateExamStream(provider, plan, topicIds, config || {}, writeEvent, getModel(req));
+    clearTimeout(timeout);
+    if (!aborted) res.end();
+  } catch (err) {
+    console.error('[exam/generate-stream]', err);
+    if (!res.headersSent) return res.status(500).json({ error: err.message });
+    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
+  }
+});
+
+
+/**
+ * GET /api/learn/plans/:planId/exams
+ * List all saved exam papers.
+ */
+router.get('/plans/:planId/exams', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const exams = store.getExamPapers(req.params.planId);
+  res.json({ exams });
+});
+
+/**
+ * DELETE /api/learn/plans/:planId/exam/:examId
+ * Delete a saved exam paper.
+ */
+router.delete('/plans/:planId/exam/:examId', (req, res) => {
+  try {
+    store.deleteExamPaper(req.params.planId, req.params.examId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/exam/:examId/practice
+ * Generate targeted practice questions based on exam mistakes.
+ * Body: { count: number }
+ */
+router.post('/plans/:planId/exam/:examId/practice', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const count = req.body?.count || 5;
+  try {
+    const provider = getProvider(req);
+    const questions = await generateExamPractice(provider, plan, req.params.examId, count, getModel(req));
+    res.json({ questions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 /**
  * GET /api/learn/cache-diagnostics

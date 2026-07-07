@@ -431,16 +431,16 @@ describe('learn-store', () => {
       assert.strictEqual(after.find(t => t.id === plan.id), undefined);
     });
 
-    it('should flag hasData for plans with learning content', () => {
+    it('should flag hasData for plans with learning content', async () => {
       const plan = store.createPlan('trash-test-4');
       createdPlanIds.push(plan.id);
-      store.addTopics(plan.id, ['知识点A']);
+      await store.addTopics(plan.id, ['知识点A']);
       const fresh = store.getPlan(plan.id);
       const tid = fresh.topics[0].id;
-      store.updateTopic(plan.id, tid, { detail: '这是一个讲解内容' });
-      store.addHistory(plan.id, tid, 'user', '一个提问');
-      store.addHistory(plan.id, tid, 'ai', '一个回答');
-      store.deletePlan(plan.id);
+      await store.updateTopic(plan.id, tid, { detail: '这是一个讲解内容' });
+      await store.addHistory(plan.id, tid, 'user', '一个提问');
+      await store.addHistory(plan.id, tid, 'ai', '一个回答');
+      await store.deletePlan(plan.id);
       const trash = store.listTrash();
       const entry = trash.find(t => t.id === plan.id);
       assert.ok(entry, 'plan should be in trash');
@@ -576,6 +576,88 @@ describe('learn-store', () => {
       const needs = store.getTopicsNeedingReview(plan);
       assert.strictEqual(needs.length, 0);
     });
+
+    it('should flag topics with exam paper errors', () => {
+      const plan = {
+        topics: [
+          { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [] },
+          { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [] },
+        ],
+        examPapers: [
+          { id: 'exam1', title: '测试', config: {}, paper: '', questions: [
+            { id: 'q1', index: 0, type: 'choice', question: '题1', options: ['A', 'B'], answer: 'A', explanation: '', conceptTag: '', topicId: 't1', difficulty: 'easy' },
+          ], results: [
+            { exerciseIndex: 0, correct: false, userAnswer: 'B', correctAnswer: 'A', explanation: '选A' },
+          ], gradedAt: Date.now() },
+        ],
+      };
+      const needs = store.getTopicsNeedingReview(plan);
+      assert.strictEqual(needs.length, 1);
+      assert.strictEqual(needs[0].title, '主题1');
+      assert.strictEqual(needs[0].hasExamErrors, true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════
+  //  EXAM PAPER STORE
+  // ═══════════════════════════════════════════════════════
+
+  describe('examPapers', () => {
+    it('should add and retrieve exam papers', () => {
+      const plan = store.createPlan('exam-store-test');
+      _testPlanIds.push(plan.id);
+
+      const exam = { id: 'ex1', title: '第1章测验', config: { topicIds: ['t1'], questionCount: 5, choiceRatio: 0.6 }, paper: '# 试卷', questions: [] };
+      store.addExamPaper(plan.id, exam);
+
+      const papers = store.getExamPapers(plan.id);
+      assert.strictEqual(papers.length, 1);
+      assert.strictEqual(papers[0].title, '第1章测验');
+      assert.strictEqual(papers[0].results, null);
+      assert.ok(papers[0].createdAt > 0);
+
+      // Add another
+      store.addExamPaper(plan.id, { id: 'ex2', title: '第2章测验', config: { topicIds: ['t2'], questionCount: 3, choiceRatio: 0.5 }, paper: '# 试卷2', questions: [] });
+      assert.strictEqual(store.getExamPapers(plan.id).length, 2);
+    });
+
+    it('should update exam results after grading', () => {
+      const plan = store.createPlan('exam-grade-test');
+      _testPlanIds.push(plan.id);
+
+      store.addExamPaper(plan.id, { id: 'ex-grade', title: '批改测试', config: {}, paper: '', questions: [
+        { id: 'q1', index: 0, type: 'choice', question: '题1', options: ['A', 'B'], answer: 'A', explanation: '', conceptTag: '', topicId: null, difficulty: 'easy' },
+      ]});
+
+      const results = [{ exerciseIndex: 0, correct: true, userAnswer: 'A', correctAnswer: 'A', explanation: '正确' }];
+      store.updateExamResults(plan.id, 'ex-grade', results);
+
+      const papers = store.getExamPapers(plan.id);
+      assert.strictEqual(papers[0].results.length, 1);
+      assert.strictEqual(papers[0].results[0].correct, true);
+      assert.ok(papers[0].gradedAt > 0);
+    });
+
+    it('should delete exam papers', () => {
+      const plan = store.createPlan('exam-del-test');
+      _testPlanIds.push(plan.id);
+
+      store.addExamPaper(plan.id, { id: 'ex-del', title: '待删除', config: {}, paper: '', questions: [] });
+      assert.strictEqual(store.getExamPapers(plan.id).length, 1);
+
+      store.deleteExamPaper(plan.id, 'ex-del');
+      assert.strictEqual(store.getExamPapers(plan.id).length, 0);
+    });
+
+    it('should throw for non-existent plan', () => {
+      assert.throws(() => store.addExamPaper('bad-id', { id: 'x', title: 'x', config: {}, paper: '', questions: [] }), /计划不存在/);
+    });
+
+    it('should throw for non-existent exam on update', () => {
+      const plan = store.createPlan('exam-null-test');
+      _testPlanIds.push(plan.id);
+      assert.throws(() => store.updateExamResults(plan.id, 'no-such-exam', []), /没有试卷/);
+    });
   });
 });
 
@@ -643,5 +725,42 @@ describe('Edge cases', () => {
     assert.ok(result);
     assert.strictEqual(result.topics.length, 0);
   });
+
+  describe('recordTeachingErrors', () => {
+    it('should persist teaching errors onto the topic', async () => {
+      const plan = store.createPlan('teaching-errors-plan');
+      createdPlanIds.push(plan.id);
+      await store.addTopics(plan.id, ['误区知识点']);
+      const p = store.getPlan(plan.id);
+      const topic = p.topics[0];
+      const errors = [
+        { location: '循环', description: '边界写错', correction: '<=', errorType: 'boundary', misconception: '闭区间当开区间', bloomLevel: '应用', recognized: false },
+      ];
+      await store.recordTeachingErrors(plan.id, topic.id, errors);
+      const p2 = store.getPlan(plan.id);
+      assert.ok(Array.isArray(p2.topics[0].teachingErrors));
+      assert.strictEqual(p2.topics[0].teachingErrors.length, 1);
+      assert.strictEqual(p2.topics[0].teachingErrors[0].errorType, 'boundary');
+      assert.strictEqual(p2.topics[0].teachingErrors[0].recognized, false);
+      assert.ok(p2.topics[0].teachingErrorsUpdatedAt > 0);
+    });
+
+    it('should normalize non-array input to empty array', async () => {
+      const plan = store.createPlan('teaching-errors-empty');
+      createdPlanIds.push(plan.id);
+      await store.addTopics(plan.id, ['空误区']);
+      const p = store.getPlan(plan.id);
+      await store.recordTeachingErrors(plan.id, p.topics[0].id, null);
+      const p2 = store.getPlan(plan.id);
+      assert.deepStrictEqual(p2.topics[0].teachingErrors, []);
+    });
+
+    it('should throw for non-existent topic', async () => {
+      const plan = store.createPlan('teaching-errors-notopic');
+      createdPlanIds.push(plan.id);
+      await assert.rejects(() => store.recordTeachingErrors(plan.id, 'no-such', []), /Topic not found/);
+    });
+  });
+
 });
 

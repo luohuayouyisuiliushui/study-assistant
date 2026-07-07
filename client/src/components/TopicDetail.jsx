@@ -1,9 +1,21 @@
-import { useState, useEffect, useRef, memo } from 'react';
+﻿import { useState, useEffect, useRef, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import MermaidDiagram from './MermaidDiagram';
 import api from '../api';
+
+// 教学错误类型编码 → 中文标签（与后端 MISCONCEPTION_TAXONOMY 保持一致）
+const ERROR_TYPE_LABELS = {
+  boundary: '边界条件偏差',
+  'concept-approx': '概念近似但不精确',
+  'concept-confusion': '概念混淆',
+  'causal-fallacy': '因果谬误',
+  overgeneralization: '过度概括',
+  'code-bug': '代码错误',
+  'symbol-slip': '符号/计算错误',
+  procedural: '步骤缺失/顺序错误',
+};
 
 // Custom component map for ReactMarkdown — handles Mermaid diagrams
 const markdownComponents = {
@@ -83,7 +95,7 @@ function parseExercisesFromMarkdown(detail) {
       current = { index: parseInt(m[1]), type: m[2] === '选择题' ? 'choice' : 'open', question: '', options: [], answer: '', explanation: '', conceptTag: '', userAnswer: null, correct: null };
       // Find closing paren (ASCII or full-width) to extract question text
       const parenEnd = t.search(/[)）]/);
-      if (parenEnd >= 0 && parenEnd + 1 < t.length) current.question = t.slice(parenEnd + 1).replace(/^[）\)\s]*/, '').trim();
+      if (parenEnd >= 0 && parenEnd + 1 < t.length) current.question = t.slice(parenEnd + 1).replace(/^[）)]\s*/, '').trim();
       continue;
     }
     if (!current) continue;
@@ -120,6 +132,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [hoveredRound, setHoveredRound] = useState(null);
   const [revealErrors, setRevealErrors] = useState(null); // null | { hasErrors, errors }
   const [revealLoading, setRevealLoading] = useState(false);
+  const [foundErrorsInput, setFoundErrorsInput] = useState('');
   const lastReportedRef = useRef(0);
   const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
 
@@ -139,10 +152,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   // ─── Interactive Mode State ───
   const [interactiveMode, setInteractiveMode] = useState(null); // null | 'stepwise' | 'realtime'
   const [interactiveSections, setInteractiveSections] = useState([]);
+  const [streamingContent, setStreamingContent] = useState(''); // progressive SSE content
   const [interactiveLoading, setInteractiveLoading] = useState(false);
   const [interactiveFinished, setInteractiveFinished] = useState(false);
   const [interactiveInput, setInteractiveInput] = useState('');
-  const [interactiveStateMachine, setInteractiveStateMachine] = useState(null); // { currentStep, totalSteps, steps }
+  const [interactiveStateMachine, setInteractiveStateMachine] = useState(null);
   const interactiveInputRef = useRef(null);
   const interactiveBusyRef = useRef(false);
 
@@ -564,7 +578,8 @@ ${bodyHtml}
     // First check for embedded errors (challenge mode — always on)
     setRevealLoading(true);
     try {
-      const result = await api.revealErrors(plan.id, topic.id);
+      const recognized = foundErrorsInput.split(/[\n;；,，]+/).map(s => s.trim()).filter(Boolean);
+      const result = await api.revealErrors(plan.id, topic.id, recognized);
       if (result.hasErrors && result.errors?.length > 0) {
         setRevealErrors(result);
         setRevealLoading(false);
@@ -664,14 +679,38 @@ ${bodyHtml}
     interactiveBusyRef.current = true;
     setInteractiveMode(mode);
     setInteractiveSections([]);
+    setStreamingContent('');
     setInteractiveFinished(false);
     setInteractiveLoading(true);
     try {
-      const result = await api.startInteractive(plan.id, topic.id, mode);
-      setInteractiveSections([{ content: result.content }]);
-      if (result.session?.stateMachine) {
-        setInteractiveStateMachine(result.session.stateMachine);
-      }
+      let fullContent = '';
+      let sessionData = null;
+      await api.startInteractiveSSE(plan.id, topic.id, mode, (event) => {
+        if (event.type === 'chunk') {
+          fullContent += event.content;
+          setStreamingContent(fullContent); // progressive typewriter effect
+        } else if (event.type === 'pause') {
+          // Section complete — push to sections, clear streaming
+          setInteractiveSections(prev => [...prev, { content: fullContent }]);
+          setStreamingContent('');
+          fullContent = '';
+        } else if (event.type === 'done') {
+          if (fullContent && !sessionData) {
+            // No pause happened — push as single section
+            setInteractiveSections(prev => [...prev, { content: fullContent }]);
+          }
+          setStreamingContent('');
+          sessionData = event.session;
+          if (event.session?.stateMachine) {
+            setInteractiveStateMachine(event.session.stateMachine);
+          }
+          if (event.finished) {
+            setInteractiveFinished(true);
+          }
+        } else if (event.type === 'error') {
+          setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]);
+        }
+      });
     } catch (err) {
       setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]);
     } finally {
@@ -696,15 +735,35 @@ ${bodyHtml}
     interactiveBusyRef.current = true;
     setInteractiveLoading(true);
     setInteractiveInput('');
+    setStreamingContent('');
     try {
-      const result = await api.continueInteractive(plan.id, topic.id, interactiveMode, feedback);
-      setInteractiveSections(prev => [...prev, { content: result.content }]);
-      if (result.session?.stateMachine) {
-        setInteractiveStateMachine(result.session.stateMachine);
-      }
-      if (result.finished) {
-        setInteractiveFinished(true);
-      }
+      let fullContent = '';
+      await api.continueInteractiveSSE(plan.id, topic.id, interactiveMode, feedback, (event) => {
+        if (event.type === 'chunk') {
+          fullContent += event.content;
+          setStreamingContent(fullContent);
+        } else if (event.type === 'pause') {
+          setInteractiveSections(prev => [...prev, { content: fullContent }]);
+          setStreamingContent('');
+          fullContent = '';
+          if (event.session?.stateMachine) {
+            setInteractiveStateMachine(event.session.stateMachine);
+          }
+        } else if (event.type === 'done') {
+          if (fullContent) {
+            setInteractiveSections(prev => [...prev, { content: fullContent }]);
+          }
+          setStreamingContent('');
+          if (event.session?.stateMachine) {
+            setInteractiveStateMachine(event.session.stateMachine);
+          }
+          if (event.finished) {
+            setInteractiveFinished(true);
+          }
+        } else if (event.type === 'error') {
+          setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]);
+        }
+      });
     } catch (err) {
       setInteractiveSections(prev => [...prev, { content: '❌ 响应失败: ' + err.message }]);
     } finally {
@@ -897,13 +956,21 @@ ${bodyHtml}
                 你没发现的错误有：
               </p>
               {revealErrors.errors.map((err, i) => (
-                <div key={i} className="reveal-error-item">
-                  <div className="reveal-error-location">📍 {err.location || '位置未知'}</div>
-                  <div className="reveal-error-desc">{err.description}</div>
-                  <div className="reveal-error-correction">
-                    ✅ 正确版本：{err.correction}
+                <div key={i} className={"reveal-error-item" + (err.recognized ? " reveal-error-recognized" : "")}>
+                  <div className="reveal-error-location">
+                    {err.recognized ? "✅ 你发现了：" : "📍 "}{err.location || "位置未知"}
                   </div>
-                  {err.type && <span className="reveal-error-type">{err.type}</span>}
+                  <div className="reveal-error-desc">{err.description}</div>
+                  <div className="reveal-error-correction">✅ 正确版本：{err.correction}</div>
+                  {err.misconception && (
+                    <div className="reveal-error-misconception">🧠 针对的误区：{err.misconception}</div>
+                  )}
+                  <div className="reveal-error-tags">
+                    {(err.errorType || err.type) && (
+                      <span className="reveal-error-type">{ERROR_TYPE_LABELS[err.errorType] || err.errorType || err.type}</span>
+                    )}
+                    {err.bloomLevel && <span className="reveal-error-bloom">认知层次：{err.bloomLevel}</span>}
+                  </div>
                 </div>
               ))}
               <button className="btn btn-primary" onClick={handleDismissReveal} style={{ marginTop: '16px', width: '100%' }}>
@@ -938,19 +1005,13 @@ ${bodyHtml}
               {interactiveFinished && <span className="interactive-finished-badge">✅ 讲解完成</span>}
             </div>
 
-            {/* State machine progress bar for stepwise mode */}
+            {/* Dynamic progress counter for stepwise mode */}
             {interactiveMode === 'stepwise' && interactiveStateMachine && (
               <div className="sm-progress-bar">
-                {interactiveStateMachine.steps.map((step, i) => (
-                  <div key={i} className="sm-step-chip" data-status={step.status}>
-                    {step.status === 'completed' && '✅ '}
-                    {step.status === 'active' && '▶️ '}
-                    {step.status === 'pending' && '⏳ '}
-                    {step.name}
-                  </div>
-                ))}
                 <div className="sm-progress-text">
-                  第 {interactiveStateMachine.currentStep + 1}/{interactiveStateMachine.totalSteps} 步
+                  {interactiveStateMachine.completedSteps > 0
+                    ? `✅ 已完成 ${interactiveStateMachine.completedSteps} 部分`
+                    : '📖 第 1 部分'}
                 </div>
               </div>
             )}
@@ -964,10 +1025,18 @@ ${bodyHtml}
               ))}
             </div>
 
+            {/* Live streaming content (typewriter effect) */}
+            {streamingContent && (
+              <div className="interactive-section streaming-section">
+                <div className="interactive-section-number">⏳ 正在生成...</div>
+                <ContentArea content={streamingContent} />
+              </div>
+            )}
+
             {interactiveLoading && (
               <div className="interactive-loading">
                 <div className="spinner-sm" />
-                <span>导师正在回应你的反馈...</span>
+                <span>{streamingContent ? '正在生成内容...' : '导师正在思考...'}</span>
               </div>
             )}
 
@@ -1239,6 +1308,20 @@ ${bodyHtml}
               </div>
             )}
 
+            {/* Self-report: which errors did you catch? (feeds challenge-mode recognition) */}
+            <div className="found-errors-box">
+              <label className="found-errors-label" htmlFor="found-errors-input">
+                🔎 你在讲解中发现了哪些错误？（选填，每行一条，点“学完了”后会核对）
+              </label>
+              <textarea
+                id="found-errors-input"
+                className="found-errors-input"
+                rows={2}
+                placeholder="例如：边界条件应该是 <= 而不是 <"
+                value={foundErrorsInput}
+                onChange={(e) => setFoundErrorsInput(e.target.value)}
+              />
+            </div>
             {/* Mark complete & go back */}
             <div className="topic-complete-bar">
               <button className="btn-complete" onClick={handleComplete} disabled={revealLoading} title="标记为已学完并返回列表">
