@@ -25,10 +25,12 @@ const PLANS_INDEX = path.join(DATA, 'plans.json');
 const TRASH_DIR = path.join(DATA, 'trash');
 const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
 const TRASH_TTL_DAYS = 30;
+const BACKUP_DIR = path.join(DATA, '.backups-v2');
 
 function ensureDir() {
   fs.mkdirSync(path.join(DATA, 'plans'), { recursive: true });
   fs.mkdirSync(TRASH_DIR, { recursive: true });
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 ensureDir();
 
@@ -38,14 +40,25 @@ function writeAtomic(filePath, data, { backup } = {}) {
   const tmp = filePath + '.tmp.' + process.pid;
   fs.writeFileSync(tmp, data, 'utf-8');
   fs.renameSync(tmp, filePath);
-  // 写入成功后备份（study-trace 模式：损坏可恢复）
   if (backup) {
+    // 1. 同目录 .bak（快速恢复）
     const bakPath = filePath + '.bak';
     try {
       if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
       fs.copyFileSync(filePath, bakPath);
     } catch (bakErr) {
-      console.warn(`[learn-store] Backup write failed: ${bakPath}`, bakErr.message);
+      console.warn(`[learn-store] .bak backup failed: ${bakPath}`, bakErr.message);
+    }
+    // 2. 独立备份目录 .backups-v2/（防止主目录误清）
+    try {
+      const planId = path.basename(filePath, '.json');
+      if (planId && planId.length > 0) {
+        const backupFile = path.join(BACKUP_DIR, planId + '.json');
+        if (fs.existsSync(backupFile)) fs.unlinkSync(backupFile);
+        fs.copyFileSync(filePath, backupFile);
+      }
+    } catch (v2Err) {
+      console.warn(`[learn-store] .backups-v2 backup failed: ${filePath}`, v2Err.message);
     }
   }
 }
@@ -90,18 +103,30 @@ function readJSON(filePath) {
     }
   } catch (err) {
     console.warn(`[learn-store] JSON parse error: ${filePath}`, err.message);
-    // 尝试从备份恢复（study-trace 模式：损坏自动恢复）
+    // 尝试从 .bak 恢复
     const bakPath = filePath + '.bak';
     if (fs.existsSync(bakPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(bakPath, 'utf-8'));
-        console.warn(`[learn-store] Recovered from backup: ${bakPath}`);
-        // 自动修复损坏的文件
+        console.warn(`[learn-store] Recovered from .bak: ${bakPath}`);
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
         return data;
       } catch (bakErr) {
-        console.warn(`[learn-store] Backup also corrupt: ${bakPath}`, bakErr.message);
+        console.warn(`[learn-store] .bak also corrupt: ${bakPath}`, bakErr.message);
       }
+    }
+    // 尝试从独立备份目录 .backups-v2/ 恢复
+    try {
+      const planId = path.basename(filePath, '.json');
+      const v2File = path.join(BACKUP_DIR, planId + '.json');
+      if (fs.existsSync(v2File)) {
+        const data = JSON.parse(fs.readFileSync(v2File, 'utf-8'));
+        console.warn(`[learn-store] Recovered from .backups-v2: ${v2File}`);
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+        return data;
+      }
+    } catch (v2Err) {
+      console.warn(`[learn-store] .backups-v2 recovery failed: ${filePath}`, v2Err.message);
     }
     return null;
   }
