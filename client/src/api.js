@@ -213,6 +213,13 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
   },
 
+  // ─── Quick Quiz ───
+  async generateQuickQuiz(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/quick-quiz`, {
+      method: 'POST',
+    }, true);
+  },
+
   // ─── Connection Test ───
   async testConnection(apiKey, baseURL, model) {
     return request(`${API_BASE}/learn/test-connection`, {

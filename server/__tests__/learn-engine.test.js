@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -977,6 +977,90 @@ describe('Interactive mode - edge cases', () => {
     assert.ok(result.content, 'should return next content');
     assert.strictEqual(result.session.mode, 'scaffold');
     assert.strictEqual(result.session.transcript.length, 3);
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Feynman mode tests
+// ═══════════════════════════════════════════════════════
+
+describe('Feynman mode', () => {
+  it('startInteractiveDetail should support feynman mode', async () => {
+    const plan = store.createPlan('feynman-test');
+    await store.addTopics(plan.id, ['费曼测试']);
+    const p = store.getPlan(plan.id);
+    const provider = createStreamMockProvider('好的，我准备好了！请你开始讲解吧。');
+    const result = await startInteractiveDetail(provider, p, p.topics[0].id, 'feynman');
+    assert.strictEqual(result.session.mode, 'feynman');
+    assert.ok(result.content, 'should return welcome content');
+    assert.strictEqual(result.session.finished, false);
+    store.deletePlan(plan.id);
+  });
+
+  it('continueInteractiveDetail should work with feynman mode', async () => {
+    const plan = store.createPlan('feynman-continue');
+    await store.addTopics(plan.id, ['费曼继续测试']);
+    const p = store.getPlan(plan.id);
+    const provider1 = createStreamMockProvider('好的，请开始讲解「费曼继续测试」。');
+    const r1 = await startInteractiveDetail(provider1, p, p.topics[0].id, 'feynman');
+    assert.strictEqual(r1.session.mode, 'feynman');
+
+    const provider2 = createStreamMockProvider('能给我举个具体的例子吗？');
+    const r2 = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'feynman', '变量就是存储数据的容器');
+    assert.ok(r2.content, 'should return follow-up question');
+    assert.strictEqual(r2.session.transcript.length, 3);
+    assert.strictEqual(r2.session.mode, 'feynman');
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  generateQuickQuiz tests
+// ═══════════════════════════════════════════════════════
+
+describe('generateQuickQuiz', () => {
+  it('should generate quiz questions from plan topics', async () => {
+    const mockResult = {
+      questions: [
+        { topicTitle: '变量', type: 'choice', question: '1+1=?', options: ['1', '2', '3'], answer: '2', explanation: '1+1=2' },
+        { topicTitle: '函数', type: 'open', question: '什么是函数？', answer: '函数是可复用的代码块', explanation: '基本概念' },
+      ],
+    };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+    const plan = store.createPlan('quiz-test');
+    await store.addTopics(plan.id, ['变量', '函数', '循环']);
+    const p = store.getPlan(plan.id);
+    // Mark two as done with detail
+    await store.updateTopic(plan.id, p.topics[0].id, { detail: '变量讲解内容', done: true });
+    await store.updateTopic(plan.id, p.topics[1].id, { detail: '函数讲解内容', done: true });
+    const p2 = store.getPlan(plan.id);
+
+    const result = await generateQuickQuiz(provider, p2, 'mock-model');
+    assert.ok(result, 'should return result');
+    assert.ok(Array.isArray(result.questions), 'questions should be an array');
+    assert.strictEqual(result.topicCount, 2, 'should count topics');
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle empty plan gracefully', async () => {
+    const provider = createMockProvider('{}');
+    const plan = store.createPlan('quiz-empty');
+    const p = store.getPlan(plan.id);
+    const result = await generateQuickQuiz(provider, p, 'mock-model');
+    assert.ok(Array.isArray(result.questions));
+    assert.strictEqual(result.questions.length, 0);
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle malformed AI response gracefully', async () => {
+    const provider = createMockProvider('不是JSON');
+    const plan = store.createPlan('quiz-malformed');
+    await store.addTopics(plan.id, ['测试']);
+    const p = store.getPlan(plan.id);
+    const result = await generateQuickQuiz(provider, p, 'mock-model');
+    assert.ok(Array.isArray(result.questions));
+    assert.strictEqual(result.questions.length, 0);
     store.deletePlan(plan.id);
   });
 });

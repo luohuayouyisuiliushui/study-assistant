@@ -20,6 +20,10 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const [mindMapOpen, setMindMapOpen] = useState(false);
   const [decomposingId, setDecomposingId] = useState(null);
   const [expandedTopics, setExpandedTopics] = useState({});
+  const [quizOpen, setQuizOpen] = useState(false);
+  const [quizData, setQuizData] = useState(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizAnswers, setQuizAnswers] = useState({});
 
   // Toggle expand/collapse for a parent topic
   const toggleExpand = (topicId) => {
@@ -93,6 +97,35 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     a.download = `学习分析报告-${plan.name}.md`.replace(/[/\\?%*:|"<>]/g, '_');
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // ─── Quick Quiz ───
+  const handleQuickQuiz = async () => {
+    if (quizData) {
+      setQuizOpen(!quizOpen);
+      return;
+    }
+    setQuizLoading(true);
+    setQuizOpen(true);
+    try {
+      const d = await api.generateQuickQuiz(plan.id);
+      setQuizData(d);
+      setQuizAnswers({});
+    } catch (err) {
+      alert('测验生成失败: ' + err.message);
+      setQuizOpen(false);
+    } finally {
+      setQuizLoading(false);
+    }
+  };
+
+  const handleQuizAnswer = (qIdx, answer) => {
+    setQuizAnswers(prev => ({ ...prev, [qIdx]: answer }));
+  };
+
+  const handleQuizReveal = (qIdx) => {
+    if (!quizData?.questions?.[qIdx]) return;
+    setQuizAnswers(prev => ({ ...prev, [qIdx]: quizData.questions[qIdx].answer }));
   };
 
   const handleAdd = () => {
@@ -275,6 +308,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           <button className="btn btn-sm" onClick={() => setMindMapOpen(true)} title="思维导图">
             🧠 思维导图
           </button>
+          <button className="btn btn-sm" onClick={handleQuickQuiz} disabled={quizLoading}>
+            {quizLoading ? '⏳' : '📝'} 快速测验
+          </button>
         </div>
       </div>
 
@@ -350,6 +386,64 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Quick Quiz Panel */}
+      {quizOpen && (
+        <div className="core-panel" style={{borderColor: '#a78bfa', background: '#f5f3ff'}}>
+          <div className="analysis-header" style={{background: '#ede9fe', color: '#6d28d9'}}>
+            <span>📝 快速测验</span>
+            <div className="analysis-header-actions">
+              {quizData && <button className="btn-tiny" onClick={() => { setQuizData(null); handleQuickQuiz(); }} title="重新出题">🔄</button>}
+              <button className="btn-tiny" onClick={() => setQuizOpen(false)}>✕</button>
+            </div>
+          </div>
+          <div className="core-body">
+            {quizLoading ? (
+              <div className="analysis-loading">
+                <div className="spinner-sm" />
+                <span>AI 正在出题...</span>
+              </div>
+            ) : quizData?.questions?.length > 0 ? (
+              quizData.questions.map((q, i) => (
+                <div key={i} className="quiz-question">
+                  <div className="quiz-question-header">
+                    <span className="quiz-q-number">第{i + 1}题</span>
+                    <span className="quiz-q-tag">{q.type === 'choice' ? '选择题' : '简答题'}</span>
+                    <span className="quiz-q-topic">{q.topicTitle}</span>
+                  </div>
+                  <div className="quiz-q-text">{q.question}</div>
+                  {q.type === 'choice' && q.options && (
+                    <div className="quiz-options">
+                      {q.options.map((opt, j) => (
+                        <div key={j} className={'quiz-option' + (quizAnswers[i] === opt ? ' selected' : '')} onClick={() => handleQuizAnswer(i, opt)}>
+                          {opt}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === 'open' && (
+                    <div className="quiz-open-answer">
+                      <textarea rows={2} placeholder="输入你的答案..." value={quizAnswers[i] || ''} onChange={e => handleQuizAnswer(i, e.target.value)} />
+                    </div>
+                  )}
+                  {quizAnswers[i] && (
+                    <div className="quiz-answer-reveal">
+                      <div className="quiz-answer-label">参考答案：</div>
+                      <div className="quiz-answer-text">{q.answer}</div>
+                      {q.explanation && <div className="quiz-explanation">💡 {q.explanation}</div>}
+                    </div>
+                  )}
+                  {!quizAnswers[i] && (
+                    <button className="btn-tiny quiz-reveal-btn" onClick={() => handleQuizReveal(i)}>查看答案</button>
+                  )}
+                </div>
+              ))
+            ) : (
+              <p className="analysis-error">{quizData?.message || '暂无数据'}</p>
+            )}
+          </div>
         </div>
       )}
 

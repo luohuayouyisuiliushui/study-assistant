@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -382,8 +382,8 @@ router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
   const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge 或 scaffold' });
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold 或 feynman' });
   }
 
   try {
@@ -621,6 +621,24 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
     res.json({ weakPoints: results });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/quick-quiz
+ * Generate a lightweight quick quiz from random topics.
+ */
+router.post('/plans/:planId/quick-quiz', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const result = await generateQuickQuiz(provider, plan, getModel(req));
+    res.json(result);
+  } catch (err) {
+    console.error('[quick-quiz]', err);
+    res.status(500).json({ error: '测验生成失败: ' + (err.message || err) });
   }
 });
 
