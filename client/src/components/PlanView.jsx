@@ -20,6 +20,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const [mindMapOpen, setMindMapOpen] = useState(false);
   const [decomposingId, setDecomposingId] = useState(null);
   const [expandedTopics, setExpandedTopics] = useState({});
+  const [coreOpen, setCoreOpen] = useState(false);
+  const [coreData, setCoreData] = useState(null);
+  const [coreLoading, setCoreLoading] = useState(false);
 
   // Toggle expand/collapse for a parent topic
   const toggleExpand = (topicId) => {
@@ -50,6 +53,25 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
       setAnalysisData({ analysis: '❌ 分析失败: ' + err.message });
     } finally {
       setAnalysisLoading(false);
+    }
+  };
+
+  const handleCoreAnalysis = async () => {
+    if (coreData) {
+      setCoreOpen(!coreOpen);
+      return;
+    }
+    setCoreLoading(true);
+    setCoreOpen(true);
+    try {
+      const d = await api.getCoreTopics(plan.id);
+      setCoreData(d);
+    } catch (err) {
+      setCoreData(null);
+      setCoreOpen(false);
+      alert('核心20%分析失败: ' + err.message);
+    } finally {
+      setCoreLoading(false);
     }
   };
 
@@ -275,8 +297,53 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
           <button className="btn btn-sm" onClick={() => setMindMapOpen(true)} title="思维导图">
             🧠 思维导图
           </button>
+          <button className="btn btn-sm" onClick={handleCoreAnalysis} disabled={coreLoading}>
+            {coreLoading ? '⏳' : '🎯'} 核心20%
+          </button>
         </div>
       </div>
+
+      {/* Core 20% Analysis Panel */}
+      {coreOpen && (
+        <div className="core-panel">
+          <div className="analysis-header">
+            <span>🎯 核心 20% 分析</span>
+            <div className="analysis-header-actions">
+              <button className="btn-tiny" onClick={() => setCoreOpen(false)} title="关闭">✕</button>
+            </div>
+          </div>
+          <div className="core-body">
+            {coreLoading ? (
+              <div className="analysis-loading">
+                <div className="spinner-sm" />
+                <span>AI 正在分析核心知识点...</span>
+              </div>
+            ) : coreData ? (
+              <>
+                <div className="core-principle">{coreData.corePrinciple}</div>
+                <div className="core-summary">{coreData.summary}</div>
+                <div className="core-topics-list">
+                  <h4>🎯 核心知识点（{coreData.coreTopics.length} 个）</h4>
+                  {coreData.coreTopics.map((ct, i) => (
+                    <div key={i} className="core-topic-item">
+                      <div className="core-topic-title">
+                        <span className="core-badge">⭐ 核心</span>
+                        {ct.title}
+                      </div>
+                      <div className="core-topic-reasons">
+                        {ct.reasons.map((r, j) => <div key={j} className="core-reason">• {r}</div>)}
+                      </div>
+                      {ct.coverage && <div className="core-coverage">覆盖领域：{ct.coverage}</div>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="analysis-error">暂无数据</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Learning Analysis Panel */}
       {analysisOpen && (

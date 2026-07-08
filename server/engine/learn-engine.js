@@ -20,8 +20,8 @@ import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
   STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT,
-  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
-import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
+  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, CORE_TOPIC_SYSTEM_PROMPT } from './learn-prompts.js';
+import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail, saveCoreAnalysis } from './learn-store.js';
 import OpenAI from 'openai';
 import https from 'https';
 import fs from 'fs';
@@ -760,6 +760,92 @@ export async function answerAnalysisFollowUp(provider, plan, analysis, question,
   ];
 
   return provider.complete(messages, { maxTokens: 2048, temperature: 0.7, model });
+}
+
+/**
+ * Analyze a plan's topics to identify the core ~20% using the Pareto principle.
+ * Uses AI to determine which topics are most important.
+ * Results are cached on the plan for reuse.
+ */
+export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
+  if (plan.coreAnalysis && plan.coreAnalysis.analyzedAt) {
+    return {
+      coreTopics: plan.coreAnalysis.coreTopics || [],
+      summary: plan.coreAnalysis.summary || '',
+      corePrinciple: plan.coreAnalysis.corePrinciple || '',
+      analyzedAt: plan.coreAnalysis.analyzedAt,
+    };
+  }
+
+  // Short-circuit for empty plans — no need to call AI
+  if (!plan.topics || plan.topics.length < 2) {
+    const emptyResult = { coreTopics: [], summary: plan.topics.length === 0 ? '暂无知识点，请先添加' : '知识点太少，至少需要 2 个才能分析核心 20%', corePrinciple: '', analyzedAt: Date.now() };
+    try { saveCoreAnalysis(plan.id, emptyResult); } catch {}
+    return emptyResult;
+  }
+
+  const context = {
+    planName: plan.name,
+    phases: (plan.phases || []).map(p => ({ name: p.name })),
+    topics: plan.topics.map(t => ({
+      id: t.id, title: t.title, phaseId: t.phaseId,
+      parentId: t.parentId, done: t.done, hasDetail: !!t.detail,
+    })),
+  };
+
+  const messages = [
+    { role: 'system', content: CORE_TOPIC_SYSTEM_PROMPT },
+    { role: 'user', content: JSON.stringify(context, null, 2) },
+  ];
+
+  try {
+    const result = await provider.complete(messages, {
+      maxTokens: 2048,
+      temperature: 0.3,
+      responseFormat: { type: 'json_object' },
+    });
+
+    const parsed = JSON.parse(result.content || '{}');
+    const aiTopics = (parsed.coreTopics || []).filter(t => t.title);
+
+    const coreTopics = aiTopics.map(aiTopic => {
+      // Exact match first, then trimmed/normalized fallback
+      let matched = plan.topics.find(t => t.title === aiTopic.title);
+      if (!matched) {
+        const normalized = aiTopic.title.trim().replace(/[，。、；：]/g, '').replace(/\s+/g, ' ');
+        matched = plan.topics.find(t => t.title.trim().replace(/[，。、；：]/g, '').replace(/\s+/g, ' ') === normalized);
+      }
+      if (!matched) {
+        console.warn('[analyzeCoreTopics] No match for AI-suggested topic: "' + aiTopic.title + '"');
+      }
+      return {
+        topicId: matched ? matched.id : '',
+        title: aiTopic.title,
+        reasons: aiTopic.reasons || [],
+        importance: aiTopic.importance || 'medium',
+        coverage: aiTopic.coverage || '',
+      };
+    });
+
+    const analysis = {
+      coreTopics,
+      summary: parsed.summary || '分析完成',
+      corePrinciple: parsed.corePrinciple || '',
+      analyzedAt: Date.now(),
+    };
+
+    try {
+      saveCoreAnalysis(plan.id, analysis);
+      plan.coreAnalysis = analysis;
+    } catch (storeErr) {
+      console.warn('[analyzeCoreTopics] Failed to persist:', storeErr.message);
+    }
+
+    return analysis;
+  } catch (err) {
+    console.warn('[analyzeCoreTopics] AI analysis failed:', err.message);
+    return { coreTopics: [], summary: '核心分析暂不可用', corePrinciple: '', analyzedAt: Date.now() };
+  }
 }
 
 // ═══════════════════════════════════════════════════════

@@ -314,6 +314,55 @@ body {
 }
 .analysis-error { color: #dc2626; font-size: 13px; }
 
+/* Core 20% analysis panel */
+.core-panel {
+  margin-bottom: 20px;
+  border: 1px solid #fbbf24;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #fffbeb;
+}
+.core-body {
+  padding: 14px 18px;
+  font-size: 14px; line-height: 1.7;
+  max-height: 500px; overflow-y: auto;
+}
+.core-principle {
+  font-size: 15px; font-weight: 700; color: #92400e;
+  padding: 8px 12px; margin-bottom: 10px;
+  background: #fef3c7; border-radius: 6px;
+  border-left: 4px solid #f59e0b;
+}
+.core-summary {
+  color: #52525b; font-size: 13px; margin-bottom: 14px;
+  padding: 8px 12px; background: #fff; border-radius: 6px;
+}
+.core-topics-list h4 {
+  font-size: 14px; margin: 0 0 10px; color: #92400e;
+}
+.core-topic-item {
+  padding: 10px 12px; margin-bottom: 8px;
+  background: #fff; border-radius: 6px;
+  border: 1px solid #fde68a;
+}
+.core-topic-title {
+  font-weight: 600; color: #1e293b; font-size: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.core-badge {
+  display: inline-block; padding: 1px 8px;
+  background: #f59e0b; color: #fff; border-radius: 10px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.core-topic-reasons {
+  margin: 6px 0 0 4px; font-size: 13px; color: #64748b;
+}
+.core-reason { margin: 2px 0; }
+.core-coverage {
+  margin-top: 4px; font-size: 12px; color: #94a3b8;
+  padding: 4px 8px; background: #f8fafc; border-radius: 4px;
+}
+
 /* Analysis chat panel */
 .analysis-chat {
   border-top: 1px solid var(--primary-light);

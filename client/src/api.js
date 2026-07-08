@@ -213,6 +213,12 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
   },
 
+  // ─── Pareto Core 20% Analysis ───
+  async getCoreTopics(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/core-topics`,
+      { method: 'POST' }, true);
+  },
+
   // ─── Connection Test ───
   async testConnection(apiKey, baseURL, model) {
     return request(`${API_BASE}/learn/test-connection`, {

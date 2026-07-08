@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -621,6 +621,24 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
     res.json({ weakPoints: results });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/core-topics
+ * Analyze the plan's topics using Pareto 80/20 principle to identify core ~20%.
+ */
+router.post('/plans/:planId/core-topics', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const result = await analyzeCoreTopics(provider, plan, getModel(req));
+    res.json(result);
+  } catch (err) {
+    console.error('[core-topics]', err);
+    res.status(500).json({ error: '核心分析失败: ' + (err.message || err) });
   }
 });
 

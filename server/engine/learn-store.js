@@ -1083,6 +1083,23 @@ export function updateTopicTime(planId, topicId, seconds) {
   });
 }
 
+/**
+ * Save or update the core 20% analysis for a plan.
+ * @param {string} planId
+ * @param {object} analysis - { coreTopics, summary, corePrinciple, analyzedAt }
+ */
+export function saveCoreAnalysis(planId, analysis) {
+  return writePlan(planId, (plan) => {
+    plan.coreAnalysis = {
+      coreTopics: analysis.coreTopics || [],
+      summary: analysis.summary || '',
+      corePrinciple: analysis.corePrinciple || '',
+      analyzedAt: analysis.analyzedAt || Date.now(),
+    };
+    plan.updatedAt = Date.now();
+  });
+}
+
 export function reorderTopics(planId, orderedIds) {
   return writePlan(planId, (plan) => {
     const map = {};
