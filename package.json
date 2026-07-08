@@ -1,6 +1,6 @@
 {
   "name": "textbook-maker",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
@@ -14,4 +14,3 @@
     "concurrently": "^8.2.2"
   }
 }
-
