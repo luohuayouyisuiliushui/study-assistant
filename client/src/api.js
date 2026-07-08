@@ -326,6 +326,19 @@ const api = {
     }, true);
   },
 
+  // ─── User Profile ───
+  async getUserProfile() {
+    return request(`${API_BASE}/user-profile`);
+  },
+  async analyzeUserProfile() {
+    return request(`${API_BASE}/user-profile/analyze`, {
+      method: 'POST',
+    }, true);
+  },
+  async getUserProfileSummary() {
+    return request(`${API_BASE}/user-profile/summary`);
+  },
+
   // ─── Connection Test ───
   async testConnection(apiKey, baseURL, model) {
     return request(`${API_BASE}/learn/test-connection`, {

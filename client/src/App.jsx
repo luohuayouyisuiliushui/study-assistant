@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import PlanList from './components/PlanList';
 import PlanView from './components/PlanView';
 import TopicDetail from './components/TopicDetail';
+import UserProfile from './pages/UserProfile';
 import SettingsModal from './components/SettingsModal';
 import api from './api';
 
@@ -19,6 +20,7 @@ export default function App() {
   const [activeTopicId, setActiveTopicId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(!!loadApiSettings().apiKey);
+  const [showProfile, setShowProfile] = useState(false);
   const planPollRef = useRef(null);
 
   // Load plans
@@ -72,6 +74,7 @@ export default function App() {
     const d = await api.createPlan(name);
     setPlans(prev => [d.plan, ...prev]);
     setCurrentPlanId(d.plan.id);
+    setShowProfile(false);
   };
 
   const handleDeletePlan = async (id) => {
@@ -84,6 +87,7 @@ export default function App() {
     const d = await api.importPlan(text);
     setPlans(prev => [d.plan, ...prev]);
     setCurrentPlanId(d.plan.id);
+    setShowProfile(false);
   };
 
   const handleAddTopics = async (titles) => {
@@ -106,6 +110,18 @@ export default function App() {
 
   const activeTopic = currentPlan?.topics.find(t => t.id === activeTopicId) || null;
 
+  const handleShowProfile = () => {
+    setShowProfile(true);
+  };
+
+  const handleHideProfile = () => {
+    setShowProfile(false);
+  };
+
+  // Determine header and navigation context
+  const showProfileInHeader = !showProfile;
+  const showBackToList = currentPlanId && !showProfile;
+
   return (
     <div className="app">
       <header className="app-header">
@@ -115,22 +131,32 @@ export default function App() {
         </div>
         <div className="header-actions">
           {!hasApiKey && <span className="no-key-warning">⚙️ 请先设置 API Key</span>}
+          {showProfileInHeader && (
+            <button className="btn btn-sm" onClick={handleShowProfile} title="查看跨计划学习画像">
+              👤 画像
+            </button>
+          )}
           <button className="btn btn-icon" onClick={() => setSettingsOpen(true)} title="API 设置">
             ⚙️
           </button>
-          {currentPlanId && (
+          {showBackToList && (
             <button className="btn btn-sm" onClick={goToList}>← 返回列表</button>
+          )}
+          {showProfile && (
+            <button className="btn btn-sm" onClick={handleHideProfile}>← 返回</button>
           )}
         </div>
       </header>
 
       <main className="app-main">
-        {!currentPlanId ? (
+        {showProfile ? (
+          <UserProfile onBack={handleHideProfile} />
+        ) : !currentPlanId ? (
           <PlanList
             plans={plans}
             onCreate={handleCreatePlan}
             onImport={handleImportPlan}
-            onSelect={setCurrentPlanId}
+            onSelect={(id) => { setCurrentPlanId(id); }}
             onDelete={handleDeletePlan}
           />
         ) : !activeTopic ? (

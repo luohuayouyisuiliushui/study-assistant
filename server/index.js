@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import learnRouter from './routes/learn.js';
+import userProfileRouter from './routes/user-profile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -20,6 +21,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // API routes
 app.use('/api/learn', learnRouter);
+app.use('/api/user-profile', userProfileRouter);
 
 // Serve generated images
 app.use('/images', express.static(IMAGES_DIR));
