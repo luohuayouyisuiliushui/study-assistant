@@ -818,6 +818,129 @@ describe('analyzeLearning', () => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  analyzeCoreTopics tests
+// ═══════════════════════════════════════════════════════
+
+describe('analyzeCoreTopics', () => {
+  it('should identify core 20% topics from a plan', async () => {
+    const mockResult = {
+      coreTopics: [
+        { topicId: 'placeholder', title: '变量与数据类型', reasons: ['所有编程的基础概念', '几乎每段代码都用到'], importance: 'high', coverage: '变量声明、类型转换、作用域' },
+        { topicId: 'placeholder2', title: '函数', reasons: ['代码复用的核心机制', '模块化编程的基础'], importance: 'high', coverage: '函数定义、参数、返回值' },
+      ],
+      summary: '该计划共有8个知识点，其中变量与数据类型、函数是最核心的20%，覆盖日常编程80%场景。',
+      corePrinciple: '先掌握变量和函数的本质，再学其他内容事半功倍',
+    };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+
+    const plan = store.createPlan('core20-test');
+    await store.addTopics(plan.id, ['变量与数据类型', '运算符', '控制流', '函数', '数组', '对象', '类与继承', '异步编程']);
+    const p = store.getPlan(plan.id);
+
+    const result = await analyzeCoreTopics(provider, p, 'mock-model');
+    assert.ok(result, 'should return result');
+    assert.ok(Array.isArray(result.coreTopics), 'coreTopics should be an array');
+    assert.ok(result.coreTopics.length >= 1, 'should identify at least one core topic');
+    assert.ok(result.summary, 'should have summary');
+    assert.ok(result.corePrinciple, 'should have core principle');
+
+    // Match topics by title (mock ids are placeholders, engine should map to real ids)
+    const foundVariables = result.coreTopics.find(ct => ct.title === '变量与数据类型');
+    assert.ok(foundVariables, 'should identify "变量与数据类型" as a core topic');
+    assert.ok(foundVariables.topicId, 'should have real topicId from plan');
+    assert.ok(foundVariables.reasons.length > 0, 'should have reasons');
+
+    // Verify topicId matches a real topic in the plan
+    const matchedTopic = p.topics.find(t => t.id === foundVariables.topicId);
+    assert.ok(matchedTopic, 'core topicId should match a plan topic');
+    assert.strictEqual(matchedTopic.title, '变量与数据类型');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle empty core topics gracefully', async () => {
+    const mockResult = { coreTopics: [], summary: '暂无足够数据确定核心知识点', corePrinciple: '' };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+
+    const plan = store.createPlan('core20-empty-test');
+    await store.addTopics(plan.id, ['知识点A']);
+    const p = store.getPlan(plan.id);
+
+    const result = await analyzeCoreTopics(provider, p, 'mock-model');
+    assert.deepStrictEqual(result.coreTopics, []);
+    assert.ok(result.summary);
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle malformed AI response gracefully', async () => {
+    const provider = createMockProvider('不是JSON格式的响应');
+
+    const plan = store.createPlan('core20-malformed-test');
+    await store.addTopics(plan.id, ['测试知识点']);
+    const p = store.getPlan(plan.id);
+
+    const result = await analyzeCoreTopics(provider, p, 'mock-model');
+    assert.ok(result, 'should still return an object');
+    assert.ok(Array.isArray(result.coreTopics), 'should have topics array');
+    assert.strictEqual(result.coreTopics.length, 0, 'should be empty for malformed response');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should save core analysis to the plan', async () => {
+    const mockResult = {
+      coreTopics: [
+        { topicId: 'placeholder', title: '核心知识点', reasons: ['最重要'], importance: 'high', coverage: '全部' },
+      ],
+      summary: '总结内容',
+      corePrinciple: '核心原则',
+    };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+
+    const plan = store.createPlan('core20-save-test');
+    await store.addTopics(plan.id, ['核心知识点', '次要知识点']);
+    const p = store.getPlan(plan.id);
+
+    await analyzeCoreTopics(provider, p, 'mock-model');
+
+    // Reload from store to verify persistence
+    const updatedPlan = store.getPlan(plan.id);
+    assert.ok(updatedPlan.coreAnalysis, 'plan should have coreAnalysis data');
+    assert.ok(updatedPlan.coreAnalysis.analyzedAt, 'should have timestamp');
+    assert.strictEqual(updatedPlan.coreAnalysis.summary, '总结内容');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should return cached result if already analyzed', async () => {
+    const plan = store.createPlan('core20-cache-test');
+    await store.addTopics(plan.id, ['知识点A']);
+
+    // Pre-set coreAnalysis via store
+    const existingAnalysis = {
+      coreTopics: [{ topicId: '', title: '知识点A', reasons: ['已分析'], importance: 'high', coverage: '' }],
+      summary: '已有分析',
+      corePrinciple: '已有原则',
+      analyzedAt: Date.now(),
+    };
+    await store.saveCoreAnalysis(plan.id, existingAnalysis);
+
+    // Reload plan from store so it has coreAnalysis
+    const p = store.getPlan(plan.id);
+
+    // Create a provider that would fail if called
+    const failProvider = createMockProvider('should not be called');
+    const result = await analyzeCoreTopics(failProvider, p, 'mock-model');
+
+    assert.strictEqual(result.summary, '已有分析', 'should return cached result');
+    assert.strictEqual(result.coreTopics[0].title, '知识点A');
+
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
 //  answerAnalysisFollowUp tests
 // ═══════════════════════════════════════════════════════
 
