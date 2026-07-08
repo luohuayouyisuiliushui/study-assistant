@@ -272,71 +272,11 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
   },
 
-  // ─── Exam Paper ───
-  async generateExam(planId, topicIds, config = {}) {
-    return request(`${API_BASE}/learn/plans/${planId}/exam/generate`, {
-      method: 'POST',
-      body: JSON.stringify({ topicIds, config }),
-    }, true);
-  },
-  /** Stream exam generation via SSE. Calls onEvent for each SSE event. */
-  async generateExamStream(planId, topicIds, config = {}, onEvent) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
-    const headers = { 'Content-Type': 'application/json' };
-    const body = JSON.stringify({ topicIds, config, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
-    const response = await fetch(`${API_BASE}/learn/plans/${planId}/exam/generate-stream`, {
-      method: 'POST', headers, body,
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: '生成失败' }));
-      throw new Error(err.error || '生成失败');
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try { onEvent(JSON.parse(line.slice(6))); } catch {}
-        }
-      }
-    }
-  },
-  async submitExam(planId, examId, answers) {
-    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/submit`, {
-      method: 'POST',
-      body: JSON.stringify({ answers }),
-    }, true);
-  },
-  async listExams(planId) {
-    return request(`${API_BASE}/learn/plans/${planId}/exams`);
-  },
-  async deleteExam(planId, examId) {
-    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}`, { method: 'DELETE' });
-  },
-  async generateExamPractice(planId, examId, count = 5) {
-    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/practice`, {
-      method: 'POST',
-      body: JSON.stringify({ count }),
-    }, true);
-  },
-
-  // ─── User Profile ───
-  async getUserProfile() {
-    return request(`${API_BASE}/user-profile`);
-  },
-  async analyzeUserProfile() {
-    return request(`${API_BASE}/user-profile/analyze`, {
+  // ─── Quick Quiz ───
+  async generateQuickQuiz(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/quick-quiz`, {
       method: 'POST',
     }, true);
-  },
-  async getUserProfileSummary() {
-    return request(`${API_BASE}/user-profile/summary`);
   },
 
   // ─── Connection Test ───

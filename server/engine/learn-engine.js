@@ -18,13 +18,10 @@ import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
-  STABLE_WEAK_POINT_PROMPT, STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
-  STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT, STABLE_EXAM_SELF_CORRECT_PROMPT, STABLE_EXAM_QUALITY_EVAL_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
-  STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT,
-  STABLE_TEACHING_ERROR_EXAM_PROMPT, MISCONCEPTION_TAXONOMY,
-  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT } from './learn-prompts.js';
-import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail,
-  addExamPaper, getExamPapers, updateExamResults, recordTeachingErrors } from './learn-store.js';
+  STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
+  STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT,
+  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, QUICK_QUIZ_PROMPT } from './learn-prompts.js';
+import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
 import OpenAI from 'openai';
 import https from 'https';
 import fs from 'fs';
@@ -213,6 +210,7 @@ function _getInteractivePrompt(mode) {
   if (mode === 'realtime') return STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT;
   if (mode === 'challenge') return STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT;
   if (mode === 'scaffold') return STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT;
+  if (mode === 'feynman') return STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT;
   return STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT;
 }
 
@@ -246,7 +244,8 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
+
   const context = buildDeterministicContext(plan, topicId);
   const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
 
@@ -332,7 +331,7 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
   if (mode === 'stepwise') {
     // ── Stepwise mode: use provider.complete() with tool calling ──
@@ -2020,6 +2019,54 @@ export function getEngineCacheDiagnostics() {
   return engineCacheMonitor.summary();
 }
 
+/**
+ * Generate a lightweight quick quiz (2-3 questions) from random topics in a plan.
+ * Uses fewer tokens than a full exam paper.
+ * @param {object} provider - Provider instance
+ * @param {object} plan - Plan object
+ * @param {string} model - Model name
+ * @returns {Promise<{questions: Array, topicCount: number}>}
+ */
+export async function generateQuickQuiz(provider, plan, model = 'gpt-4o-mini') {
+  const doneTopics = plan.topics.filter(t => t.done && t.detail);
+  const available = doneTopics.length > 0 ? doneTopics : plan.topics;
+
+  if (available.length === 0) {
+    return { questions: [], topicCount: 0, message: '暂无知识点' };
+  }
+
+  // Build a compact context with topic titles + detail excerpts
+  const context = {
+    planName: plan.name,
+    topics: available.slice(0, 15).map(t => ({
+      title: t.title,
+      detailExcerpt: (t.detail || '').slice(0, 500),
+    })),
+  };
+
+  const messages = [
+    { role: 'system', content: QUICK_QUIZ_PROMPT },
+    { role: 'user', content: JSON.stringify(context, null, 2) },
+  ];
+
+  try {
+    const result = await provider.complete(messages, {
+      maxTokens: [redacted],
+      temperature: 0.7,
+      responseFormat: { type: 'json_object' },
+    });
+
+    const parsed = JSON.parse(result.content || '{}');
+    return {
+      questions: parsed.questions || [],
+      topicCount: available.length,
+    };
+  } catch (err) {
+    console.warn('[generateQuickQuiz] AI failed:', err.message);
+    return { questions: [], topicCount: available.length, error: err.message };
+  }
+}
+
 export default {
   generateDetail,
   generateDetailWithImage,
@@ -2045,6 +2092,7 @@ export default {
   revealEmbeddedErrors,
   examineTeachingErrors,
   decomposeTopic,
+  generateQuickQuiz,
   textToSpeech,
   getEngineCacheDiagnostics,
   createProviderFromConfig,

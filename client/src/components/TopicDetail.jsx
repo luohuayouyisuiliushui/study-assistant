@@ -886,6 +886,9 @@ ${bodyHtml}
             <button className="btn btn-sm interactive-btn realtime-btn" onClick={() => handleStartInteractive('realtime')} title="实时互动，更灵活的教学节奏">
               🎙️ 实时互动
             </button>
+            <button className="btn btn-sm interactive-btn feynman-btn" onClick={() => handleStartInteractive('feynman')} title="你讲AI听，通过费曼学习法检验理解">
+              🧑‍🏫 费曼学习法
+            </button>
           </>
         )}
         {interactiveMode && (
@@ -1004,7 +1007,7 @@ ${bodyHtml}
         {interactiveMode && (
           <div className="topic-content">
             <div className="interactive-mode-header">
-              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : '🎙️ 实时互动'}</span>
+              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : interactiveMode === 'feynman' ? '🧑‍🏫 费曼学习法' : '🎙️ 实时互动'}</span>
               {interactiveLoading && <span className="typing-text">导师正在思考...</span>}
               {interactiveFinished && <span className="interactive-finished-badge">✅ 讲解完成</span>}
             </div>

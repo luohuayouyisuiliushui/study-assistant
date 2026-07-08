@@ -4,6 +4,12 @@ import {
   isUnsupportedParameterError,
   formatConnectionError,
   Provider,
+  sha256,
+  computePrefixHash,
+  computeTailHash,
+  computeRequestHash,
+  extractUsage,
+  assessPrefixStability,
 } from '../engine/provider.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -259,139 +265,97 @@ describe('Provider.testConnection', () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════
-// Provider.streamWithTools — streaming with tool calling
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  Hash function tests (gap coverage)
+// ═══════════════════════════════════════════════════════
 
-function createChunkStream(chunks) {
-  return (async function* () {
-    for (const chunk of chunks) yield chunk;
-  })();
-}
-
-describe('Provider.streamWithTools', () => {
-  it('should stream content without tool calls', async () => {
-    const stream = createChunkStream([
-      { choices: [{ delta: { content: 'Hello' }, index: 0 }] },
-      { choices: [{ delta: { content: ' World' }, index: 0 }] },
-      { choices: [{ delta: {}, index: 0, finish_reason: 'stop' }] },
-      { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
-    ]);
-    const mockClient = { chat: { completions: { async create() { return stream; } } } };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
-
-    const chunks = [];
-    const result = await provider.streamWithTools([{ role: 'user', content: 'hi' }], {
-      maxTokens: 100, onChunk: (d) => chunks.push(d),
-    });
-    assert.strictEqual(result.content, 'Hello World');
-    assert.strictEqual(result.tool_calls, null);
-    assert.strictEqual(chunks.length, 2);
-    assert.strictEqual(chunks[0], 'Hello');
-    assert.strictEqual(chunks[1], ' World');
+describe('sha256', () => {
+  it('should produce consistent 64-char hex hash', () => {
+    const hash1 = sha256('hello');
+    const hash2 = sha256('hello');
+    const hash3 = sha256('world');
+    assert.strictEqual(hash1, hash2);
+    assert.notStrictEqual(hash1, hash3);
+    assert.strictEqual(hash1.length, 64);
+    assert.ok(/^[a-f0-9]+$/.test(hash1));
   });
 
-  it('should accumulate tool call from deltas across chunks', async () => {
-    const stream = createChunkStream([
-      { choices: [{ delta: { content: '核心概念是...' }, index: 0 }] },
-      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_abc123', function: { name: 'ask_user_to_continue', arguments: '' } }] }, index: 0 }] },
-      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"sum' } }] }, index: 0 }] },
-      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'mary":"第一部分"}' } }] }, index: 0 }] },
-      { choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }] },
-      { usage: { prompt_tokens: 50, completion_tokens: 30, total_tokens: 80 } },
-    ]);
-    const mockClient = { chat: { completions: { async create() { return stream; } } } };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
+  it('should handle empty string and unicode', () => {
+    assert.strictEqual(sha256('').length, 64);
+    assert.strictEqual(sha256('你好世界').length, 64);
+  });
+});
 
-    let toolCallsResult = null;
-    const result = await provider.streamWithTools([{ role: 'user', content: 'test' }], {
-      maxTokens: 100,
-      tools: [{ type: 'function', function: { name: 'ask_user_to_continue' } }],
-      onToolCall: (tcs) => { toolCallsResult = tcs; },
-    });
-    assert.strictEqual(result.content, '核心概念是...');
-    assert.ok(result.tool_calls);
-    assert.strictEqual(result.tool_calls.length, 1);
-    assert.strictEqual(result.tool_calls[0].id, 'call_abc123');
-    assert.strictEqual(result.tool_calls[0].function.name, 'ask_user_to_continue');
-    assert.strictEqual(result.tool_calls[0].function.arguments, '{"summary":"第一部分"}');
-    assert.deepStrictEqual(toolCallsResult, result.tool_calls);
+describe('computePrefixHash', () => {
+  it('should produce stable hash for same messages', () => {
+    const messages = [{ role: 'system', content: 'test' }];
+    assert.strictEqual(computePrefixHash('gpt-4o', messages), computePrefixHash('gpt-4o', messages));
   });
 
-  it('should handle tool call without preceding content', async () => {
-    const stream = createChunkStream([
-      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_empty', function: { name: 'ask_user_to_continue', arguments: '{}' } }] }, index: 0 }] },
-      { choices: [{ delta: {}, index: 0, finish_reason: 'tool_calls' }] },
-      { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
-    ]);
-    const mockClient = { chat: { completions: { async create() { return stream; } } } };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
-
-    const result = await provider.streamWithTools([{ role: 'user', content: 'test' }], {
-      tools: [{ type: 'function', function: { name: 'ask_user_to_continue' } }],
-    });
-    assert.strictEqual(result.content, '');
-    assert.ok(result.tool_calls);
-    assert.strictEqual(result.tool_calls[0].function.arguments, '{}');
+  it('should differ for different models', () => {
+    const messages = [{ role: 'system', content: 'test' }];
+    assert.notStrictEqual(computePrefixHash('gpt-4o', messages), computePrefixHash('gpt-3.5', messages));
   });
 
-  it('should handle finish_reason=stop without tool calls', async () => {
-    const stream = createChunkStream([
-      { choices: [{ delta: { content: 'done' }, index: 0 }] },
-      { choices: [{ delta: {}, index: 0, finish_reason: 'stop' }] },
-    ]);
-    const mockClient = { chat: { completions: { async create() { return stream; } } } };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
+  it('should handle empty messages', () => {
+    assert.strictEqual(computePrefixHash('gpt-4o', []).length, 64);
+  });
+});
 
-    const result = await provider.streamWithTools([{ role: 'user', content: 'test' }], {
-      tools: [{ type: 'function', function: { name: 'x' } }],
-    });
-    assert.strictEqual(result.content, 'done');
-    assert.strictEqual(result.tool_calls, null);
+describe('computeTailHash', () => {
+  it('should differ when last message changes', () => {
+    const base = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'fixed' },
+      { role: 'user', content: 'A' },
+    ];
+    const changed = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'fixed' },
+      { role: 'user', content: 'B' },
+    ];
+    assert.notStrictEqual(computeTailHash(base), computeTailHash(changed));
   });
 
-  it('should handle empty stream gracefully', async () => {
-    const stream = createChunkStream([]);
-    const mockClient = { chat: { completions: { async create() { return stream; } } } };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
+  it('should return __notail__ when no tail exists', () => {
+    const msgs = [{ role: 'user', content: 'only' }];
+    assert.strictEqual(computeTailHash(msgs), '__notail__');
+  });
+});
 
-    const result = await provider.streamWithTools([{ role: 'user', content: 'test' }]);
-    assert.strictEqual(result.content, '');
-    assert.strictEqual(result.tool_calls, null);
+describe('computeRequestHash', () => {
+  it('should differ for different models or options', () => {
+    const msg = [{ role: 'user', content: 'hi' }];
+    assert.notStrictEqual(computeRequestHash('m1', msg, { temperature: 0.7 }), computeRequestHash('m2', msg, { temperature: 0.7 }));
+    assert.notStrictEqual(computeRequestHash('m', msg, { temperature: 0.7 }), computeRequestHash('m', msg, { temperature: 0.3 }));
+  });
+});
+
+describe('extractUsage', () => {
+  it('should extract usage from standard API response', () => {
+    const u = extractUsage({ usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
+    assert.strictEqual(u.promptTokens, 10);
+    assert.strictEqual(u.completionTokens, 20);
+    assert.strictEqual(u.totalTokens, 30);
   });
 
-  it('should retry on stream_options failure (relay fallback)', async () => {
-    let callCount = 0;
-    const mockClient = {
-      chat: { completions: { async create(opts) {
-        callCount++;
-        if (callCount === 1) {
-          const err = new Error("'stream_options' is not supported");
-          err.status = 400;
-          throw err;
-        }
-        return createChunkStream([
-          { choices: [{ delta: { content: 'fallback ok' }, index: 0 }] },
-          { choices: [{ delta: {}, index: 0, finish_reason: 'stop' }] },
-        ]);
-      } } },
-    };
-    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
-    provider._client = mockClient;
-    provider._autoWarm = false;
+  it('should return zeros when usage absent', () => {
+    const u = extractUsage({});
+    assert.strictEqual(u.promptTokens, 0);
+  });
+});
 
-    const result = await provider.streamWithTools([{ role: 'user', content: 'test' }]);
-    assert.strictEqual(result.content, 'fallback ok');
-    assert.strictEqual(callCount, 2);
+describe('assessPrefixStability', () => {
+  it('should return score between 0 and 100', () => {
+    const r = assessPrefixStability([{ role: 'system', content: '这是一个足够长的系统提示词，用于测试稳定性评分功能。它应该超过100个字符以确保不会被判定为过短的提示词。' }, { role: 'user', content: '变化' }]);
+    assert.ok(typeof r.score === 'number');
+    assert.ok(r.score >= 0);
+    assert.ok(typeof r.verdict === 'string');
+    assert.ok(Array.isArray(r.issues));
+  });
+
+  it('should return a valid score for empty messages', () => {
+    const r = assessPrefixStability([]);
+    assert.ok(r.score === undefined || r.score >= 0);
   });
 });

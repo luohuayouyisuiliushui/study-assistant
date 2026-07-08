@@ -2,7 +2,7 @@
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, examineTeachingErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -1005,244 +1005,86 @@ describe('Interactive mode - edge cases', () => {
 });
 
 // ═══════════════════════════════════════════════════════
-//  BLUEPRINT (deterministic algorithm, no AI needed)
+//  Feynman mode tests
 // ═══════════════════════════════════════════════════════
 
-import { generateBlueprint } from '../engine/learn-engine.js';
-import engineModule from '../engine/learn-engine.js';
-const { validateBlueprintOutput, validateQuestionOutput } = engineModule;
-
-describe('generateBlueprint', () => {
-  it('should distribute questions evenly across topics', () => {
-    const plan = {
-      topics: [
-        { id: 't1', title: '主题A', detail: '内容A' },
-        { id: 't2', title: '主题B', detail: '内容B' },
-        { id: 't3', title: '主题C', detail: '内容C' },
-      ],
-    };
-    const bp = generateBlueprint(null, plan, ['t1', 't2', 't3'], { questionCount: 15, choiceRatio: 0.6 });
-    assert.ok(bp.title);
-    assert.ok(Array.isArray(bp.orders));
-    assert.strictEqual(bp.orders.length, 15);
-    // Each topic should have questions
-    const perTopic = {};
-    for (const o of bp.orders) {
-      assert.ok(o.topicTitle);
-      assert.ok(['choice', 'open'].includes(o.type));
-      assert.ok(['easy', 'medium', 'hard'].includes(o.difficulty));
-      perTopic[o.topicTitle] = (perTopic[o.topicTitle] || 0) + 1;
-    }
-    assert.ok(perTopic['主题A'] >= 4);
-    assert.ok(perTopic['主题B'] >= 4);
-    assert.ok(perTopic['主题C'] >= 4);
+describe('Feynman mode', () => {
+  it('startInteractiveDetail should support feynman mode', async () => {
+    const plan = store.createPlan('feynman-test');
+    await store.addTopics(plan.id, ['费曼测试']);
+    const p = store.getPlan(plan.id);
+    const provider = createStreamMockProvider('好的，我准备好了！请你开始讲解吧。');
+    const result = await startInteractiveDetail(provider, p, p.topics[0].id, 'feynman');
+    assert.strictEqual(result.session.mode, 'feynman');
+    assert.ok(result.content, 'should return welcome content');
+    assert.strictEqual(result.session.finished, false);
+    store.deletePlan(plan.id);
   });
 
-  it('should respect difficulty ratios', () => {
-    const plan = {
-      topics: [
-        { id: 't1', title: 'X', detail: '' },
-        { id: 't2', title: 'Y', detail: '' },
-      ],
-    };
-    // Easy mode
-    const easy = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, difficulty: 'easy' });
-    const easyCount = easy.orders.filter(o => o.difficulty === 'easy').length;
-    assert.ok(easyCount >= 8); // 50% of 20
+  it('continueInteractiveDetail should work with feynman mode', async () => {
+    const plan = store.createPlan('feynman-continue');
+    await store.addTopics(plan.id, ['费曼继续测试']);
+    const p = store.getPlan(plan.id);
+    const provider1 = createStreamMockProvider('好的，请开始讲解「费曼继续测试」。');
+    const r1 = await startInteractiveDetail(provider1, p, p.topics[0].id, 'feynman');
+    assert.strictEqual(r1.session.mode, 'feynman');
 
-    // Hard mode
-    const hard = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, difficulty: 'hard' });
-    const hardCount = hard.orders.filter(o => o.difficulty === 'hard').length;
-    assert.ok(hardCount >= 8); // 50% of 20
-  });
-
-  it('should respect choice ratio', () => {
-    const plan = {
-      topics: [
-        { id: 't1', title: 'X', detail: '' },
-        { id: 't2', title: 'Y', detail: '' },
-      ],
-    };
-    const bp = generateBlueprint(null, plan, ['t1', 't2'], { questionCount: 20, choiceRatio: 0.8 });
-    const choiceCount = bp.orders.filter(o => o.type === 'choice').length;
-    assert.ok(choiceCount >= 12); // Should have many choice questions
-  });
-
-  it('should include topicTitleToId and topicDetailMap', () => {
-    const plan = {
-      topics: [
-        { id: 't1', title: '主题A', detail: '这是内容A' },
-      ],
-    };
-    const bp = generateBlueprint(null, plan, ['t1'], { questionCount: 5 });
-    assert.strictEqual(bp.topicTitleToId['主题A'], 't1');
-    assert.strictEqual(bp.topicDetailMap['主题A'], '这是内容A');
-  });
-});
-
-describe('validateBlueprintOutput', () => {
-  it('should pass valid blueprint', () => {
-    const data = {
-      title: '测试',
-      orders: [
-        { index: 0, topicTitle: '主题A', type: 'choice', difficulty: 'easy' },
-        { index: 1, topicTitle: '主题B', type: 'open', difficulty: 'hard' },
-      ],
-    };
-    assert.strictEqual(validateBlueprintOutput(data), null);
-  });
-
-  it('should reject missing title', () => {
-    const err = validateBlueprintOutput({ orders: [] });
-    assert.ok(err);
-  });
-
-  it('should reject orders with invalid type', () => {
-    const err = validateBlueprintOutput({ title: 't', orders: [{ index: 0, topicTitle: 'A', type: 'invalid', difficulty: 'easy' }] });
-    assert.ok(err.includes('type'));
-  });
-
-  it('should reject orders with invalid difficulty', () => {
-    const err = validateBlueprintOutput({ title: 't', orders: [{ index: 0, topicTitle: 'A', type: 'choice', difficulty: 'impossible' }] });
-    assert.ok(err.includes('difficulty'));
-  });
-});
-
-describe('validateQuestionOutput', () => {
-  it('should pass valid choice question', () => {
-    const q = { question: '1+1=?', options: ['A. 2', 'B. 3'], answer: 'A', explanation: '因为...', conceptTag: '数学' };
-    assert.strictEqual(validateQuestionOutput(q), null);
-  });
-
-  it('should reject missing question', () => {
-    assert.ok(validateQuestionOutput({ options: [], answer: 'A', explanation: '', conceptTag: '' }));
-  });
-
-  it('should reject missing answer', () => {
-    assert.ok(validateQuestionOutput({ question: 'q', options: [], answer: '', explanation: '', conceptTag: '' }));
+    const provider2 = createStreamMockProvider('能给我举个具体的例子吗？');
+    const r2 = await continueInteractiveDetail(provider2, p, p.topics[0].id, 'feynman', '变量就是存储数据的容器');
+    assert.ok(r2.content, 'should return follow-up question');
+    assert.strictEqual(r2.session.transcript.length, 3);
+    assert.strictEqual(r2.session.mode, 'feynman');
+    store.deletePlan(plan.id);
   });
 });
 
 // ═══════════════════════════════════════════════════════
-//  EXAM PRACTICE (mock AI)
+//  generateQuickQuiz tests
 // ═══════════════════════════════════════════════════════
 
-import { generateExamPractice } from '../engine/learn-engine.js';
-
-describe('generateExamPractice', () => {
-  it('should throw when exam has no results', async () => {
-    const plan = { examPapers: [{ id: 'e1', results: null }] };
-    await assert.rejects(() => generateExamPractice(null, plan, 'e1'), /尚未批改/);
-  });
-
-  it('should throw when no wrong answers', async () => {
-    const plan = {
-      examPapers: [{
-        id: 'e1', results: [{ exerciseIndex: 0, correct: true }],
-        questions: [{ index: 0, type: 'choice', question: '题1' }],
-      }],
-    };
-    await assert.rejects(() => generateExamPractice(null, plan, 'e1'), /没有错题/);
-  });
-
-  it('should throw for non-existent exam', async () => {
-    const plan = { examPapers: [] };
-    await assert.rejects(() => generateExamPractice(null, plan, 'no-such'), /试卷不存在/);
-  });
-});
-
-// ═══════════════════════════════════════════════════════
-//  examineTeachingErrors + structured reveal tests
-// ═══════════════════════════════════════════════════════
-
-describe('examineTeachingErrors', () => {
-  it('keeps only real, pedagogically valuable errors and enriches them', async () => {
-    const candidates = [
-      { location: '循环部分', description: '边界写成 <', correction: '应为 <=', errorType: 'boundary' },
-      { location: '定义部分', description: '表述不完美但本质正确', correction: '无需修改', errorType: 'concept-approx' },
-    ];
-    const mock = JSON.stringify({
-      reviewed: [
-        { index: 0, keep: true, isRealError: true, pedagogicalValue: 8, typeMatch: true, errorType: 'boundary', misconception: '闭区间当开区间', bloomLevel: '应用' },
-        { index: 1, keep: false, isRealError: false, pedagogicalValue: 2 },
+describe('generateQuickQuiz', () => {
+  it('should generate quiz questions from plan topics', async () => {
+    const mockResult = {
+      questions: [
+        { topicTitle: '变量', type: 'choice', question: '1+1=?', options: ['1', '2', '3'], answer: '2', explanation: '1+1=2' },
+        { topicTitle: '函数', type: 'open', question: '什么是函数？', answer: '函数是可复用的代码块', explanation: '基本概念' },
       ],
-      hasValidErrors: true,
-    });
-    const provider = createMockProvider(mock);
-    const kept = await examineTeachingErrors(provider, '讲解片段', candidates);
-    assert.strictEqual(kept.length, 1);
-    assert.strictEqual(kept[0].misconception, '闭区间当开区间');
-    assert.strictEqual(kept[0].bloomLevel, '应用');
-    assert.strictEqual(kept[0].pedagogicalValue, 8);
+    };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+    const plan = store.createPlan('quiz-test');
+    await store.addTopics(plan.id, ['变量', '函数', '循环']);
+    const p = store.getPlan(plan.id);
+    // Mark two as done with detail
+    await store.updateTopic(plan.id, p.topics[0].id, { detail: '变量讲解内容', done: true });
+    await store.updateTopic(plan.id, p.topics[1].id, { detail: '函数讲解内容', done: true });
+    const p2 = store.getPlan(plan.id);
+
+    const result = await generateQuickQuiz(provider, p2, 'mock-model');
+    assert.ok(result, 'should return result');
+    assert.ok(Array.isArray(result.questions), 'questions should be an array');
+    assert.strictEqual(result.topicCount, 2, 'should count topics');
+    store.deletePlan(plan.id);
   });
 
-  it('falls back to candidates when review format is unexpected', async () => {
-    const candidates = [{ location: 'x', description: 'y', errorType: 'boundary' }];
+  it('should handle empty plan gracefully', async () => {
     const provider = createMockProvider('{}');
-    const kept = await examineTeachingErrors(provider, '片段', candidates);
-    assert.strictEqual(kept.length, 1);
-  });
-
-  it('drops low pedagogicalValue errors below threshold', async () => {
-    const candidates = [{ location: 'x', description: 'y', errorType: 'boundary' }];
-    const mock = JSON.stringify({ reviewed: [{ index: 0, keep: true, isRealError: true, pedagogicalValue: 3 }] });
-    const provider = createMockProvider(mock);
-    const kept = await examineTeachingErrors(provider, '片段', candidates);
-    // Everything filtered → falls back to original candidates (avoid over-filtering)
-    assert.strictEqual(kept.length, 1);
-  });
-});
-
-describe('revealEmbeddedErrors structured output', () => {
-  it('marks recognized errors from student self-report and persists them', async () => {
-    const plan = store.createPlan('reveal-structured');
-    await store.addTopics(plan.id, ['结构化知识点']);
+    const plan = store.createPlan('quiz-empty');
     const p = store.getPlan(plan.id);
-    const topic = p.topics[0];
-    await store.updateTopic(plan.id, topic.id, {
-      detail: '循环从 0 到 n，用 i < n 判断边界。',
-      done: false,
-    });
-    const p2 = store.getPlan(plan.id);
-
-    // First call = generation agent output; examine agent falls back on '{}' → we
-    // provide a mock that both detects and reviews via the same content.
-    const genOutput = JSON.stringify({
-      errors: [{ location: '边界判断', description: '边界应该是 <= 而不是 <', correction: 'i <= n', errorType: 'boundary', misconception: '闭区间当开区间', bloomLevel: '应用' }],
-      hasErrors: true,
-    });
-    const provider = createMockProvider(genOutput);
-
-    const result = await revealEmbeddedErrors(provider, p2, topic.id, 'mock-model', ['边界应该是 <=']);
-    assert.strictEqual(result.hasErrors, true);
-    assert.ok(result.errors.length >= 1);
-    assert.strictEqual(result.errors[0].recognized, true);
-    assert.strictEqual(result.errors[0].errorType, 'boundary');
-
-    // Persisted onto topic
-    const p3 = store.getPlan(plan.id);
-    assert.ok(Array.isArray(p3.topics[0].teachingErrors));
-    assert.ok(p3.topics[0].teachingErrors.length >= 1);
+    const result = await generateQuickQuiz(provider, p, 'mock-model');
+    assert.ok(Array.isArray(result.questions));
+    assert.strictEqual(result.questions.length, 0);
     store.deletePlan(plan.id);
   });
 
-  it('reports unrecognizedCount when student misses errors', async () => {
-    const plan = store.createPlan('reveal-unrecognized');
-    await store.addTopics(plan.id, ['漏错知识点']);
+  it('should handle malformed AI response gracefully', async () => {
+    const provider = createMockProvider('不是JSON');
+    const plan = store.createPlan('quiz-malformed');
+    await store.addTopics(plan.id, ['测试']);
     const p = store.getPlan(plan.id);
-    const topic = p.topics[0];
-    await store.updateTopic(plan.id, topic.id, { detail: '一段包含错误的讲解。', done: false });
-    const p2 = store.getPlan(plan.id);
-    const genOutput = JSON.stringify({
-      errors: [{ location: 'A', description: '一个微妙错误', correction: '正确版本', errorType: 'concept-approx', misconception: '概念不精确', bloomLevel: '理解' }],
-      hasErrors: true,
-    });
-    const provider = createMockProvider(genOutput);
-    const result = await revealEmbeddedErrors(provider, p2, topic.id, 'mock-model', []);
-    assert.strictEqual(result.unrecognizedCount, result.errors.filter(e => !e.recognized).length);
-    assert.ok(result.unrecognizedCount >= 1);
+    const result = await generateQuickQuiz(provider, p, 'mock-model');
+    assert.ok(Array.isArray(result.questions));
+    assert.strictEqual(result.questions.length, 0);
     store.deletePlan(plan.id);
   });
 });
-
 

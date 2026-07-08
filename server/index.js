@@ -29,7 +29,7 @@ app.use('/images', express.static(IMAGES_DIR));
 // Serve built React app in production
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
-app.get('*splat', (req, res) => {
+app.get('/{*splat}', (req, res) => {
   // Only serve index.html for non-API routes
   if (!req.path.startsWith('/api')) {
     res.sendFile(path.join(clientDist, 'index.html'));
