@@ -454,7 +454,20 @@ router.post('/plans/:planId/reveal-errors/:topicId', async (req, res) => {
  * Decompose a topic into 3-6 sub-topics using AI.
  */
 router.post('/plans/:planId/decompose/:topicId', async (req, res) => {
-  // ... existing decompose route ...
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  try {
+    const provider = getProvider(req);
+    const subtopics = await decomposeTopic(provider, plan, req.params.topicId, getModel(req));
+    res.json({ subtopics });
+  } catch (err) {
+    console.error('[decompose]', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ═══════════════════════════════════════════════════════

@@ -4,6 +4,12 @@ import {
   isUnsupportedParameterError,
   formatConnectionError,
   Provider,
+  sha256,
+  computePrefixHash,
+  computeTailHash,
+  computeRequestHash,
+  extractUsage,
+  assessPrefixStability,
 } from '../engine/provider.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -256,5 +262,100 @@ describe('Provider.testConnection', () => {
     const result = await provider.testConnection();
     assert.strictEqual(result.ok, false);
     assert.ok(result.error.includes('无法连接'));
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Hash function tests (gap coverage)
+// ═══════════════════════════════════════════════════════
+
+describe('sha256', () => {
+  it('should produce consistent 64-char hex hash', () => {
+    const hash1 = sha256('hello');
+    const hash2 = sha256('hello');
+    const hash3 = sha256('world');
+    assert.strictEqual(hash1, hash2);
+    assert.notStrictEqual(hash1, hash3);
+    assert.strictEqual(hash1.length, 64);
+    assert.ok(/^[a-f0-9]+$/.test(hash1));
+  });
+
+  it('should handle empty string and unicode', () => {
+    assert.strictEqual(sha256('').length, 64);
+    assert.strictEqual(sha256('你好世界').length, 64);
+  });
+});
+
+describe('computePrefixHash', () => {
+  it('should produce stable hash for same messages', () => {
+    const messages = [{ role: 'system', content: 'test' }];
+    assert.strictEqual(computePrefixHash('gpt-4o', messages), computePrefixHash('gpt-4o', messages));
+  });
+
+  it('should differ for different models', () => {
+    const messages = [{ role: 'system', content: 'test' }];
+    assert.notStrictEqual(computePrefixHash('gpt-4o', messages), computePrefixHash('gpt-3.5', messages));
+  });
+
+  it('should handle empty messages', () => {
+    assert.strictEqual(computePrefixHash('gpt-4o', []).length, 64);
+  });
+});
+
+describe('computeTailHash', () => {
+  it('should differ when last message changes', () => {
+    const base = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'fixed' },
+      { role: 'user', content: 'A' },
+    ];
+    const changed = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'fixed' },
+      { role: 'user', content: 'B' },
+    ];
+    assert.notStrictEqual(computeTailHash(base), computeTailHash(changed));
+  });
+
+  it('should return __notail__ when no tail exists', () => {
+    const msgs = [{ role: 'user', content: 'only' }];
+    assert.strictEqual(computeTailHash(msgs), '__notail__');
+  });
+});
+
+describe('computeRequestHash', () => {
+  it('should differ for different models or options', () => {
+    const msg = [{ role: 'user', content: 'hi' }];
+    assert.notStrictEqual(computeRequestHash('m1', msg, { temperature: 0.7 }), computeRequestHash('m2', msg, { temperature: 0.7 }));
+    assert.notStrictEqual(computeRequestHash('m', msg, { temperature: 0.7 }), computeRequestHash('m', msg, { temperature: 0.3 }));
+  });
+});
+
+describe('extractUsage', () => {
+  it('should extract usage from standard API response', () => {
+    const u = extractUsage({ usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } });
+    assert.strictEqual(u.promptTokens, 10);
+    assert.strictEqual(u.completionTokens, 20);
+    assert.strictEqual(u.totalTokens, 30);
+  });
+
+  it('should return zeros when usage absent', () => {
+    const u = extractUsage({});
+    assert.strictEqual(u.promptTokens, 0);
+  });
+});
+
+describe('assessPrefixStability', () => {
+  it('should return score between 0 and 100', () => {
+    const r = assessPrefixStability([{ role: 'system', content: '这是一个足够长的系统提示词，用于测试稳定性评分功能。它应该超过100个字符以确保不会被判定为过短的提示词。' }, { role: 'user', content: '变化' }]);
+    assert.ok(typeof r.score === 'number');
+    assert.ok(r.score >= 0);
+    assert.ok(typeof r.verdict === 'string');
+    assert.ok(Array.isArray(r.issues));
+  });
+
+  it('should return a valid score for empty messages', () => {
+    const r = assessPrefixStability([]);
+    assert.ok(r.score === undefined || r.score >= 0);
   });
 });

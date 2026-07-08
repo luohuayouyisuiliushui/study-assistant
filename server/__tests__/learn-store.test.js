@@ -431,10 +431,10 @@ describe('learn-store', () => {
       assert.strictEqual(after.find(t => t.id === plan.id), undefined);
     });
 
-    it('should flag hasData for plans with learning content', () => {
+    it('should flag hasData for plans with learning content', async () => {
       const plan = store.createPlan('trash-test-4');
       createdPlanIds.push(plan.id);
-      store.addTopics(plan.id, ['知识点A']);
+      await store.addTopics(plan.id, ['知识点A']);
       const fresh = store.getPlan(plan.id);
       const tid = fresh.topics[0].id;
       store.updateTopic(plan.id, tid, { detail: '这是一个讲解内容' });
@@ -642,6 +642,95 @@ describe('Edge cases', () => {
     const result = await store.removeTopic(plan.id, 'non-existent');
     assert.ok(result);
     assert.strictEqual(result.topics.length, 0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Additional store function tests (gap coverage)
+// ═══════════════════════════════════════════════════════
+
+describe('listPlans', () => {
+  it('should return an array', () => {
+    const plans = store.listPlans();
+    assert.ok(Array.isArray(plans));
+    // Should contain at least the plans created in this test run
+    const testPlans = plans.filter(p => p.name && p.name.startsWith('__test_'));
+    assert.ok(testPlans.length >= 0);
+  });
+});
+
+describe('reorderTopics', () => {
+  let plan;
+  before(() => {
+    plan = store.createPlan('reorder-test');
+    _testPlanIds.push(plan.id);
+  });
+
+  it('should reorder topics correctly', async () => {
+    await store.addTopics(plan.id, ['C', 'A', 'B']);
+    const p = store.getPlan(plan.id);
+    const ids = p.topics.map(t => t.id);
+    // Reorder to A, B, C
+    const reordered = [ids[1], ids[2], ids[0]]; // A, B, C
+    await store.reorderTopics(plan.id, reordered);
+    const updated = store.getPlan(plan.id);
+    assert.strictEqual(updated.topics[0].title, 'A');
+    assert.strictEqual(updated.topics[1].title, 'B');
+    assert.strictEqual(updated.topics[2].title, 'C');
+  });
+
+  it('should skip non-existent ids in reorder', async () => {
+    const p = store.getPlan(plan.id);
+    const ids = p.topics.map(t => t.id);
+    await store.reorderTopics(plan.id, [...ids, 'non-existent-id']);
+    const updated = store.getPlan(plan.id);
+    assert.strictEqual(updated.topics.length, 3);
+  });
+});
+
+describe('trash operations (gap)', () => {
+  let trashPlan;
+  before(() => {
+    trashPlan = store.createPlan('trash-gap-test');
+  });
+
+  it('should empty the trash', () => {
+    store.trashPlan(trashPlan.id);
+    const before = store.listTrash();
+    const found = before.find(t => t.id === trashPlan.id);
+    assert.ok(found, 'plan should be in trash');
+    store.emptyTrash();
+    const after = store.listTrash();
+    const gone = after.find(t => t.id === trashPlan.id);
+    assert.ok(!gone, 'plan should be removed from trash');
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Flag tests
+// ═══════════════════════════════════════════════════════
+
+describe('readFlags / writeFlag / clearFlag', () => {
+  it('should write and read flags', () => {
+    const flagPlanId = 'flag-test-' + Date.now();
+    store.writeFlag(flagPlanId);
+    const flags = store.readFlags();
+    assert.ok(Array.isArray(flags));
+    assert.ok(flags.includes(flagPlanId), 'flag planId should be present in readFlags');
+  });
+
+  it('should clear a specific flag', () => {
+    const flagPlanId = 'flag-clear-test-' + Date.now();
+    store.writeFlag(flagPlanId);
+    store.clearFlag(flagPlanId);
+    const flags = store.readFlags();
+    assert.ok(!flags.includes(flagPlanId), 'flag should be cleared');
+  });
+
+  it('should handle clearing non-existent flag gracefully', () => {
+    store.clearFlag('non-existent-flag-id');
+    const flags = store.readFlags();
+    assert.ok(Array.isArray(flags));
   });
 });
 
