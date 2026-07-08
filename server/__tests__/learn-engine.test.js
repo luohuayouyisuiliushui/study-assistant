@@ -2,7 +2,7 @@
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───

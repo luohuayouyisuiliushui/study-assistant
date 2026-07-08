@@ -15,5 +15,5 @@ export {
   addHistory, getTopicHistory,
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview, buildLearningProfile,
   addExamPaper, getExamPapers, updateExamResults, deleteExamPaper,
-  recordTeachingErrors,
+  recordTeachingErrors, saveCoreAnalysis, writeFlag, readFlags, clearFlag,
 } from './store/crud.js';

@@ -18,10 +18,13 @@ import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
-  STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
+  STABLE_WEAK_POINT_PROMPT, STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
+  STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT, STABLE_EXAM_SELF_CORRECT_PROMPT, STABLE_EXAM_QUALITY_EVAL_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
   STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT,
-  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, QUICK_QUIZ_PROMPT } from './learn-prompts.js';
-import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail } from './learn-store.js';
+  STABLE_TEACHING_ERROR_EXAM_PROMPT, MISCONCEPTION_TAXONOMY,
+  ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, CORE_TOPIC_SYSTEM_PROMPT, QUICK_QUIZ_PROMPT } from './learn-prompts.js';
+import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail,
+  addExamPaper, getExamPapers, updateExamResults, recordTeachingErrors, saveCoreAnalysis } from './learn-store.js';
 import OpenAI from 'openai';
 import https from 'https';
 import fs from 'fs';
@@ -1122,7 +1125,7 @@ export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
   // Short-circuit for empty plans — no need to call AI
   if (!plan.topics || plan.topics.length < 2) {
     const emptyResult = { coreTopics: [], summary: plan.topics.length === 0 ? '暂无知识点，请先添加' : '知识点太少，至少需要 2 个才能分析核心 20%', corePrinciple: '', analyzedAt: Date.now() };
-    try { saveCoreAnalysis(plan.id, emptyResult); } catch {}
+    try { await saveCoreAnalysis(plan.id, emptyResult); } catch {}
     return emptyResult;
   }
 
@@ -1177,7 +1180,7 @@ export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
     };
 
     try {
-      saveCoreAnalysis(plan.id, analysis);
+      await saveCoreAnalysis(plan.id, analysis);
       plan.coreAnalysis = analysis;
     } catch (storeErr) {
       console.warn('[analyzeCoreTopics] Failed to persist:', storeErr.message);
