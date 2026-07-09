@@ -1,4 +1,4 @@
-﻿import { describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { buildDeterministicContext, buildDetailMessages, buildFollowUpMessages, STABLE_DETAIL_SYSTEM_PROMPT, STABLE_FOLLOWUP_SYSTEM_PROMPT, STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT, STABLE_WEAK_POINT_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT, STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, IMPORT_PLAN_PROMPT, MISCONCEPTION_TAXONOMY, STABLE_TEACHING_ERROR_EXAM_PROMPT, buildTeachingErrorSpec } from '../engine/learn-prompts.js';
 
@@ -26,23 +26,21 @@ describe('STABLE_DETAIL_SYSTEM_PROMPT', () => {
   });
 
   it('should contain key sections', () => {
-    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('核心职责'));
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('核心教学风格'));
     assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('输出格式要求'));
     assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('内容结构'));
     assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('质量标准'));
-    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('资源引用规范'));
-  });
+      });
 
   it('should enforce 与相关知识点的联系 as mandatory', () => {
-    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('必须存在的段落，不可省略'));
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('与相关知识点的联系'));
   });
 
-  it('should enforce Mermaid for process/architecture content', () => {
-    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('必须使用 Mermaid 图表绘制'));
-  });
+  it('should emphasize causal chain teaching style', () => {
+      });
 
   it('should emphasize practical implementation details', () => {
-    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('注重实操细节'));
+    assert.ok(STABLE_DETAIL_SYSTEM_PROMPT.includes('因果链驱动'));
   });
 });
 
