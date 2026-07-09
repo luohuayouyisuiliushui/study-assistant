@@ -42,6 +42,13 @@ const USER_PROFILE_PROMPT = `你是一位资深学习分析顾问，擅长构建
 - 每个知识点的问题数量
 - 问题内容样本
 
+### 5. 费曼学习法数据
+- 费曼学习法使用次数
+- 各次的教学质量评级（excellent/good/fair/needsWork）
+- 常见遗漏内容（作为教材缺了什么）
+- 常见讲解亮点
+- 学生遗留问题的数量
+
 ## 输出格式
 
 请严格按照以下 JSON 结构输出（不要添加额外说明文字，直接输出 JSON）：
@@ -146,6 +153,7 @@ export function aggregateAllPlans() {
   let allExercises = [];  // { topic, plan, exercises[] }
   let allExamResults = []; // { plan, exam, results[] }
   let modeCounts = { stepwise: 0, challenge: 0, scaffold: 0 };
+  let feynmanData = { sessionCount: 0, teachingQualities: [], commonGaps: [], commonStrengths: [], sparklingCount: 0, lingeringCount: 0 };
 
   const planSummaries = plans.map(plan => {
     const doneCount = plan.topics.filter(t => t.done && !t.lastError).length;
@@ -156,6 +164,15 @@ export function aggregateAllPlans() {
     // Time tracking
     for (const t of plan.topics) {
       totalTime += t.timeSpent || 0;
+      // Feynman data
+      if (t.feynmanInsights) {
+        feynmanData.sessionCount++;
+        if (t.feynmanInsights.teachingQuality) feynmanData.teachingQualities.push(t.feynmanInsights.teachingQuality);
+        if (t.feynmanInsights.gaps) feynmanData.commonGaps.push(...t.feynmanInsights.gaps);
+        if (t.feynmanInsights.strengths) feynmanData.commonStrengths.push(...t.feynmanInsights.strengths);
+        if (t.feynmanInsights.sparklingExplanations) feynmanData.sparklingCount += t.feynmanInsights.sparklingExplanations.length;
+        if (t.feynmanInsights.lingeringQuestions) feynmanData.lingeringCount += t.feynmanInsights.lingeringQuestions.length;
+      }
     }
 
     // Weak points
@@ -269,6 +286,7 @@ export function aggregateAllPlans() {
     weakPoints: allWeakPoints,
     weakPointsSummary: sortedWeakPoints,
     modeCounts,
+    feynmanData,
   };
 }
 
@@ -315,6 +333,7 @@ export async function generateUserProfile(provider, model = 'gpt-4o-mini') {
     examStats: aggregated.examStats,
     weakPointsSummary: aggregated.weakPointsSummary,
     modeCounts: aggregated.modeCounts,
+    feynmanStats: aggregated.feynmanData,
     // Include detailed weak points with plan context
     weakPointsByPlan: aggregated.weakPoints.map(w => ({
       plan: w.plan,
@@ -401,6 +420,7 @@ export function getProfileSummary() {
     exerciseStats: aggregated.exerciseStats,
     examStats: aggregated.examStats,
     weakPointsSummary: aggregated.weakPointsSummary,
+    feynmanStats: aggregated.feynmanData,
     planSummaries: aggregated.planSummaries,
     modeCounts: aggregated.modeCounts,
     // Include AI persona if available

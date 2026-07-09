@@ -221,6 +221,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       const label = n.title
         .replace(/"/g, '\u0027')
         .replace(/[[\]]/g, '')
+          .replace(/\(/g, '&#40;').replace(/\)/g, '&#41;')
         .substring(0, 30) + (n.title.length > 30 ? '...' : '');
       def += `    ${nodeId}["${label}"];\n`;
     }
@@ -238,6 +239,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
         const label = n.title
           .replace(/"/g, '\u0027')
           .replace(/[[\]]/g, '')
+            .replace(/\(/g, '&#40;').replace(/\)/g, '&#41;')
           .substring(0, 30) + (n.title.length > 30 ? '...' : '');
         def += `        ${nodeId}["${label}"];\n`;
       }
@@ -283,7 +285,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       // Choose connector based on directionality and line style
       const isBidirectional = e.type === 'related' || e.type === 'contrasts' ||
         (typeInfo.group === 'association' && e.type !== 'buildsOn');
-      const isDashed = typeInfo.style === 'dashed' || typeInfo.style === 'dotted' || isInferred;
+      const isDashed = typeInfo.style === 'dashed' || typeInfo.style === 'dotted' || _isInferred;
 
       let connector;
       if (isBidirectional && isDashed) connector = '<-.->';

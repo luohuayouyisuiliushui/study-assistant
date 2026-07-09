@@ -26,7 +26,7 @@ export default function MermaidDiagram({ code }) {
 
         // Use a unique id per render to avoid collisions
         const id = 'mermaid-' + Math.random().toString(36).slice(2, 9);
-        const { svg: svgText } = await mermaid.render(id, code);
+        const { svg: svgText } = await mermaid.render(id, code.replace(/\(/g, '&#40;').replace(/\)/g, '&#41;'));
 
         if (!cancelled) {
           setSvg(svgText);

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Data model & persistence for the learning assistant.
  *
  * Structure:
@@ -39,7 +39,20 @@ ensureDir();
 function writeAtomic(filePath, data, { backup } = {}) {
   const tmp = filePath + '.tmp.' + process.pid;
   fs.writeFileSync(tmp, data, 'utf-8');
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.renameSync(tmp, filePath);
+  } catch (renameErr) {
+    // Windows EPERM: 目标文件被占用时 rename 失败，降级为 copy + unlink
+    try {
+      fs.copyFileSync(tmp, filePath);
+    } catch (copyErr) {
+      // copy 也失败，清理临时文件后抛出
+      try { fs.unlinkSync(tmp); } catch {}
+      throw new Error(`writeAtomic failed: rename=${renameErr.message}, copy=${copyErr.message}`);
+    }
+    // unlink 失败不阻断 — 幽灵 tmp 文件下次写入时会被覆盖
+    try { fs.unlinkSync(tmp); } catch {}
+  }
   if (backup) {
     // 1. 同目录 .bak（快速恢复）
     const bakPath = filePath + '.bak';
@@ -68,12 +81,21 @@ function writeAtomic(filePath, data, { backup } = {}) {
 const writeQueues = new Map(); // planId → Promise chain
 
 function enqueueWrite(planId, fn) {
+  // 僵尸防护：plan 文件已删除但 Map 条目还在，拒绝写入让 Promise 自然结束
+  if (!fs.existsSync(planPath(planId))) {
+    return Promise.reject(new Error(`Plan not found: ${planId}`));
+  }
   if (!writeQueues.has(planId)) {
     writeQueues.set(planId, Promise.resolve());
   }
   const prev = writeQueues.get(planId);
   const next = prev.then(fn, fn);
   writeQueues.set(planId, next);
+  // settle 后替换为新 Promise.resolve()，防止链无限增长
+  next.then(
+    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
+    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
+  );
   return next;
 }
 
@@ -171,7 +193,7 @@ function rebuildIndex() {
       } catch {}
     }
     if (index.length > 0) {
-      writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2));
+      writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
       console.log(`[learn-store] 🔄 Rebuilt index from ${files.length} plan files → ${index.length} entries`);
     }
     return index;
@@ -244,8 +266,13 @@ export async function deletePlan(planId) {
  * Permanently delete a plan — removes the file, removes from index, skips trash.
  * Also cleans up any trash entry for the same plan ID.
  */
-export function permanentlyDeletePlan(planId) {
-  writeQueues.delete(planId); // discard pending writes
+export async function permanentlyDeletePlan(planId) {
+  // 先等待队列清空，再删除（和 trashPlan 保持一致）
+  const queue = writeQueues.get(planId);
+  if (queue) {
+    try { await queue; } catch { /* ignore — we're deleting anyway */ }
+  }
+  writeQueues.delete(planId);
 
   // Delete plan file from plans/
   const src = planPath(planId);
@@ -286,9 +313,9 @@ export function permanentlyDeletePlan(planId) {
 /**
  * Batch-delete multiple plans permanently by their IDs.
  */
-export function deletePlansByIds(planIds) {
+export async function deletePlansByIds(planIds) {
   for (const id of planIds) {
-    permanentlyDeletePlan(id);
+    await permanentlyDeletePlan(id);
   }
 }
 
@@ -336,9 +363,8 @@ export async function trashPlan(planId) {
       : dest;
     fs.renameSync(src, finalDest);
   } catch (err) {
-    console.warn(`[learn-store] Failed to move plan to trash: ${err.message}`);
-    // Fall back to deleting the file
-    try { fs.unlinkSync(src); } catch {}
+    // 不降级删除 — rename 失败时保留原文件，抛出让用户知道删除未完成
+    throw new Error(`移动到回收站失败: ${err.message}`);
   }
 
   // Remove .tmp files

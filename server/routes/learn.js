@@ -1,6 +1,6 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, analyzeFeynmanSession } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -25,7 +25,7 @@ function getModel(req) {
  */
 router.post('/test-connection', async (req, res) => {
   const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  if (!apiKey || !apiKey.trim()) {
     return res.status(400).json({ ok: false, error: '请提供 API Key（可通过请求头 x-api-key、请求体 apiKey 或环境变量 OPENAI_API_KEY 设置）' });
   }
   const provider = getProvider(req);

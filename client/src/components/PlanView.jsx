@@ -219,9 +219,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     }
   };
 
-  const doneTopics = plan.topics.filter(t => t.done);
-  const inProgressTopics = plan.topics.filter(t => !t.done && t.detail && t.detail.length > 0);
-  const notStartedTopics = plan.topics.filter(t => !t.done && (!t.detail || t.detail.length === 0));
+  const doneTopics = plan.topics.filter(t => t.detail && t.detail.length > 0);
+  const inProgressTopics = [];
+  const notStartedTopics = plan.topics.filter(t => !t.detail || t.detail.length === 0);
 
   // Group topics by phase (only if plan has phases)
   const phases = plan.phases || [];

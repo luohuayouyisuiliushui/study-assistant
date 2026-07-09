@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Core engine: generates detailed knowledge-point content using AI.
  *
  * === CACHE-OPTIMIZED ARCHITECTURE ===
@@ -2162,10 +2162,10 @@ export async function generateQuickQuiz(provider, plan, model = 'gpt-4o-mini') {
 export async function analyzeFeynmanSession(provider, transcript, topicTitle) {
   const transcriptText = transcript
     .map(msg => {
-      const role = msg.role === 'ai' ? 'AI（学生）' : '用户（老师）';
-      return role + ': ' + msg.content;
+      const role = msg.role === 'ai' ? '【AI学生】' : '【用户老师】';
+      return role + '\n' + msg.content;
     })
-    .join('\n\n');
+    .join('\n\n---\n\n');
 
   const messages = [
     { role: 'system', content: FEYNMAN_ANALYSIS_PROMPT },
@@ -2180,15 +2180,16 @@ export async function analyzeFeynmanSession(provider, transcript, topicTitle) {
     });
     const parsed = JSON.parse(result.content || '{}');
     return {
-      weakPoints: parsed.weakPoints || [],
-      misconceptions: parsed.misconceptions || [],
-      personalNotes: parsed.personalNotes || [],
-      mastery: parsed.mastery || 'unknown',
+      lingeringQuestions: parsed.lingeringQuestions || [],
+      teachingQuality: parsed.teachingQuality || 'unknown',
+      strengths: parsed.strengths || [],
+      gaps: parsed.gaps || [],
+      sparklingExplanations: parsed.sparklingExplanations || [],
       summary: parsed.summary || '',
     };
   } catch (err) {
     console.warn('[analyzeFeynmanSession] AI failed:', err.message);
-    return { weakPoints: [], misconceptions: [], personalNotes: [], mastery: 'unknown', summary: '' };
+    return { lingeringQuestions: [], teachingQuality: 'unknown', strengths: [], gaps: [], sparklingExplanations: [], summary: '' };
   }
 }
 
