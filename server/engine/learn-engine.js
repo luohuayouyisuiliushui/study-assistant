@@ -456,7 +456,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
   const context = buildDeterministicContext(plan, topicId);
   const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
 
@@ -561,7 +561,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
   const { onChunk, onToolCall, onDone, onError } = callbacks;
 

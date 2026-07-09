@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -533,8 +533,8 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
   const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge 或 scaffold' });
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold 或 feynman' });
   }
 
   try {
@@ -544,15 +544,23 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
     res.setHeader('X-Accel-Buffering', 'no');
     res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
 
-    const timeout = setTimeout(() => {
-      try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
-    }, 120_000);
+    let idleTimer = null;
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
+      }, 120_000);
+    };
 
     let aborted = false;
-    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
 
     const provider = getProvider(req);
-    const writeEvent = (event) => { if (aborted) return; try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; } };
+    const writeEvent = (event) => {
+      if (aborted) return;
+      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
+    };
+    resetIdleTimer();
 
     await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
       onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
@@ -561,7 +569,7 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
       onError: (err) => writeEvent({ type: 'error', data: err.message }),
     });
 
-    clearTimeout(timeout);
+    if (idleTimer) clearTimeout(idleTimer);
     if (!aborted) res.end();
   } catch (err) {
     console.error('[interactive-start-sse]', err);
@@ -595,15 +603,23 @@ router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res)
     res.setHeader('X-Accel-Buffering', 'no');
     res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
 
-    const timeout = setTimeout(() => {
-      try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
-    }, 120_000);
+    let idleTimer = null;
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
+      }, 120_000);
+    };
 
     let aborted = false;
-    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
 
     const provider = getProvider(req);
-    const writeEvent = (event) => { if (aborted) return; try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; } };
+    const writeEvent = (event) => {
+      if (aborted) return;
+      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
+    };
+    resetIdleTimer();
 
     await streamInteractiveContinue(provider, plan, req.params.topicId, mode, feedback.trim(), {
       onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
@@ -612,7 +628,7 @@ router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res)
       onError: (err) => writeEvent({ type: 'error', data: err.message }),
     });
 
-    clearTimeout(timeout);
+    if (idleTimer) clearTimeout(idleTimer);
     if (!aborted) res.end();
   } catch (err) {
     console.error('[interactive-continue-sse]', err);
@@ -951,7 +967,7 @@ router.post('/plans/:planId/exam/generate-stream', async (req, res) => {
 
     // Client disconnect cleanup
     let aborted = false;
-    req.on('close', () => { aborted = true; clearTimeout(timeout); });
+    res.on('close', () => { aborted = true; clearTimeout(timeout); });
 
     const provider = getProvider(req);
     const writeEvent = (event) => {

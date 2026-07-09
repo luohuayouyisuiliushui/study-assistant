@@ -26,6 +26,9 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   const [quizData, setQuizData] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState({});
+  const [coreOpen, setCoreOpen] = useState(false);
+  const [coreData, setCoreData] = useState(null);
+  const [coreLoading, setCoreLoading] = useState(false);
 
   // Toggle expand/collapse for a parent topic
   const toggleExpand = (topicId) => {
