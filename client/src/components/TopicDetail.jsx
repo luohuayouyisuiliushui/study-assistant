@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -127,6 +127,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const chatPanelRef = useRef(null);
   const genTriggered = useRef(false); // prevent double trigger
   const startTimeRef = useRef(Date.now()); // time tracking
+  const hiddenDurationRef = useRef(0); // accumulated time page was hidden
+  const hiddenStartRef = useRef(null); // when page became hidden
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
@@ -188,10 +190,35 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     const tid = topic?.id;
     startTimeRef.current = Date.now();
     lastReportedRef.current = 0;
+    hiddenDurationRef.current = 0;
+    hiddenStartRef.current = null;
+
+    // Pause/resume on visibility change
+    const onVisibility = () => {
+      if (document.hidden) {
+        // Page hidden — record when it happened
+        hiddenStartRef.current = Date.now();
+      } else if (hiddenStartRef.current) {
+        // Page visible again — add hidden duration
+        hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
+        hiddenStartRef.current = null;
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Helper: effective elapsed time minus hidden periods
+    const effectiveElapsed = () => {
+      const totalMs = Date.now() - startTimeRef.current;
+      let hiddenExtra = hiddenDurationRef.current;
+      if (hiddenStartRef.current) {
+        hiddenExtra += Date.now() - hiddenStartRef.current;
+      }
+      return Math.round((totalMs - hiddenExtra) / 1000);
+    };
 
     // Periodic heartbeat: send accumulated time every 30s
     const heartbeat = setInterval(async () => {
-      const total = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const total = effectiveElapsed();
       const unreported = total - lastReportedRef.current;
       if (unreported >= 5 && pid && tid) {
         try {
@@ -203,8 +230,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
     return () => {
       clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisibility);
+      // Flush hidden time before leaving
+      if (hiddenStartRef.current) {
+        hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
+      }
       // Send remaining time on leave
-      const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const elapsed = effectiveElapsed();
       const unreported = elapsed - lastReportedRef.current;
       if (unreported >= 5 && pid && tid) {
         api.recordTime(pid, tid, unreported).catch(() => {});
@@ -1062,61 +1094,116 @@ ${bodyHtml}
 
             {!interactiveLoading && !interactiveFinished && interactiveSections.length > 0 && (
               <div className="interactive-actions">
-                <p className="interactive-prompt">💬 你的回应是什么？</p>
-                <div className="interactive-quick-buttons">
-                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('继续')}>
-                    ✅ 继续
-                  </button>
-                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('不太懂，详细解释')}>
-                    🤔 不太懂
-                  </button>
-                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('给我举个例子')}>
-                    💡 举例
-                  </button>
-                  <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('和前面讲的有什么关系？')}>
-                    🔗 关联
-                  </button>
-                  {interactiveMode === 'realtime' && (
-                    <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('换个角度解释')}>
-                      🔄 换角度
-                    </button>
-                  )}
-                </div>
-                <div className="interactive-input-area">
-                  <textarea
-                    ref={interactiveInputRef}
-                    value={interactiveInput}
-                    onChange={e => setInteractiveInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendInteractiveFeedback();
-                      }
-                    }}
-                    placeholder="输入你的问题或反馈...（Enter 发送）"
-                    rows={2}
-                  />
-                  {voiceSupported && (
-                    <button
-                      type="button"
-                      className={"voice-btn" + (isRecording ? ' recording' : '')}
-                      onClick={handleVoiceInput}
-                      disabled={interactiveLoading}
-                      title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
-                    >
-                      🎤
-                    </button>
-                  )}
-                  <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
-                    发送
-                  </button>
-                </div>
+                {interactiveMode === 'feynman' ? (
+                  <>
+                    <p className="interactive-prompt">🗣️ 请用你自己的话讲解这段内容</p>
+                    <div className="interactive-quick-buttons">
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('我继续讲解下面部分')}>
+                        ✅ 我继续讲
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('这样理解对吗？请指出我的问题')}>
+                        🤔 这样对吗？
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('我换个角度来解释')}>
+                        💡 换个角度
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('这部分我讲完了，你觉得还有什么疑问？')}>
+                        📖 我讲完了
+                      </button>
+                    </div>
+                    <div className="interactive-input-area">
+                      <textarea
+                        ref={interactiveInputRef}
+                        value={interactiveInput}
+                        onChange={e => setInteractiveInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendInteractiveFeedback();
+                          }
+                        }}
+                        placeholder="输入你的讲解或回答...（Enter 发送）"
+                        rows={2}
+                      />
+                      {voiceSupported && (
+                        <button
+                          type="button"
+                          className={"voice-btn" + (isRecording ? ' recording' : '')}
+                          onClick={handleVoiceInput}
+                          disabled={interactiveLoading}
+                          title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
+                        >
+                          🎤
+                        </button>
+                      )}
+                      <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
+                        发送
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="interactive-prompt">💬 你的回应是什么？</p>
+                    <div className="interactive-quick-buttons">
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('继续')}>
+                        ✅ 继续
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('不太懂，详细解释')}>
+                        🤔 不太懂
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('给我举个例子')}>
+                        💡 举例
+                      </button>
+                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('和前面讲的有什么关系？')}>
+                        🔗 关联
+                      </button>
+                      {interactiveMode === 'realtime' && (
+                        <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('换个角度解释')}>
+                          🔄 换角度
+                        </button>
+                      )}
+                    </div>
+                    <div className="interactive-input-area">
+                      <textarea
+                        ref={interactiveInputRef}
+                        value={interactiveInput}
+                        onChange={e => setInteractiveInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendInteractiveFeedback();
+                          }
+                        }}
+                        placeholder="输入你的问题或反馈...（Enter 发送）"
+                        rows={2}
+                      />
+                      {voiceSupported && (
+                        <button
+                          type="button"
+                          className={"voice-btn" + (isRecording ? ' recording' : '')}
+                          onClick={handleVoiceInput}
+                          disabled={interactiveLoading}
+                          title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
+                        >
+                          🎤
+                        </button>
+                      )}
+                      <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
+                        发送
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
             {interactiveFinished && (
               <div className="interactive-finished-actions">
-                <p>🎉 互动讲解已完成！你可以继续提问或退出互动模式。</p>
+                {interactiveMode === 'feynman' ? (
+                  <p>🎉 费曼练习已完成！AI 正在分析你的讲解...</p>
+                ) : (
+                  <p>🎉 互动讲解已完成！你可以继续提问或退出互动模式。</p>
+                )}
                 <div className="interactive-finished-buttons">
                   <button className="btn btn-sm" onClick={() => handleQuickAction('我还有问题想问')}>
                     💬 继续提问
@@ -1307,44 +1394,54 @@ ${bodyHtml}
             {topic?.feynmanInsights && topic.feynmanInsights.summary && (
               <div className="feynman-insights">
                 <hr />
-                <h3>🧑\u200d\ud83c\udfeb 费曼学习分析</h3>
-                <p className="feynman-mastery">
-                  掌握程度：{topic.feynmanInsights.mastery === 'overall' ? '\u2705 已掌握' : topic.feynmanInsights.mastery === 'good' ? '\ud83d\udfe2 良好' : topic.feynmanInsights.mastery === 'fair' ? '\ud83d\udfe1 一般' : topic.feynmanInsights.mastery === 'poor' ? '\ud83d\udd34 薄弱' : '\u2753 未知'}
+                <h3>🧑\u200d\ud83c\udfeb 费曼教学评估</h3>
+                <p className="feynman-quality">
+                  作为教材质量：{topic.feynmanInsights.teachingQuality === 'excellent' ? '🟢 优秀，可以直接用' : topic.feynmanInsights.teachingQuality === 'good' ? '🔵 良好，稍有不足' : topic.feynmanInsights.teachingQuality === 'fair' ? '🟡 一般，有不少模糊处' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '🔴 需要大改' : '⚪ 未评估'}
                 </p>
                 <p className="feynman-summary">{topic.feynmanInsights.summary}</p>
 
-                {topic.feynmanInsights.weakPoints?.length > 0 && (
+                {topic.feynmanInsights.strengths?.length > 0 && (
                   <div className="feynman-section">
-                    <h4>\ud83c\udfaf 薄弱点</h4>
+                    <h4>✅ 讲得好的地方</h4>
                     <ul>
-                      {topic.feynmanInsights.weakPoints.map((wp, i) => (
-                        <li key={i}>
-                          <strong>{wp.description}</strong>
-                          {wp.suggestion && <span className="feynman-suggestion"> \u2192 {wp.suggestion}</span>}
+                      {topic.feynmanInsights.strengths.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {topic.feynmanInsights.gaps?.length > 0 && (
+                  <div className="feynman-section">
+                    <h4>📋 教材遗漏的重要内容</h4>
+                    <ul>
+                      {topic.feynmanInsights.gaps.map((g, i) => (
+                        <li key={i}>{g}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {topic.feynmanInsights.lingeringQuestions?.length > 0 && (
+                  <div className="feynman-section">
+                    <h4>💭 学生听完后还会问的问题</h4>
+                    <p className="feynman-hint">试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
+                    <ul className="feynman-questions">
+                      {topic.feynmanInsights.lingeringQuestions.map((q, i) => (
+                        <li key={i} className="feynman-question-item">
+                          <div className="feynman-question">❓ {q.question}</div>
+                          {q.whyThisMatters && <div className="feynman-why">💡 为什么重要：{q.whyThisMatters}</div>}
+                          {q.relatedTopic && <div className="feynman-related">🔗 关联：{q.relatedTopic}</div>}
                         </li>
                       ))}
                     </ul>
                   </div>
                 )}
 
-                {topic.feynmanInsights.misconceptions?.length > 0 && (
+                {topic.feynmanInsights.sparklingExplanations?.length > 0 && (
                   <div className="feynman-section">
-                    <h4>\u26a0\ufe0f 误解修正</h4>
-                    <ul>
-                      {topic.feynmanInsights.misconceptions.map((mc, i) => (
-                        <li key={i}>
-                          <strong>{mc.description}</strong>
-                          {mc.correction && <span className="feynman-correction"> \u2192 {mc.correction}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {topic.feynmanInsights.personalNotes?.length > 0 && (
-                  <div className="feynman-section">
-                    <h4>\ud83d\udcdd 你的精彩讲解</h4>
-                    {topic.feynmanInsights.personalNotes.map((note, i) => (
+                    <h4>📝 可以直接当作教材的精彩讲解</h4>
+                    {topic.feynmanInsights.sparklingExplanations.map((note, i) => (
                       <blockquote key={i} className="feynman-note">{note.content}</blockquote>
                     ))}
                   </div>
