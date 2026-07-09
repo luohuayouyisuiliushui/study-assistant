@@ -20,7 +20,7 @@ import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
   STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT, STABLE_EXAM_SELF_CORRECT_PROMPT, STABLE_EXAM_QUALITY_EVAL_PROMPT, STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT,
-  STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT,
+  STABLE_INTERACTIVE_REALTIME_SYSTEM_PROMPT, STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT, STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT, STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT, FEYNMAN_ANALYSIS_PROMPT,
   STABLE_TEACHING_ERROR_EXAM_PROMPT, MISCONCEPTION_TAXONOMY,
   ANALYSIS_SYSTEM_PROMPT, ANALYSIS_FOLLOWUP_PROMPT, CORE_TOPIC_SYSTEM_PROMPT, QUICK_QUIZ_PROMPT } from './learn-prompts.js';
 import { updateTopic, addHistory, getTopicHistory, buildLearningProfile, parseExercisesFromDetail,
@@ -2140,7 +2140,7 @@ export async function generateQuickQuiz(provider, plan, model = 'gpt-4o-mini') {
 
   try {
     const result = await provider.complete(messages, {
-      maxTokens: [redacted],
+      maxTokens: 2048,
       temperature: 0.7,
       responseFormat: { type: 'json_object' },
     });
@@ -2153,6 +2153,42 @@ export async function generateQuickQuiz(provider, plan, model = 'gpt-4o-mini') {
   } catch (err) {
     console.warn('[generateQuickQuiz] AI failed:', err.message);
     return { questions: [], topicCount: available.length, error: err.message };
+  }
+}
+
+/**
+ * Analyze a Feynman interactive session transcript and extract insights.
+ */
+export async function analyzeFeynmanSession(provider, transcript, topicTitle) {
+  const transcriptText = transcript
+    .map(msg => {
+      const role = msg.role === 'ai' ? 'AI（学生）' : '用户（老师）';
+      return role + ': ' + msg.content;
+    })
+    .join('\n\n');
+
+  const messages = [
+    { role: 'system', content: FEYNMAN_ANALYSIS_PROMPT },
+    { role: 'user', content: '知识点：' + topicTitle + '\n\n对话记录：\n' + transcriptText },
+  ];
+
+  try {
+    const result = await provider.complete(messages, {
+      maxTokens: 2048,
+      temperature: 0.3,
+      responseFormat: { type: 'json_object' },
+    });
+    const parsed = JSON.parse(result.content || '{}');
+    return {
+      weakPoints: parsed.weakPoints || [],
+      misconceptions: parsed.misconceptions || [],
+      personalNotes: parsed.personalNotes || [],
+      mastery: parsed.mastery || 'unknown',
+      summary: parsed.summary || '',
+    };
+  } catch (err) {
+    console.warn('[analyzeFeynmanSession] AI failed:', err.message);
+    return { weakPoints: [], misconceptions: [], personalNotes: [], mastery: 'unknown', summary: '' };
   }
 }
 
@@ -2182,6 +2218,7 @@ export default {
   examineTeachingErrors,
   decomposeTopic,
   generateQuickQuiz,
+  analyzeFeynmanSession,
   textToSpeech,
   getEngineCacheDiagnostics,
   createProviderFromConfig,

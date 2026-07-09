@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, analyzeFeynmanSession } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -1051,6 +1051,34 @@ router.post('/cache-stats', (req, res) => {
     const stats = provider.getCacheStats();
     res.json({ stats });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/feynman-analyze/:topicId
+ * Analyze a Feynman learning session transcript.
+ */
+router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '\u8ba1\u5212\u4e0d\u5b58\u5728' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '\u77e5\u8bc6\u70b9\u4e0d\u5b58\u5728' });
+
+  const session = topic.interactiveSession;
+  if (!session || !session.transcript || session.transcript.length === 0) {
+    return res.status(400).json({ error: '\u6ca1\u6709\u8d39\u66fc\u5b66\u4e60\u5bf9\u8bdd\u8bb0\u5f55' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const insights = await analyzeFeynmanSession(provider, session.transcript, topic.title);
+    topic.feynmanInsights = insights;
+    await store.updateTopic(req.params.planId, req.params.topicId, { feynmanInsights: insights });
+    res.json(insights);
+  } catch (err) {
+    console.error('[feynman-analyze]', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -433,7 +433,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       if (match.index > lastIdx) {
         segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
       }
-      segments.push({ type: 'mermaid', content: match[1].trim() });
+      segments.push({ type: 'mermaid', content: match[1].trim().replace(/\(/g, '&#40;').replace(/\)/g, '&#41;') });
       lastIdx = mermaidRe.lastIndex;
     }
     if (lastIdx < md.length) {
@@ -777,11 +777,24 @@ ${bodyHtml}
   };
 
   const handleExitInteractive = () => {
+    const wasFeynman = interactiveMode === 'feynman';
+    const currentPlanId = plan?.id;
+    const currentTopicId = topic?.id;
+    
     setInteractiveMode(null);
     setInteractiveSections([]);
     setInteractiveFinished(false);
     setInteractiveInput('');
     setInteractiveStateMachine(null);
+
+    // Auto-analyze Feynman session in the background
+    if (wasFeynman && currentPlanId && currentTopicId) {
+      api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => {
+        if (insights && insights.summary) {
+          console.log('[Feynman] 分析完成:', insights.summary);
+        }
+      }).catch(() => {});
+    }
   };
 
   // ─── Voice Input Handler ───
@@ -1287,6 +1300,55 @@ ${bodyHtml}
                     {res.explanation && <p className="exercise-explanation">💡 {res.explanation}</p>}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Feynman Insights */}
+            {topic?.feynmanInsights && topic.feynmanInsights.summary && (
+              <div className="feynman-insights">
+                <hr />
+                <h3>🧑\u200d\ud83c\udfeb 费曼学习分析</h3>
+                <p className="feynman-mastery">
+                  掌握程度：{topic.feynmanInsights.mastery === 'overall' ? '\u2705 已掌握' : topic.feynmanInsights.mastery === 'good' ? '\ud83d\udfe2 良好' : topic.feynmanInsights.mastery === 'fair' ? '\ud83d\udfe1 一般' : topic.feynmanInsights.mastery === 'poor' ? '\ud83d\udd34 薄弱' : '\u2753 未知'}
+                </p>
+                <p className="feynman-summary">{topic.feynmanInsights.summary}</p>
+
+                {topic.feynmanInsights.weakPoints?.length > 0 && (
+                  <div className="feynman-section">
+                    <h4>\ud83c\udfaf 薄弱点</h4>
+                    <ul>
+                      {topic.feynmanInsights.weakPoints.map((wp, i) => (
+                        <li key={i}>
+                          <strong>{wp.description}</strong>
+                          {wp.suggestion && <span className="feynman-suggestion"> \u2192 {wp.suggestion}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {topic.feynmanInsights.misconceptions?.length > 0 && (
+                  <div className="feynman-section">
+                    <h4>\u26a0\ufe0f 误解修正</h4>
+                    <ul>
+                      {topic.feynmanInsights.misconceptions.map((mc, i) => (
+                        <li key={i}>
+                          <strong>{mc.description}</strong>
+                          {mc.correction && <span className="feynman-correction"> \u2192 {mc.correction}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {topic.feynmanInsights.personalNotes?.length > 0 && (
+                  <div className="feynman-section">
+                    <h4>\ud83d\udcdd 你的精彩讲解</h4>
+                    {topic.feynmanInsights.personalNotes.map((note, i) => (
+                      <blockquote key={i} className="feynman-note">{note.content}</blockquote>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

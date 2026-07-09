@@ -279,6 +279,12 @@ const api = {
     }, true);
   },
 
+  async analyzeFeynmanSession(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/feynman-analyze/${topicId}`, {
+      method: 'POST',
+    }, true);
+  },
+
   // ─── Connection Test ───
   async testConnection(apiKey, baseURL, model) {
     return request(`${API_BASE}/learn/test-connection`, {
