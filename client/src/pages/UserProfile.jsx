@@ -295,8 +295,43 @@ export default function UserProfile({ onBack }) {
               <span className="profile-pattern-value">
                 分段{summary.modeCounts?.stepwise || 0} · 
                 挑战{summary.modeCounts?.challenge || 0} · 
-                脚手架{summary.modeCounts?.scaffold || 0}
+                脚手架{summary.modeCounts?.scaffold || 0} · 
+                费曼{summary.feynmanStats?.sessionCount || 0}
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feynman Stats */}
+      {summary.feynmanStats?.sessionCount > 0 && (
+        <div className="profile-card">
+          <h3 className="profile-card-title">🧑\u200d\ud83c\udfeb 费曼教学法统计</h3>
+          <div className="profile-pattern-grid">
+            <div className="profile-pattern-item">
+              <span className="profile-pattern-label">使用次数</span>
+              <span className="profile-pattern-value">{summary.feynmanStats.sessionCount} 次</span>
+            </div>
+            <div className="profile-pattern-item">
+              <span className="profile-pattern-label">教学质量分布</span>
+              <span className="profile-pattern-value">
+                {(() => {
+                  const q = summary.feynmanStats.teachingQualities || [];
+                  const ex = q.filter(x => x === 'excellent').length;
+                  const gd = q.filter(x => x === 'good').length;
+                  const fa = q.filter(x => x === 'fair').length;
+                  const nw = q.filter(x => x === 'needsWork').length;
+                  return ' Excellent ' + ex + ' \u2022 Good ' + gd + ' \u2022 Fair ' + fa + ' \u2022 NeedsWork ' + nw;
+                })()}
+              </span>
+            </div>
+            <div className="profile-pattern-item">
+              <span className="profile-pattern-label">精彩讲解摘录</span>
+              <span className="profile-pattern-value">{summary.feynmanStats.sparklingCount} 条</span>
+            </div>
+            <div className="profile-pattern-item">
+              <span className="profile-pattern-label">学生遗留问题</span>
+              <span className="profile-pattern-value">{summary.feynmanStats.lingeringCount} 个</span>
             </div>
           </div>
         </div>
