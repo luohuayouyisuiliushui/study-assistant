@@ -42,16 +42,15 @@ function writeAtomic(filePath, data, { backup } = {}) {
   try {
     fs.renameSync(tmp, filePath);
   } catch (renameErr) {
-    // Windows EPERM: 目标文件被占用时 rename 失败，降级为 copy + unlink
+    // Windows EPERM / 跨设备链接失败 → 降级为复制+删除
     try {
       fs.copyFileSync(tmp, filePath);
+      fs.unlinkSync(tmp);  // 复制成功后删除临时文件
     } catch (copyErr) {
-      // copy 也失败，清理临时文件后抛出
-      try { fs.unlinkSync(tmp); } catch {}
-      throw new Error(`writeAtomic failed: rename=${renameErr.message}, copy=${copyErr.message}`);
+      // 若复制也失败，保留 tmp 文件并抛出错误，由上层重试
+      console.error(`Atomic write fallback failed for ${filePath}:`, copyErr);
+      throw new Error(`CRITICAL: Data write failed, temp file preserved at ${tmp}`);
     }
-    // unlink 失败不阻断 — 幽灵 tmp 文件下次写入时会被覆盖
-    try { fs.unlinkSync(tmp); } catch {}
   }
   if (backup) {
     // 1. 同目录 .bak（快速恢复）
@@ -900,6 +899,24 @@ export function buildInferredEdges(plan, options = {}) {
   const topicMap = {};
   for (const t of plan.topics) {
     topicMap[t.id] = t;
+  }
+
+  // 0. Structure-based edges: parent-child hierarchy (works even without detail)
+  for (const t of plan.topics) {
+    if (t.parentId && topicMap[t.parentId]) {
+      const key = `${t.parentId}:parentOf:${t.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        inferredEdges.push({
+          from: t.parentId,
+          to: t.id,
+          type: 'parentOf',
+          description: `「${topicMap[t.parentId]?.title || ''}」包含子知识点「${t.title}」`,
+          source: 'structure',
+          weight: 1.0,
+        });
+      }
+    }
   }
 
   // 1. Extract from detail text

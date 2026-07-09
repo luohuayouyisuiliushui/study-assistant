@@ -1907,6 +1907,7 @@ export async function generateExam(providerOrConfig, plan, topicIds, config = {}
 }
 
 export async function generateExamStream(providerOrConfig, plan, topicIds, config = {}, writeCallback, model) {
+  const provider = _resolveProvider(providerOrConfig, model);
   const blueprint = await generateBlueprint(provider, plan, topicIds, config, model);
   const {title, orders, topicTitleToId, topicDetailMap} = blueprint;
   writeCallback({type:'blueprint', data:{total:orders.length, title}});

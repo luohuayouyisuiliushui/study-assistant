@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, gradeExam, generateExamPractice, analyzeCoreTopics } from '../engine/learn-engine.js';
 
 const router = Router();
 
@@ -783,6 +783,29 @@ router.post('/plans/:id/analysis/ask', async (req, res) => {
       res.status(500).json({ error: '追问失败: ' + (err.message || err) });
     } catch {
       res.status(500).end('追问失败');
+    }
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/core-topics
+ * Analyze core ~20% topics using the Pareto principle (AI-driven).
+ * Results are cached on the plan for reuse.
+ */
+router.post('/plans/:planId/core-topics', async (req, res) => {
+  try {
+    const plan = store.getPlan(req.params.planId);
+    if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+    const provider = getProvider(req);
+    const result = await analyzeCoreTopics(provider, plan, getModel(req));
+    res.json(result);
+  } catch (err) {
+    console.error('[core-topics]', err);
+    try {
+      res.status(500).json({ error: '核心分析失败: ' + (err.message || err) });
+    } catch {
+      res.status(500).end('分析失败');
     }
   }
 });
