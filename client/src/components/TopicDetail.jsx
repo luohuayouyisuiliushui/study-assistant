@@ -487,7 +487,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       if (match.index > lastIdx) {
         segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
       }
-      segments.push({ type: 'mermaid', content: match[1].trim().replace(/\(/g, '&#40;').replace(/\)/g, '&#41;') });
+      segments.push({ type: 'mermaid', content: match[1].trim() });
       lastIdx = mermaidRe.lastIndex;
     }
     if (lastIdx < md.length) {

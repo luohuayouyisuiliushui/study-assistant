@@ -26,7 +26,7 @@ export default function MermaidDiagram({ code }) {
 
         // Use a unique id per render to avoid collisions
         const id = 'mermaid-' + Math.random().toString(36).slice(2, 9);
-        const { svg: svgText } = await mermaid.render(id, code.replace(/\(/g, '&#40;').replace(/\)/g, '&#41;'));
+        const { svg: svgText } = await mermaid.render(id, code);
 
         if (!cancelled) {
           setSvg(svgText);
@@ -44,7 +44,7 @@ export default function MermaidDiagram({ code }) {
   if (error) {
     // Extract a short, readable error description
     const shortMsg = error
-      .replace(/Syntax error in graph.*?$/ms, '语法错误，请检查图表定义')
+      .replace(/Syntax error in (?:graph|text).*?$/ms, '语法错误，请检查图表定义')
       .replace(/Lexical error.*?$/ms, '存在无法识别的字符或符号')
       .replace(/Error: (.*?)\\n.*/s, '$1')
       .split('\n')[0]
