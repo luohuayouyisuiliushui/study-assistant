@@ -34,6 +34,45 @@ function ensureDir() {
 }
 ensureDir();
 
+// ── Startup cleanup: remove orphaned .tmp.* files from crashed processes ──
+function cleanupOrphanedTempFiles() {
+  const dirsToScan = [
+    path.join(DATA, 'plans'),
+    DATA, // also scan the learn/ root for user-profile.json.tmp.* etc.
+  ];
+  const now = Date.now();
+  const MIN_AGE_MS = 10_000; // Only remove files older than 10s (avoid race with concurrent process)
+
+  for (const dir of dirsToScan) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const entries = fs.readdirSync(dir);
+      for (const entry of entries) {
+        if (!entry.includes('.tmp.')) continue;
+        const fullPath = path.join(dir, entry);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (now - stat.mtimeMs >= MIN_AGE_MS) {
+            fs.unlinkSync(fullPath);
+            console.log(`[learn-store] 🧹 Cleaned orphaned temp file: ${fullPath}`);
+          }
+        } catch (cleanErr) {
+          // File may have been removed by another process or is locked
+          if (cleanErr.code !== 'ENOENT') {
+            console.warn(`[learn-store] Could not clean temp file ${fullPath}: ${cleanErr.message}`);
+          }
+        }
+      }
+    } catch (scanErr) {
+      // Directory may not exist or be inaccessible
+      if (scanErr.code !== 'ENOENT') {
+        console.warn(`[learn-store] Temp cleanup scan failed for ${dir}: ${scanErr.message}`);
+      }
+    }
+  }
+}
+cleanupOrphanedTempFiles();
+
 // ─── Atomic write ───
 
 function writeAtomic(filePath, data, { backup } = {}) {
@@ -634,6 +673,7 @@ function flattenTopics(phases, phasesById) {
  * Get children topics for a given parent topic.
  */
 export function getTopicChildren(plan, parentId) {
+  if (!plan || !plan.topics) return [];
   return plan.topics.filter(t => t.parentId === parentId).sort((a, b) => a.order - b.order);
 }
 
@@ -641,6 +681,7 @@ export function getTopicChildren(plan, parentId) {
  * Get topic prerequisites (topics that should be learned first).
  */
 export function getTopicPrerequisites(plan, topicId) {
+  if (!plan || !plan.topics) return [];
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic || !topic.prerequisites?.length) return [];
   return topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean);
@@ -664,6 +705,8 @@ export function getTopicDescendants(plan, parentId) {
  * Returns { nodes: [...], edges: [...] }
  */
 export function buildKnowledgeGraph(plan) {
+  if (!plan || !plan.topics) return { nodes: [], edges: [] };
+
   const nodes = plan.topics.map(t => ({
     id: t.id,
     title: t.title,
@@ -893,6 +936,8 @@ export function buildInferredEdges(plan, options = {}) {
     includeSequential = true,
     includeKeywordCrossPhase = true,
   } = options;
+
+  if (!plan || !plan.topics || plan.topics.length === 0) return [];
 
   const inferredEdges = [];
   const seen = new Set();
@@ -1425,6 +1470,8 @@ export function extractWeakPoints(analysisJson) {
  * @returns {Array} Topics needing review with weakPoints summary
  */
 export function getTopicsNeedingReview(plan) {
+  if (!plan || !plan.topics) return [];
+
   // Collect topics with weak points from exam results
   const examWeakTopics = new Set();
   if (plan.examPapers) {
@@ -1503,6 +1550,8 @@ export function clearFlag(planId) {
  * Summarizes what the user has learned, their questions, and struggle points.
  */
 export function buildLearningProfile(plan) {
+  if (!plan || !plan.topics) return { totalTopics: 0, doneTopics: 0, inProgress: 0, failed: 0, completionRate: 0, questionsCount: 0, qaTopics: {} };
+
   const doneTopics = plan.topics.filter(t => t.done && !t.lastError);
   const inProgress = plan.topics.filter(t => !t.done && !t.lastError);
   const failed = plan.topics.filter(t => t.lastError);

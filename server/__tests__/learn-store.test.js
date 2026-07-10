@@ -761,7 +761,127 @@ describe('Edge cases', () => {
       await assert.rejects(() => store.recordTeachingErrors(plan.id, 'no-such', []), /Topic not found/);
     });
   });
+});
 
+// ═══════════════════════════════════════════════════════
+//  Null/undefined safety — defensive programming
+// ═══════════════════════════════════════════════════════
+
+describe('Null safety', () => {
+  describe('buildKnowledgeGraph', () => {
+    it('should return empty graph for null plan', () => {
+      const result = store.buildKnowledgeGraph(null);
+      assert.deepStrictEqual(result, { nodes: [], edges: [] });
+    });
+
+    it('should return empty graph for undefined plan', () => {
+      const result = store.buildKnowledgeGraph(undefined);
+      assert.deepStrictEqual(result, { nodes: [], edges: [] });
+    });
+
+    it('should return empty graph for plan without topics', () => {
+      const result = store.buildKnowledgeGraph({ id: 'x', name: 'empty' });
+      assert.deepStrictEqual(result, { nodes: [], edges: [] });
+    });
+  });
+
+  describe('buildInferredEdges', () => {
+    it('should return empty for null plan', () => {
+      assert.deepStrictEqual(store.buildInferredEdges(null), []);
+    });
+
+    it('should return empty for plan with no topics', () => {
+      assert.deepStrictEqual(store.buildInferredEdges({ name: 'empty' }), []);
+    });
+
+    it('should return empty for plan with empty topics array', () => {
+      assert.deepStrictEqual(store.buildInferredEdges({ topics: [] }), []);
+    });
+  });
+
+  describe('buildEnhancedKnowledgeGraph', () => {
+    it('should not crash with null plan', () => {
+      const result = store.buildEnhancedKnowledgeGraph(null);
+      assert.ok(result, 'should return something');
+      assert.deepStrictEqual(result.nodes, []);
+      assert.deepStrictEqual(result.edges, []);
+    });
+
+    it('should not crash with plan missing topics', () => {
+      const result = store.buildEnhancedKnowledgeGraph({ id: 'bare' });
+      assert.deepStrictEqual(result.nodes, []);
+      assert.deepStrictEqual(result.edges, []);
+    });
+  });
+
+  describe('getTopicChildren', () => {
+    it('should return empty array for null plan', () => {
+      assert.deepStrictEqual(store.getTopicChildren(null, 'x'), []);
+    });
+
+    it('should return empty array for plan without topics', () => {
+      assert.deepStrictEqual(store.getTopicChildren({ name: 'no topics' }, 'x'), []);
+    });
+  });
+
+  describe('getTopicPrerequisites', () => {
+    it('should return empty array for null plan', () => {
+      assert.deepStrictEqual(store.getTopicPrerequisites(null, 'x'), []);
+    });
+
+    it('should return empty array for plan without topics', () => {
+      assert.deepStrictEqual(store.getTopicPrerequisites({ name: 'no topics' }, 'x'), []);
+    });
+  });
+
+  describe('buildLearningProfile', () => {
+    it('should return default profile for null plan', () => {
+      const profile = store.buildLearningProfile(null);
+      assert.strictEqual(profile.totalTopics, 0);
+      assert.strictEqual(profile.doneTopics, 0);
+      assert.strictEqual(profile.completionRate, 0);
+    });
+
+    it('should return default profile for plan without topics', () => {
+      const profile = store.buildLearningProfile({ name: 'empty', history: [] });
+      assert.strictEqual(profile.totalTopics, 0);
+      assert.strictEqual(profile.completionRate, 0);
+    });
+  });
+
+  describe('getTopicsNeedingReview', () => {
+    it('should return empty array for null plan', () => {
+      assert.deepStrictEqual(store.getTopicsNeedingReview(null), []);
+    });
+
+    it('should return empty array for plan without topics', () => {
+      assert.deepStrictEqual(store.getTopicsNeedingReview({ name: 'empty' }), []);
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+//  Temp file cleanup verification
+// ═══════════════════════════════════════════════════════
+
+describe('Temp file cleanup', () => {
+  it('should not leave .tmp files after write operations', () => {
+    const plan = store.createPlan('tmp-cleanup-test');
+    _testPlanIds.push(plan.id);
+
+    // Perform write operations
+    store.updateTopic(plan.id, plan.topics[0]?.id || 'nonexistent', { difficulty: 'medium' });
+
+    // Check that no .tmp files exist in the plans directory
+    const plansDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'learn', 'plans');
+    if (fs.existsSync(plansDir)) {
+      const files = fs.readdirSync(plansDir);
+      const tmpFiles = files.filter(f => f.includes('.tmp.'));
+      assert.strictEqual(tmpFiles.length, 0, `should have no .tmp files, found: ${tmpFiles.join(', ')}`);
+    }
+
+    store.deletePlan(plan.id);
+  });
 });
 
 // ═══════════════════════════════════════════════════════

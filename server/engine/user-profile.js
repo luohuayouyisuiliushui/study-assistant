@@ -304,13 +304,183 @@ export function getUserProfile() {
   }
 }
 
-function writeUserProfile(data) {
+export function writeUserProfile(data) {
   const tmp = PROFILE_FILE + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmp, PROFILE_FILE);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    try {
+      fs.renameSync(tmp, PROFILE_FILE);
+    } catch (renameErr) {
+      // Windows EPERM / cross-device link failure → fall back to copy + delete
+      fs.copyFileSync(tmp, PROFILE_FILE);
+      fs.unlinkSync(tmp);
+    }
+  } catch (writeErr) {
+    // If even the temp write failed, try direct write as last resort
+    console.error('[user-profile] Atomic write failed, attempting direct write:', writeErr.message);
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    // Clean up temp file if it was created
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
 }
 
-// ─── AI-powered profile generation ───
+/**
+ * 规则驱动：根据练习+考试+问答模式反向更新画像的 masteryLevel 和 learnerPersona。
+ * 这是数据飞轮的"回灌"环节：用户行为 → 画像数据 → 下次Prompt个性化。
+ *
+ * ⚠️ 未接入 AI——接入 AI 分析的是完整版 generateUserProfile()。
+ * 但这个函数可以在用户每次做练习/答完题后增量更新画像，不需要AI调用。
+ *
+ * ⚠️ 这不会永久修改磁盘上的画像文件——只返回更新后的画像对象
+ * 供 AdaptivePromptInjector 在下一次 generateDetail 中立即使用。
+ *
+ * @param {object|null} currentProfile - 当前画像 (或 null 表示基于活跃计划的初始画像)
+ * @param {Array} allPlans - 所有学习计划 (来自 store)
+ * @returns {object} 更新后的画像，下次生成时直接注入到提示中
+ */
+export function profileUpdater(currentProfile, allPlans) {
+  const profile = currentProfile || _buildSkeletonProfile();
+  const now = Date.now();
+
+  // ── 1. 根据最新练习考试数据重新计算每种 masteryLevel ──
+  // 遍历所有计划的每个知识点，每个知识点得分根据：练习正确率 + 考试正确率
+  for (const plan of allPlans) {
+    if (!plan.topics) continue;
+    for (const t of plan.topics) {
+      if (!t.detail) continue;
+      const exercises = t.exercises || [];
+      if (exercises.length === 0) continue;
+      const correct = exercises.filter(e => e.correct === true).length;
+      const accuracy = correct / exercises.length;
+
+      // 将 accuracy 映射为 masteryLevel（0-1）
+      const mastery = Math.round(accuracy * 100) / 100;
+
+      // 找到画像中对应的 strength / weakness 条目
+      const concept = t.title;
+      const domain = _guessDomain(concept, plan.name);
+
+      _upsertMastery(profile, domain, concept, mastery, exercises.length);
+    }
+  }
+
+  // ── 2. 根据问答模式微调 personality 权重 ──
+  // 统计所有计划中的问答类型（为什么/怎么用/区别/我理解得对吗）
+  let totalQuestions = 0;
+  const questionTypes = { why: 0, how: 0, compare: 0, confirm: 0, apply: 0, deep: 0 };
+  for (const plan of allPlans) {
+    for (const h of (plan.history || [])) {
+      if (h.role !== 'user') continue;
+      totalQuestions++;
+      const q = (h.content || '').toLowerCase();
+      if (/为什么|why|原因是|原理|底层|背后/.test(q)) questionTypes.why++;
+      if (/怎么用|如何|怎么|示例|例子|代码|example|实践/.test(q)) questionTypes.how++;
+      if (/区别|对比|vs|versus|不同|比较|还是|差异/.test(q)) questionTypes.compare++;
+      if (/对吗|是不是|对吗|对吧|我的理解|确认/.test(q)) questionTypes.confirm++;
+      if (/应用|场景|实际|项目|生产|工作中/.test(q)) questionTypes.apply++;
+      if (/深入|追问|进一步|再问|还是不懂|换个角度/.test(q)) questionTypes.deep++;
+    }
+  }
+
+  if (totalQuestions > 0) {
+    const qt = questionTypes;
+    // 判断主导类型
+    const dominantType = Object.entries(qt).sort((a, b) => b[1] - a[1])[0][0];
+    const typeMap = { why: '深度思考型', how: '实践应用型', compare: '类比联想型', confirm: '谨慎确认型', apply: '目标驱动型', deep: '深度思考型' };
+    const learnedType = typeMap[dominantType];
+    if (learnedType && profile.learnerPersona) {
+      // 如果行为数据与历史画像类型冲突，更新置信度
+      if (!profile.learnerPersona.type.includes(learnedType)) {
+        profile.learnerPersona.type = [...new Set([...profile.learnerPersona.type, learnedType])];
+        profile.learnerPersona.evidenceFromBehavior = `用户在 ${totalQuestions} 个问题中，${dominantType} 类型占比最高（${qt[dominantType]}次）`;
+      }
+      // 置信度从数据量直接重算（避免持久化后多次调用累加膨胀）
+      const sampleBonus = Math.min(totalQuestions / 50, 0.1); // 最多加 0.1
+      const baseConfidence = 0.5;
+      profile.learnerPersona.confidence = Math.min(1, Math.round((baseConfidence + sampleBonus) * 100) / 100);
+    }
+  }
+
+  // ── 3. 根据练习正确率更新跨计划薄弱点列表 ──
+  const conceptAccuracies = {};
+  for (const plan of allPlans) {
+    for (const t of (plan.topics || [])) {
+      const exercises = t.exercises || [];
+      if (exercises.length === 0) continue;
+      const correct = exercises.filter(e => e.correct === true).length;
+      conceptAccuracies[t.title] = correct / exercises.length;
+    }
+  }
+  // accuracy < 0.5 且不在当前列表中 → 推入跨计划薄弱点
+  for (const [title, acc] of Object.entries(conceptAccuracies)) {
+    if (acc < 0.5 && !(profile.crossPlanWeakPoints || []).includes(title)) {
+      if (!profile.crossPlanWeakPoints) profile.crossPlanWeakPoints = [];
+      profile.crossPlanWeakPoints.push(title);
+    }
+  }
+
+  // ── 4. 打上时间戳 ──
+  profile._lastIncrementalUpdate = now;
+  if (!profile._totalIncrementalUpdates) profile._totalIncrementalUpdates = 0;
+  profile._totalIncrementalUpdates++;
+
+  return profile;
+}
+
+function _buildSkeletonProfile() {
+  return {
+    learnerPersona: { type: [], summary: '', confidence: 0.5 },
+    strengths: [],
+    weaknesses: [],
+    crossPlanWeakPoints: [],
+    learningPatterns: { preferredModes: { stepwise: 0, challenge: 0, scaffold: 0 }, questionStyle: '', avgQuestionsPerTopic: 0, timeDistribution: '', completionTrend: '' },
+    recommendations: [],
+    aiAnalysis: '',
+  };
+}
+
+function _guessDomain(title, planName) {
+  // 简短启发式——提取领域标签
+  const lower = title.toLowerCase();
+  if (/协议|tcp|http|网络|socket|dns/.test(lower)) return '网络协议';
+  if (/算法|排序|搜索|数据结构|tree|graph/.test(lower)) return '算法与数据结构';
+  if (/线程|进程|并发|锁|同步|异步/.test(lower)) return '并发编程';
+  if (/编译|链接|汇编|寄存器|指令/.test(lower)) return '系统底层';
+  if (/数据库|sql|索引|事务|nosql/.test(lower)) return '数据库';
+  if (/设计模式|架构|框架|模式/.test(lower)) return '软件设计';
+  return planName || '通用';
+}
+
+function _upsertMastery(profile, domain, topic, mastery, sampleSize) {
+  if (!profile.strengths) profile.strengths = [];
+  if (!profile.weaknesses) profile.weaknesses = [];
+
+  // 检查 strengths 中是否已存在此 topic
+  const allEntries = [...profile.strengths, ...profile.weaknesses];
+  const existingDomain = allEntries.find(e => e.domain === domain);
+
+  const entry = {
+    domain,
+    topics: existingDomain ? [...new Set([...existingDomain.topics, topic])] : [topic],
+    evidence: `练习正确率 ${Math.round(mastery * 100)}%（${sampleSize}题）`,
+    masteryLevel: mastery,
+    lastUpdated: Date.now(),
+  };
+
+  if (mastery >= 0.7) {
+    // 掌握好的 → strengths
+    const idx = profile.strengths.findIndex(s => s.domain === domain);
+    if (idx >= 0) profile.strengths[idx] = entry;
+    else profile.strengths.push(entry);
+    // 从 weaknesses 中移除
+    profile.weaknesses = profile.weaknesses.filter(w => w.domain !== domain);
+  } else {
+    // 掌握不足 → weaknesses
+    const idx = profile.weaknesses.findIndex(w => w.domain === domain);
+    if (idx >= 0) profile.weaknesses[idx] = entry;
+    else profile.weaknesses.push(entry);
+  }
+}
 
 /**
  * Generate (or regenerate) the user profile using AI.

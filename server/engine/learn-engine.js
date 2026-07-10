@@ -16,6 +16,9 @@
 
 import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
+import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
+import { AdaptivePromptInjector } from './adaptive-engine.js';
+import { getUserProfile } from './user-profile.js';
 import { buildDetailMessages, buildFollowUpMessages, buildDeterministicContext,
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
@@ -98,6 +101,10 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
+  // Preserve previous content: if regeneration fails, restore it so the
+  // user doesn't lose a previously successful generation.
+  const previousDetail = topic.detail;
+
   topic.detail = '';
   topic.done = false;
   topic.lastError = null;
@@ -110,7 +117,22 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
   provider.warmCache(warmMessages);
 
   try {
-    const messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。');
+    // ── Adaptive personalization: inject user profile into context ──
+    const profile = getUserProfile();
+    const injector = new AdaptivePromptInjector(profile);
+    const adaptiveContext = injector.buildAdaptiveContext();
+
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。');
+
+    // Inject adaptive guidance between context and question (cache-safe:
+    // user profile changes infrequently, so prefix stays stable most of the time)
+    if (adaptiveContext && injector.hasMeaningfulProfile) {
+      // Append adaptive context to the deterministic context message (messages[1])
+      messages[1] = {
+        ...messages[1],
+        content: messages[1].content + '\n' + adaptiveContext,
+      };
+    }
 
     engineCacheMonitor.recordShape(messages, 'generateDetail:' + topicId.slice(0, 8));
 
@@ -135,14 +157,35 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
     await updateTopic(plan.id, topicId, { detail: fullContent, done: true, lastError: null });
     await addHistory(plan.id, topicId, 'ai', fullContent);
 
+    // ── Post-generation fact-check (quick scan, fire-and-forget) ──
+    factCheckQuickScan(provider, fullContent, topic.title, model).then(result => {
+      if (result && result.flagged) {
+        const summary = buildFactCheckSummary({
+          overallScore: result.flagged ? 0.5 : 0.9,
+          verdict: result.flagged ? 'caution' : 'trusted',
+          summary: result.issues.map(i => i.problem).join('; '),
+          findings: result.issues.map(i => ({ claim: i.claim, verdict: 'uncertain', confidence: 0.4, dimension: 'fact', location: '', explanation: i.problem, correction: '' })),
+        });
+        updateTopic(plan.id, topicId, {
+          factCheck: { flagged: true, issues: result.issues, summary, scannedAt: result.scanTime },
+        }).catch(() => {});
+      } else {
+        updateTopic(plan.id, topicId, {
+          factCheck: { flagged: false, issues: [], summary: '✅ 快速扫描未发现明显问题', scannedAt: result?.scanTime || Date.now() },
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
     return fullContent;
   } catch (err) {
     console.error('[generateDetail]', err);
     topic.lastError = err.message || '生成失败';
-    topic.done = true;
+    // On failure, restore previous detail (if any) so user doesn't lose old content.
+    // Prefer old complete content over partial new content from a failed stream.
+    const detailToSave = previousDetail || topic.detail || null;
     await updateTopic(plan.id, topicId, {
-      detail: topic.detail || null,
-      done: true,
+      detail: detailToSave,
+      done: false,
       lastError: topic.lastError,
     });
     throw err;
@@ -249,7 +292,14 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
   const systemPrompt = _getInteractivePrompt(mode);
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
+  // Adaptive context: inject user profile if available
+  const profile = getUserProfile();
+  const injector = new AdaptivePromptInjector(profile);
+  const adaptiveContext = injector.buildAdaptiveContext();
   const context = buildDeterministicContext(plan, topicId);
+  const enhancedContext = adaptiveContext && injector.hasMeaningfulProfile
+    ? context + '\n' + adaptiveContext
+    : context;
   const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
 
   if (mode === 'stepwise') {
@@ -259,7 +309,7 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: context },
+      { role: 'user', content: enhancedContext },
       { role: 'user', content: initialRequest },
     ];
 
@@ -289,13 +339,13 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
     topic.interactiveSession = session;
     await updateTopic(plan.id, topicId, { interactiveSession: session });
 
-    return { content: result.content || '', tool_calls: result.tool_calls || null, session };
+    return { content: result.content || '', tool_calls: result.tool_calls || null, session, finished: session.finished };
   }
 
   // ── Other modes: keep the streaming approach ──
   const messages = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: context },
+    { role: 'user', content: enhancedContext },
     { role: 'user', content: `请开始${promptName}模式，讲解知识点：「${topic.title}」。先讲授第一个部分的内容，讲完后等待我的反馈再继续下一部分。` },
   ];
 
@@ -313,7 +363,7 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
   topic.interactiveSession = session;
   await updateTopic(plan.id, topicId, { interactiveSession: session });
 
-  return { content: fullContent, session };
+  return { content: fullContent, session, finished: session.finished };
 }
 
 /**
@@ -342,6 +392,38 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
 
     // Find the last tool call (the one we're waiting on user response for)
     const lastToolCallId = _findPendingToolCallId(session);
+
+    // Guard against missing tool call: if no tool was ever called, fall back to
+    // non-tool mode (append user feedback directly instead of as a tool result).
+    if (!lastToolCallId) {
+      session.transcript.push({ role: 'user', content: feedback });
+      const context = buildDeterministicContext(plan, topicId);
+      const transcriptText = _buildInteractiveTranscript(session);
+      const continuationInstruction = (
+        `我们正在进行「${topic.title}」的${promptName}模式。\n\n` +
+        `### 到目前为止的对话记录\n` +
+        `${transcriptText}\n\n` +
+        `### 用户的最新反馈\n` +
+        `用户说：${feedback}\n\n` +
+        `请根据对话记录和用户的最新反馈，继续你的教学。`
+      );
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: context },
+        { role: 'user', content: continuationInstruction },
+      ];
+      const result = await provider.complete(messages, { maxTokens: 4096 });
+      if (!result.content) throw new Error('AI 返回内容为空');
+      session.transcript.push({ role: 'ai', content: result.content });
+      session.status = 'waiting_user';
+      if (/\[SESSION_END\]/.test(result.content || '')) {
+        session.finished = true;
+        session.status = 'completed';
+      }
+      topic.interactiveSession = session;
+      await updateTopic(plan.id, topicId, { interactiveSession: session });
+      return { content: result.content, tool_calls: null, session, finished: session.finished, status: session.status };
+    }
 
     // Reconstruct full message history with tool result
     const context = buildDeterministicContext(plan, topicId);
@@ -457,7 +539,15 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
-  const context = buildDeterministicContext(plan, topicId);
+  const baseContext = buildDeterministicContext(plan, topicId);
+
+  // Adaptive context injection
+  const profile = getUserProfile();
+  const injector = new AdaptivePromptInjector(profile);
+  const adaptiveContext = injector.buildAdaptiveContext();
+  const context = adaptiveContext && injector.hasMeaningfulProfile
+    ? baseContext + '\n' + adaptiveContext
+    : baseContext;
   const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
 
   const { onChunk, onToolCall, onDone, onError } = callbacks;
@@ -501,7 +591,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
       topic.interactiveSession = session;
       await updateTopic(plan.id, topicId, { interactiveSession: session });
 
-      if (onDone) onDone({ content: result.content || '', tool_calls: result.tool_calls || null, session });
+      if (onDone) onDone({ content: result.content || '', tool_calls: result.tool_calls || null, session, finished: session.finished });
       return { content: result.content || '', tool_calls: result.tool_calls || null, session };
     } catch (err) {
       if (onError) onError(err);
@@ -535,7 +625,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
     topic.interactiveSession = session;
     await updateTopic(plan.id, topicId, { interactiveSession: session });
 
-    if (onDone) onDone({ content: fullContent, session });
+    if (onDone) onDone({ content: fullContent, session, finished: session.finished });
     return { content: fullContent, session };
   } catch (err) {
     if (onError) onError(err);
@@ -568,6 +658,50 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
   if (mode === 'stepwise') {
     session.status = 'ai_thinking';
     const lastToolCallId = _findPendingToolCallId(session);
+
+    // Guard against missing tool call: if no tool was ever called, fall back to
+    // non-tool mode (append user feedback directly instead of as a tool result).
+    // This can happen when the AI finishes without calling ask_user_to_continue.
+    if (!lastToolCallId) {
+      // Fall back to non-tool: add user feedback directly, rebuild as stream
+      session.transcript.push({ role: 'user', content: feedback });
+      const context = buildDeterministicContext(plan, topicId);
+      const transcriptText = _buildInteractiveTranscript(session);
+      const continuationInstruction = (
+        `我们正在进行「${topic.title}」的${promptName}模式。\n\n` +
+        `### 到目前为止的对话记录\n` +
+        `${transcriptText}\n\n` +
+        `### 用户的最新反馈\n` +
+        `用户说：${feedback}\n\n` +
+        `请根据对话记录和用户的最新反馈，继续你的教学。`
+      );
+      const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: context },
+        { role: 'user', content: continuationInstruction },
+      ];
+      try {
+        const fullContent = await provider.stream(messages, {
+          maxTokens: 4096,
+          onChunk: (delta) => { if (onChunk) onChunk(delta); },
+        });
+        if (!fullContent) throw new Error('AI 返回内容为空');
+        session.transcript.push({ role: 'ai', content: fullContent });
+        session.status = 'waiting_user';
+        if (/\[SESSION_END\]/.test(fullContent)) {
+          session.finished = true;
+          session.status = 'completed';
+        }
+        topic.interactiveSession = session;
+        await updateTopic(plan.id, topicId, { interactiveSession: session });
+        if (onDone) onDone({ content: fullContent, tool_calls: null, session, finished: session.finished });
+        return { content: fullContent, tool_calls: null, session, finished: session.finished };
+      } catch (err) {
+        if (onError) onError(err);
+        throw err;
+      }
+    }
+
     const context = buildDeterministicContext(plan, topicId);
 
     const messages = [
@@ -2224,4 +2358,20 @@ export default {
   textToSpeech,
   getEngineCacheDiagnostics,
   createProviderFromConfig,
+  // Fact-check engine (re-exported from fact-checker.js)
+  factCheckDetail,
+  factCheckQuickScan,
+  autoFixUncertainClaims,
+  applyFixesToContent,
+  buildFactCheckReport,
+  buildFactCheckSummary,
+};
+
+export {
+  applyFixesToContent,
+  autoFixUncertainClaims,
+  buildFactCheckReport,
+  buildFactCheckSummary,
+  factCheckDetail,
+  factCheckQuickScan,
 };

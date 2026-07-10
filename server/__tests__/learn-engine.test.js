@@ -1039,6 +1039,72 @@ describe('buildImagePrompt', () => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  generateDetail: failure recovery & safety
+// ═══════════════════════════════════════════════════════
+
+describe('generateDetail failure recovery', () => {
+  it('should NOT mark topic as done when generation fails', async () => {
+    const plan = store.createPlan('gendetail-fail-done');
+    await store.addTopics(plan.id, ['失败不标记']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+
+    const provider = createStreamMockProvider('');
+    try { await generateDetail(provider, p, topic.id); } catch {}
+
+    const updated = store.getPlan(plan.id);
+    const updatedTopic = updated.topics[0];
+    assert.strictEqual(updatedTopic.done, false, 'failed generation should not set done=true');
+    store.deletePlan(plan.id);
+  });
+
+  it('should preserve previous detail content on regeneration failure', async () => {
+    const plan = store.createPlan('gendetail-preserve');
+    await store.addTopics(plan.id, ['保留旧内容']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+
+    // First: successfully generate content
+    const goodProvider = createStreamMockProvider('这是第一次成功生成的内容，包含很多有用的信息。');
+    await generateDetail(goodProvider, p, topic.id);
+    const afterSuccess = store.getPlan(plan.id);
+    assert.strictEqual(afterSuccess.topics[0].done, true, 'first generation should succeed');
+    assert.ok(afterSuccess.topics[0].detail.includes('成功生成'), 'should have detail content');
+
+    // Second: attempt regeneration that fails (e.g., from TopicDetail re-generate)
+    const updatedPlan = store.getPlan(plan.id);
+    const badProvider = createStreamMockProvider('');
+    try { await generateDetail(badProvider, updatedPlan, updatedPlan.topics[0].id); } catch {}
+
+    const afterFail = store.getPlan(plan.id);
+    const failedTopic = afterFail.topics[0];
+    assert.strictEqual(failedTopic.done, false, 'regeneration failure should not leave done=true');
+    assert.ok(failedTopic.detail, 'old detail should be preserved, not empty');
+    assert.ok(failedTopic.detail.includes('成功生成'), 'should have old detail content restored');
+    assert.ok(failedTopic.lastError, 'should record error message');
+    assert.ok(failedTopic.lastError.includes('AI 返回内容为空'), 'should record specific error');
+    store.deletePlan(plan.id);
+  });
+
+  it('should handle first-generation failure without previous content', async () => {
+    const plan = store.createPlan('gendetail-first-fail');
+    await store.addTopics(plan.id, ['首次失败']);
+    const p = store.getPlan(plan.id);
+    const topic = p.topics[0];
+
+    const provider = createStreamMockProvider('');
+    try { await generateDetail(provider, p, topic.id); } catch {}
+
+    const updated = store.getPlan(plan.id);
+    const updatedTopic = updated.topics[0];
+    assert.strictEqual(updatedTopic.done, false, 'first failure should not set done=true');
+    assert.strictEqual(updatedTopic.detail, null, 'detail should be null when no previous content exists');
+    assert.ok(updatedTopic.lastError, 'should record error');
+    store.deletePlan(plan.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
 //  Interactive mode edge cases
 // ═══════════════════════════════════════════════════════
 

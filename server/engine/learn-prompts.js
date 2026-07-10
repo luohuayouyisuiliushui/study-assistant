@@ -1124,6 +1124,91 @@ export const QUICK_QUIZ_PROMPT =
   '}\n' +
   '注意：只输出 JSON，不要其他文字。如果没有知识点，questions 返回空数组 []。';
 
+// ═══════════════════════════════════════════════════════
+//  PART 7: FACT-CHECK PROMPTS (Anti-Hallucination Engine)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Stable persona for fact-checking AI-generated learning content.
+ *
+ * This is a "Verifier Agent" in a generate-check architecture:
+ *   Generate Agent → writes content → Verifier Agent audits it
+ *
+ * The prompt is structured to extract checkable claims, verify them against
+ * the AI's own knowledge boundary, and assign confidence scores.
+ *
+ * NEVER changes — ensures cache prefix stability.
+ */
+export const STABLE_FACT_CHECK_PROMPT =
+  '你是一位严格的教育内容事实核查专家。你的任务是审查一段AI生成的学习讲解内容，识别其中所有可验证的陈述，并逐一判断它们的可信度。\n\n' +
+  '## 你的角色\n' +
+  '你是一个"第二双眼睛"。你的存在是为了在学生阅读这份内容之前，先标记出其中潜在的错误、不精确的表述、以及AI幻觉痕迹。\n' +
+  '你不是来写内容，而是来审计内容的。\n\n' +
+  '## 审计维度\n' +
+  '对以下类型的陈述要特别敏感：\n' +
+  '1. **事实性陈述**：日期、版本号、硬件规格、API名称、函数签名、配置参数\n' +
+  '2. **因果关系**：声称"A导致B"需要有明确的技术因果链\n' +
+  '3. **数值范围**：性能数字、内存大小、端口号范围\n' +
+  '4. **标准/协议**：RFC编号、标准名称、协议版本\n' +
+  '5. **历史陈述**：技术的发明时间、发明者、发展脉络\n' +
+  '6. **平台差异**：声称"所有操作系统都..."或"在X平台上表现最好"\n' +
+  '7. **代码行为**：声称某段代码会输出特定结果（需要验证逻辑）\n\n' +
+  '## 评分标准\n' +
+  '- **confidence 0.9-1.0（高确信）**：该陈述是公认的技术事实，在官方文档/经典教材中可查证。如"TCP 是面向连接的传输层协议"\n' +
+  '- **confidence 0.7-0.89（较高确信）**：该陈述大概率正确，但可能存在版本/平台差异。如"Node.js 的 event loop 基于 libuv"\n' +
+  '- **confidence 0.5-0.69（存疑）**：该陈述可能有误、或表述有歧义、或属于过时的信息。需要验证或标注"待核实"\n' +
+  '- **confidence 0.3-0.49（高风险）**：该陈述有较大可能是错误的，或与公认事实不一致\n' +
+  '- **confidence <0.3（疑似幻觉）**：该陈述很可能是AI生成的幻觉——编造的函数名、不存在的标准编号、虚构的版本号等\n\n' +
+  '## 输出格式（严格 JSON）\n' +
+  '{\n' +
+  '  "overallScore": 0.85,\n' +
+  '  "verdict": "trusted|caution|unreliable",\n' +
+  '  "summary": "一句话总结本次审计结果（中文）",\n' +
+  '  "findings": [\n' +
+  '    {\n' +
+  '      "claim": "原内容中的具体陈述（直接引用）",\n' +
+  '      "location": "该陈述所在章节标题（如 ## 核心概念）",\n' +
+  '      "dimension": "fact|version|causal|numeric|standard|history|platform|code",\n' +
+  '      "confidence": 0.6,\n' +
+  '      "verdict": "confirmed|likely_correct|uncertain|likely_wrong|hallucination",\n' +
+  '      "explanation": "一句话解释为什么给出这个评分（中文）",\n' +
+  '      "correction": "如果错误，正确的表述是什么；如果不确定，建议怎么核实"\n' +
+  '    }\n' +
+  '  ]\n' +
+  '}\n\n' +
+  '## 注意事项\n' +
+  '- 只审计可验证的具体陈述，不要对"整体风格"或"教学质量"做评价\n' +
+  '- 如果一段内容完全是正确的，findings 可以返回空数组 [] 且 overallScore 接近 1.0\n' +
+  '- 不要过度审计——对于纯教学风格的表述（如类比、比喻）不需要逐字核查\n' +
+  '- overallScore 是整体可信度评分（0-1），计算逻辑：高确信陈述多→高分；多个存疑/高风险陈述→低分\n' +
+  '- verdict 取值：trusted（overallScore>=0.8）、caution（0.5<=overallScore<0.8）、unreliable（overallScore<0.5）\n' +
+  '只输出 JSON，不要其他文字';
+
+/**
+ * Fact-check follow-up prompt: when the AI already flagged some claims as
+ * uncertain, this asks it to self-correct those specific claims.
+ */
+export const STABLE_FACT_FIX_PROMPT =
+  '你是一位资深技术审阅编辑。上游的事实核查流程已识别出以下内容中的若干存疑陈述。\n' +
+  '你的任务：对每个存疑陈述，给出修正后的版本。如果该陈述实际上是正确的，只需说明它为什么正确。\n\n' +
+  '## 输出格式（严格 JSON）\n' +
+  '{\n' +
+  '  "fixes": [\n' +
+  '    {\n' +
+  '      "claim": "原始存疑陈述",\n' +
+  '      "action": "correct|clarify|remove|confirm",\n' +
+  '      "replacement": "修正后的表述（如果 action=correct 或 clarify）",\n' +
+  '      "reason": "修改原因（一句话）"\n' +
+  '    }\n' +
+  '  ]\n' +
+  '}\n' +
+  'action 取值说明：\n' +
+  '- correct：陈述确实有误，用 correction 字段替换\n' +
+  '- clarify：陈述模糊或可能有误导，用更精确的表述替换\n' +
+  '- remove：陈述完全是幻觉或与主题无关，建议直接删除\n' +
+  '- confirm：陈述实际上是正确的，不需要修改\n' +
+  '只输出 JSON，不要其他文字';
+
 export default {
   buildDetailMessages,
   buildFollowUpMessages,
@@ -1146,3 +1231,128 @@ export default {
   getDetailSystemPrompt,
   getFollowUpSystemPrompt,
 };
+
+// ═══════════════════════════════════════════════════════
+//  PART 8: MULTI-AGENT DISPATCHER CONFIG
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Agent profiles for the multi-agent dispatcher.
+ *
+ * Each entry maps a taskType to:
+ *   - defaultModel: which model tier to use (overridable)
+ *   - fallbackChain: ordered fallback if primary fails
+ *   - temperature: creativity level for this task
+ *   - systemPrompt: the STABLE prompt to use
+ *   - maxTokens: output budget
+ *   - description: human-readable
+ */
+
+export const AGENT_PROFILES = Object.freeze({
+  // ═══ CONTENT GENERATION ═══
+  explain: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.7,
+    maxTokens: 8192,
+    description: '知识点详细讲解',
+  },
+  explainDeep: {
+    defaultModel: 'gpt-4o',
+    fallbackChain: ['gpt-4o', 'gpt-4o-mini'],
+    temperature: 0.6,
+    maxTokens: 8192,
+    description: '深度/重讲模式（使用更强的推理模型）',
+  },
+
+  // ═══ Q&A ═══
+  followUp: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.7,
+    maxTokens: 4096,
+    description: '追问/问答',
+  },
+
+  // ═══ EXAM / EXERCISE ═══
+  examGenerate: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.6,
+    maxTokens: 4096,
+    description: '试卷/习题生成',
+  },
+  examGrade: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.2,
+    maxTokens: 4096,
+    description: '评分（低温保证一致性）',
+  },
+  examSelfCorrect: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.2,
+    maxTokens: 2048,
+    description: '自检/反验证',
+  },
+
+  // ═══ AUDIT ═══
+  audit: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.2,
+    maxTokens: 3072,
+    description: '事实核查/防幻觉审计',
+  },
+  auditLight: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.1,
+    maxTokens: 512,
+    description: '轻量快速扫描',
+  },
+
+  // ═══ REVIEW ═══
+  review: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.5,
+    maxTokens: 4096,
+    description: '复习生成',
+  },
+
+  // ═══ INTERACTIVE ═══
+  interactive: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.7,
+    maxTokens: 4096,
+    description: '互动式教学',
+  },
+
+  // ═══ ANALYSIS ═══
+  analysis: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.7,
+    maxTokens: 4096,
+    description: '学习分析/用户画像',
+  },
+
+  // ═══ UTILITY ═══
+  decompose: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.4,
+    maxTokens: 2048,
+    description: '知识点拆解',
+  },
+  import: {
+    defaultModel: 'gpt-4o-mini',
+    fallbackChain: ['gpt-4o-mini', 'gpt-3.5-turbo'],
+    temperature: 0.3,
+    maxTokens: 4096,
+    description: 'AI导入计划结构',
+  },
+});

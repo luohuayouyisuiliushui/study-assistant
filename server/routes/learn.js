@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, gradeExam, generateExamPractice, analyzeCoreTopics } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, generateExam, gradeExam, generateExamPractice, analyzeCoreTopics, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
+import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
+import { analyzePlanAdaptive, ErrorStateMachine, AdaptivePromptInjector, InterventionRecommender, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { getUserProfile } from '../engine/user-profile.js';
+import { generateAnkiCSV, generateOPML, generateNotionCSV, generateTopicJSON, generateStudyNotes, exportPlanBundle } from '../engine/export-engine.js';
+import AgentDispatcher from '../engine/agent-dispatcher.js';
 
 const router = Router();
 
@@ -15,6 +20,27 @@ function getProvider(req) {
 
 function getModel(req) {
   return req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+}
+
+// ─── Agent Dispatcher (opt-in via x-use-agent-dispatch header or body.useAgentDispatch) ───
+
+function getDispatcher(req) {
+  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
+  const baseURL = req.headers['x-api-base'] || req.body?.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+  const model = req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  return new AgentDispatcher({ apiKey, baseURL, defaultModel: model });
+}
+
+/**
+ * Check if the request wants agent dispatch (opt-in).
+ * Enable by setting header: x-use-agent-dispatch: true
+ * or body: { useAgentDispatch: true }
+ */
+function wantsAgentDispatch(req) {
+  return (
+    req.headers['x-use-agent-dispatch'] === 'true' ||
+    (req.body && req.body.useAgentDispatch === true)
+  );
 }
 
 // ─── Test Connection ───
@@ -233,7 +259,6 @@ router.post('/plans/import', async (req, res) => {
 
   try {
     const provider = getProvider(req);
-    const { IMPORT_PLAN_PROMPT } = await import('../engine/learn-prompts.js');
 
     // ── First attempt: deep analysis with IMPORT_PLAN_PROMPT ──
     let parsed;
@@ -447,6 +472,17 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
   res.json({ status: 'generating', topicId: req.params.topicId });
 
   try {
+    const model = getModel(req);
+
+    // ── Agent dispatch (opt-in): use AgentDispatcher if requested ──
+    if (wantsAgentDispatch(req)) {
+      const dispatcher = getDispatcher(req);
+      const { result: dispatchedResult } = await dispatcher.dispatch('explain',
+        (provider) => generateDetail(provider, plan, req.params.topicId, model)
+      );
+      return; // generateDetail already writes to plan via store
+    }
+
     const provider = getProvider(req);
     const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
     const imageModel = req.body?.imageModel || '';
@@ -565,7 +601,7 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
     await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
       onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
       onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
-      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session }),
+      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
       onError: (err) => writeEvent({ type: 'error', data: err.message }),
     });
 
@@ -852,6 +888,15 @@ router.post('/plans/:planId/exercises/:topicId/submit', async (req, res) => {
   try {
     const provider = getProvider(req);
     const results = await gradeExercises(provider, plan, req.params.topicId, answers);
+
+    // ── Data flywheel: update user profile with latest exercise results ──
+    try {
+      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+      dataFlywheelUpdate(allPlans);
+    } catch (fwErr) {
+      console.warn('[flywheel] exercise submit update failed (non-fatal):', fwErr.message);
+    }
+
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -869,6 +914,15 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
   try {
     const provider = getProvider(req);
     const results = await analyzeWeakPoints(provider, plan, getModel(req));
+
+    // ── Data flywheel: update user profile with weak point analysis results ──
+    try {
+      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+      dataFlywheelUpdate(allPlans);
+    } catch (fwErr) {
+      console.warn('[flywheel] weak-point analysis update failed (non-fatal):', fwErr.message);
+    }
+
     res.json({ weakPoints: results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -924,8 +978,19 @@ router.post('/plans/:planId/exam/generate', async (req, res) => {
   }
 
   try {
+    const model = getModel(req);
+
+    // ── Agent dispatch (opt-in) ──
+    if (wantsAgentDispatch(req)) {
+      const dispatcher = getDispatcher(req);
+      const { result } = await dispatcher.dispatch('examGenerate',
+        (provider) => generateExam(provider, plan, topicIds, config || {}, model)
+      );
+      return res.json({ exam: result });
+    }
+
     const provider = getProvider(req);
-    const exam = await generateExam(provider, plan, topicIds, config || {}, getModel(req));
+    const exam = await generateExam(provider, plan, topicIds, config || {}, model);
     res.json({ exam });
   } catch (err) {
     console.error('[exam/generate]', err);
@@ -950,6 +1015,15 @@ router.post('/plans/:planId/exam/:examId/submit', async (req, res) => {
   try {
     const provider = getProvider(req);
     const results = await gradeExam(provider, plan, req.params.examId, answers);
+
+    // ── Data flywheel: update user profile with latest exam results ──
+    try {
+      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+      dataFlywheelUpdate(allPlans);
+    } catch (fwErr) {
+      console.warn('[flywheel] exam submit update failed (non-fatal):', fwErr.message);
+    }
+
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1063,6 +1137,113 @@ router.get('/cache-diagnostics', (req, res) => {
   res.json({ diagnostics });
 });
 
+// ═══════════════════════════════════════════════════════
+//  FACT-CHECK ROUTES (Anti-Hallucination Engine)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/plans/:planId/fact-check/:topicId
+ * Run a full fact-check audit on a topic's generated detail.
+ * Returns structured findings with confidence scores.
+ */
+router.post('/plans/:planId/fact-check/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容' });
+
+  try {
+    const provider = getProvider(req);
+    const result = await factCheckDetail(provider, topic.detail, topic.title, getModel(req));
+
+    // Store fact-check result on topic
+    await store.updateTopic(req.params.planId, req.params.topicId, { factCheck: result });
+
+    // Also build a human-readable report
+    const report = buildFactCheckReport(result);
+    res.json({ factCheck: result, report });
+  } catch (err) {
+    console.error('[fact-check]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/fact-check-auto-fix/:topicId
+ * Auto-fix uncertain/wrong claims identified in the fact-check report.
+ * Merges corrections back into the topic detail.
+ * Body: { findings: [...] } — the uncertain findings from the fact-check
+ */
+router.post('/plans/:planId/fact-check-auto-fix/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容' });
+
+  const { findings } = req.body || {};
+  if (!findings || !Array.isArray(findings) || findings.length === 0) {
+    return res.status(400).json({ error: '请提供待修正的存疑陈述列表' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const fixes = await autoFixUncertainClaims(provider, findings, getModel(req));
+    const { content: corrected, fixedCount } = applyFixesToContent(topic.detail, fixes);
+
+    if (corrected !== topic.detail && fixedCount > 0) {
+      await store.updateTopic(req.params.planId, req.params.topicId, { detail: corrected });
+      res.json({ corrected: true, fixedCount, detail: corrected, fixes });
+    } else {
+      res.json({ corrected: false, fixedCount: 0, message: '无需修改或修正未能匹配到原文', fixes });
+    }
+  } catch (err) {
+    console.error('[fact-check-auto-fix]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/adaptive-analysis
+ * Run adaptive analysis: error state machine + user profile injection + intervention recommendations.
+ * Returns structured recommendations for what the user should focus on next.
+ */
+router.post('/plans/:planId/adaptive-analysis', (req, res) => {
+  try {
+    const plan = store.getPlan(req.params.planId);
+    if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+    const result = analyzePlanAdaptive(plan);
+    res.json(result);
+  } catch (err) {
+    console.error('[adaptive-analysis]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/learn/adaptive-context
+ * Get the adaptive context string that would be injected into prompts.
+ * Useful for previewing what personalization looks like before generating.
+ */
+router.post('/adaptive-context', (req, res) => {
+  try {
+    const profile = getUserProfile();
+    const injector = new AdaptivePromptInjector(profile);
+    const context = injector.buildAdaptiveContext();
+    res.json({
+      hasProfile: injector.hasMeaningfulProfile,
+      context,
+      compactHint: injector.compactHint,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * POST /api/learn/cache-stats
  * Get detailed per-provider cache statistics (requires API config in body/headers).
@@ -1104,6 +1285,131 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
     console.error('[feynman-analyze]', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ═══════════════════════════════════════════════════════
+//  EXPORT ROUTES (Deep format binding)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * GET /api/learn/plans/:planId/export/anki/:topicId
+ * Export a topic's content as Anki-compatible CSV (flashcards).
+ * Query: ?includeHistory=true (include Q&A as cards)
+ */
+router.get('/plans/:planId/export/anki/:topicId', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容，无法导出' });
+
+  const csv = generateAnkiCSV(plan, req.params.topicId);
+  if (!csv) return res.status(500).json({ error: '生成 Anki CSV 失败' });
+
+  const filename = `${topic.title.replace(/[/\\?%*:|"<>]/g, '_')}.anki.csv`;
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(csv);
+});
+
+/**
+ * GET /api/learn/plans/:planId/export/opml/:topicId
+ * Export a topic as OPML outline (importable by 幕布/XMind/Workflowy).
+ */
+router.get('/plans/:planId/export/opml/:topicId', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const opml = generateOPML(plan, req.params.topicId);
+  if (!opml) return res.status(400).json({ error: '无法生成 OPML 大纲' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  const filename = `${(topic?.title || 'outline').replace(/[/\\?%*:|"<>]/g, '_')}.opml`;
+  res.set('Content-Type', 'application/xml; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(opml);
+});
+
+/**
+ * GET /api/learn/plans/:planId/export/notion
+ * Export the entire plan as Notion-database-importable CSV.
+ */
+router.get('/plans/:planId/export/notion', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const csv = generateNotionCSV(plan);
+  const filename = `${plan.name.replace(/[/\\?%*:|"<>]/g, '_')}.notion.csv`;
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(csv);
+});
+
+/**
+ * GET /api/learn/plans/:planId/export/json/:topicId
+ * Export a topic as structured JSON (comprehensive: detail + exercises + Q&A + weak points + fact-check).
+ */
+router.get('/plans/:planId/export/json/:topicId', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const data = generateTopicJSON(plan, req.params.topicId);
+  if (!data) return res.status(404).json({ error: '知识点不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  res.json(data);
+});
+
+/**
+ * GET /api/learn/plans/:planId/export/notes/:topicId
+ * Export a topic as self-contained study notes (Markdown with YAML frontmatter + collapsed answers).
+ */
+router.get('/plans/:planId/export/notes/:topicId', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const notes = generateStudyNotes(plan, req.params.topicId);
+  if (!notes) return res.status(400).json({ error: '无法生成学习笔记' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  const filename = `${(topic?.title || 'notes').replace(/[/\\?%*:|"<>]/g, '_')}.md`;
+  res.set('Content-Type', 'text/markdown; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  res.send(notes);
+});
+
+/**
+ * GET /api/learn/plans/:planId/export/bundle
+ * Export the entire plan as a JSON data bundle (all topics metadata, no AI call).
+ */
+router.get('/plans/:planId/export/bundle', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const bundle = exportPlanBundle(plan);
+  res.json(bundle);
+});
+
+// ═══════════════════════════════════════════════════════
+//  MULTI-AGENT DISPATCHER ROUTE
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/learn/agents/list
+ * List all known agent types with their profiles.
+ */
+router.post('/agents/list', (req, res) => {
+  res.json({ agents: AgentDispatcher.listAgents() });
+});
+
+/**
+ * POST /api/learn/agents/usage
+ * Get per-agent usage statistics (calls, tokens, errors).
+ */
+router.post('/agents/usage', (req, res) => {
+  const dispatcher = getDispatcher(req);
+  res.json({ usage: dispatcher.usageStats });
 });
 
 export default router;

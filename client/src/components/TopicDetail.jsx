@@ -167,6 +167,18 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const recognitionRef = useRef(null);
   const [voiceSupported, setVoiceSupported] = useState(true);
 
+  // ─── Export State ───
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  // ─── Fact-Check State ───
+  const [factCheckData, setFactCheckData] = useState(topic?.factCheck || null);
+  const [factCheckLoading, setFactCheckLoading] = useState(false);
+  const [factCheckFixing, setFactCheckFixing] = useState(false);
+
+  // ─── Adaptive Analysis State ───
+  const [adaptiveData, setAdaptiveData] = useState(null);
+  const [adaptiveLoading, setAdaptiveLoading] = useState(false);
+
   // Check Web Speech API support on mount
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -384,6 +396,16 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }, 2000);
     return () => clearInterval(timer);
   }, [generating, plan?.id, topic?.id]);
+
+  // Close export menu on outside click
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e) => {
+      if (!e.target.closest('.export-menu-container')) setShowExportMenu(false);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [showExportMenu]);
 
   if (!topic) return null;
 
@@ -708,6 +730,82 @@ ${bodyHtml}
     if (onSelectTopic) onSelectTopic(targetTopicId);
   };
 
+  // ─── Fact-Check Handlers ───
+  const handleFactCheck = async () => {
+    if (factCheckLoading || !localDetail) return;
+    setFactCheckLoading(true);
+    try {
+      const d = await api.factCheck(plan.id, topic.id);
+      setFactCheckData(d.factCheck || d);
+      const fresh = await api.getPlan(plan.id);
+      const freshTopic = fresh.plan.topics.find(t => t.id === topic.id);
+      if (freshTopic?.factCheck) setFactCheckData(freshTopic.factCheck);
+      onRefresh(fresh.plan);
+    } catch (err) {
+      alert('事实核查失败: ' + err.message);
+    } finally {
+      setFactCheckLoading(false);
+    }
+  };
+
+  const handleFactCheckFix = async () => {
+    if (factCheckFixing || !factCheckData?.findings) return;
+    const uncertainFindings = factCheckData.findings.filter(
+      f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination'
+    );
+    if (uncertainFindings.length === 0) {
+      alert('没有需要修正的存疑陈述');
+      return;
+    }
+    setFactCheckFixing(true);
+    try {
+      const d = await api.autoFixFacts(plan.id, topic.id, uncertainFindings);
+      if (d.corrected) {
+        setLocalDetail(d.detail);
+        alert(`已修正 ${d.fixedCount} 处内容`);
+      } else {
+        alert('无需修正: ' + (d.message || '修正未能匹配到原文'));
+      }
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+    } catch (err) {
+      alert('自动修正失败: ' + err.message);
+    } finally {
+      setFactCheckFixing(false);
+    }
+  };
+
+  // ─── Adaptive Analysis Handlers ───
+  const handleAdaptiveAnalysis = async () => {
+    if (adaptiveLoading) return;
+    setAdaptiveLoading(true);
+    try {
+      const d = await api.adaptiveAnalysis(plan.id);
+      setAdaptiveData(d);
+    } catch (err) {
+      alert('自适应分析失败: ' + err.message);
+    } finally {
+      setAdaptiveLoading(false);
+    }
+  };
+
+  // ─── Export handlers for v1.6.0 formats ───
+  const handleExportFormat = (format) => {
+    if (!localDetail) return;
+    setShowExportMenu(false);
+    const urls = {
+      anki: api.exportAnkiCSV(plan.id, topic.id),
+      opml: api.exportOPML(plan.id, topic.id),
+      notas: api.exportNotionCSV(plan.id),
+      json: api.exportJSON(plan.id, topic.id),
+      notes: api.exportStudyNotes(plan.id, topic.id),
+      bundle: api.exportBundle(plan.id),
+    };
+    const url = urls[format];
+    if (!url) return;
+    window.open(url, '_blank');
+  };
+
   // ─── Interactive Mode Handlers ───
 
   const handleStartInteractive = async (mode) => {
@@ -903,14 +1001,28 @@ ${bodyHtml}
         {generating && <span className="generating-badge">⏳ 生成中...</span>}
         {error && <span className="error-badge">❌ 生成失败</span>}
         {localDetail && !error && !generating && (
-          <button className="btn btn-sm" onClick={handleExport} title="导出为 Markdown">
-            ⬇️ .md
-          </button>
-        )}
-        {localDetail && !error && !generating && (
-          <button className="btn btn-sm" onClick={handleExportHtml} title="导出为 HTML（含渲染后的 Mermaid 图表）">
-            🌐 .html
-          </button>
+          <div className="export-menu-container" style={{ position: 'relative', display: 'inline-block' }}>
+            <button className="btn btn-sm" onClick={() => setShowExportMenu(!showExportMenu)} title="导出为多种格式">
+              ⬇️ 导出 {showExportMenu ? '▴' : '▾'}
+            </button>
+            {showExportMenu && (
+              <div className="export-dropdown" style={{
+                position: 'absolute', top: '100%', right: 0, background: 'white',
+                border: '1px solid #ddd', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                zIndex: 1000, minWidth: '210px', padding: '4px 0', marginTop: '4px',
+              }}>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={handleExport}>📝 Markdown (.md)</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={handleExportHtml}>🌐 HTML (.html)</button>
+                <hr style={{ margin: '4px 8px', borderColor: '#eee' }} />
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('anki')}>🃏 Anki CSV (.csv)</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('opml')}>🗂️ OPML 大纲 (.opml)</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('notas')}>🗃️ Notion CSV</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('json')}>📋 结构化 JSON</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('notes')}>📄 学习笔记 (.md)</button>
+                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('bundle')}>📦 计划数据包 (JSON)</button>
+              </div>
+            )}
+          </div>
         )}
         {localDetail && !error && !generating && topic.done === false && (
           <button className="btn btn-sm" onClick={handleComplete} disabled={revealLoading} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
@@ -939,6 +1051,18 @@ ${bodyHtml}
         {interactiveMode && (
           <button className="btn btn-sm" onClick={handleExitInteractive} style={{ background: '#ef4444', color: 'white', borderColor: '#ef4444' }}>
             ✕ 退出互动
+          </button>
+        )}
+        {/* v1.6.0 Fact-Check button */}
+        {localDetail && !error && !generating && (
+          <button className="btn btn-sm" onClick={handleFactCheck} disabled={factCheckLoading} title="AI 事实核查：检查讲解内容中的潜在错误">
+            {factCheckLoading ? '⏳' : '🔍'} 事实核查
+          </button>
+        )}
+        {/* v1.6.0 Adaptive Analysis button */}
+        {!generating && (
+          <button className="btn btn-sm" onClick={handleAdaptiveAnalysis} disabled={adaptiveLoading} title="自适应学习分析：根据薄弱点推荐学习策略">
+            {adaptiveLoading ? '⏳' : '📊'} 自适应分析
           </button>
         )}
       </div>
@@ -1488,6 +1612,117 @@ ${bodyHtml}
                 onChange={(e) => setFoundErrorsInput(e.target.value)}
               />
             </div>
+            {/* ─── v1.6.0 Fact-Check Results ─── */}
+            {factCheckData && (
+              <div className="factcheck-section">
+                <hr />
+                <div className="factcheck-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3>🔍 事实核查结果</h3>
+                  <button className="btn btn-sm" onClick={() => setFactCheckData(null)}>✕ 关闭</button>
+                </div>
+                {factCheckData.overallScore !== undefined && (
+                  <p style={{ margin: '8px 0' }}>
+                    可信度评分：<strong>{Math.round(factCheckData.overallScore * 100)}%</strong>
+                    {' '}·{' '}
+                    <span style={{
+                      color: factCheckData.verdict === 'trusted' ? '#22c55e' :
+                        factCheckData.verdict === 'caution' ? '#f59e0b' : '#ef4444',
+                      fontWeight: 'bold',
+                    }}>
+                      {factCheckData.verdict === 'trusted' ? '✅ 可信' :
+                        factCheckData.verdict === 'caution' ? '⚠️ 需注意' :
+                          factCheckData.verdict === 'unreliable' ? '❌ 不可靠' : '🔴 有误'}
+                    </span>
+                  </p>
+                )}
+                {factCheckData.summary && (
+                  <p style={{ margin: '8px 0', color: '#666', fontSize: '14px' }}>
+                    {typeof factCheckData.summary === 'string' ? factCheckData.summary : ''}
+                  </p>
+                )}
+                {factCheckData.findings && factCheckData.findings.length > 0 && (
+                  <div style={{ marginTop: '12px' }}>
+                    {factCheckData.findings.map((f, i) => (
+                      <div key={i} style={{
+                        border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px',
+                        margin: '8px 0',                         borderLeft: '4px solid ' +
+                          (f.verdict === 'confirmed' || f.verdict === 'likely_correct' ? '#22c55e' :
+                            f.verdict === 'uncertain' ? '#f59e0b' : '#ef4444'),
+                      }}>
+                        <strong>陈述 {i + 1}：</strong>{f.claim || f.location}
+                        <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888' }}>
+                          [{f.dimension}] 置信度: {Math.round((f.confidence || 0.5) * 100)}%
+                        </span>
+                        {f.explanation && <p style={{ margin: '4px 0', color: '#555', fontSize: '13px' }}>{f.explanation}</p>}
+                        {f.correction && <p style={{ margin: '4px 0', color: '#22c55e', fontSize: '13px' }}>✅ 修正建议: {f.correction}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {factCheckData.findings && factCheckData.findings.some(f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination') && (
+                  <button className="btn btn-sm" onClick={handleFactCheckFix} disabled={factCheckFixing} style={{ marginTop: '8px', background: '#f59e0b', color: 'white', borderColor: '#f59e0b' }}>
+                    {factCheckFixing ? '⏳' : '🔧'} 自动修正存疑内容
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* ─── v1.6.0 Adaptive Analysis Results ─── */}
+            {adaptiveData && (
+              <div className="adaptive-section">
+                <hr />
+                <div className="adaptive-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3>📊 自适应学习分析</h3>
+                  <button className="btn btn-sm" onClick={() => setAdaptiveData(null)}>✕ 关闭</button>
+                </div>
+                {adaptiveData.summary && (
+                  <div style={{ margin: '8px 0', padding: '12px', background: '#f9fafb', borderRadius: '8px' }}>
+                    {adaptiveData.summary.stateMachine && (
+                      <div style={{ margin: '8px 0' }}>
+                        <strong>错误状态机：</strong>
+                        <span style={{ margin: '0 8px' }}>总概念 {adaptiveData.summary.stateMachine.totalConcepts} 个</span>
+                        <span style={{ margin: '0 8px', color: '#ef4444' }}>需干预 {adaptiveData.summary.stateMachine.interventionNeeded} 个</span>
+                        <span style={{ margin: '0 8px', color: '#f59e0b' }}>观察中 {adaptiveData.summary.stateMachine.watching} 个</span>
+                        <span style={{ margin: '0 8px', color: '#22c55e' }}>已解决 {adaptiveData.summary.stateMachine.resolved} 个</span>
+                      </div>
+                    )}
+                    {adaptiveData.summary.interventionCount !== undefined && (
+                      <p style={{ margin: '4px 0' }}>推荐操作数：{adaptiveData.summary.interventionCount}</p>
+                    )}
+                  </div>
+                )}
+                {adaptiveData.recommendations && adaptiveData.recommendations.length > 0 && (
+                  <div style={{ marginTop: '12px' }}>
+                    <h4>📋 学习建议</h4>
+                    {adaptiveData.recommendations.map((rec, i) => (
+                      <div key={i} style={{
+                        border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px',
+                        margin: '8px 0', borderLeft: '4px solid ' +
+                          (rec.urgency === 'critical' ? '#ef4444' :
+                            rec.urgency === 'high' ? '#f59e0b' :
+                              rec.urgency === 'medium' ? '#3b82f6' : '#22c55e'),
+                      }}>
+                        <strong>{rec.topicTitle}</strong>{' '}
+                        <span style={{ color: rec.urgency === 'critical' ? '#ef4444' : rec.urgency === 'high' ? '#f59e0b' : '#888' }}>
+                          [{rec.urgency}] {rec.errorCount} 个错误
+                        </span>
+                        {rec.suggestions && rec.suggestions.length > 0 && (
+                          <div style={{ marginTop: '4px' }}>
+                            {rec.suggestions.map((s, j) => (
+                              <span key={j} style={{
+                                display: 'inline-block', margin: '2px 4px', padding: '2px 8px',
+                                background: '#f0f9ff', borderRadius: '12px', fontSize: '12px',
+                              }}>{s}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Mark complete & go back */}
             <div className="topic-complete-bar">
               <button className="btn-complete" onClick={handleComplete} disabled={revealLoading} title="标记为已学完并返回列表">

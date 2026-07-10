@@ -305,6 +305,65 @@ const api = {
       body: JSON.stringify({ apiKey, baseURL, model }),
     });
   },
+
+  // ─── v1.6.0 Fact-Check (Anti-Hallucination) ───
+  async factCheck(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/fact-check/${topicId}`, {
+      method: 'POST',
+    }, true);
+  },
+  async autoFixFacts(planId, topicId, findings) {
+    return request(`${API_BASE}/learn/plans/${planId}/fact-check-auto-fix/${topicId}`, {
+      method: 'POST',
+      body: JSON.stringify({ findings }),
+    }, true);
+  },
+
+  // ─── v1.6.0 Adaptive Engine ───
+  async adaptiveAnalysis(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/adaptive-analysis`, {
+      method: 'POST',
+    });
+  },
+  async getAdaptiveContext() {
+    return request(`${API_BASE}/learn/adaptive-context`, {
+      method: 'POST',
+    });
+  },
+
+  // ─── v1.6.0 Export Engine ───
+  exportAnkiCSV(planId, topicId) {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    return `${API_BASE}/learn/plans/${planId}/export/anki/${topicId}`;
+  },
+  exportOPML(planId, topicId) {
+    return `${API_BASE}/learn/plans/${planId}/export/opml/${topicId}`;
+  },
+  exportNotionCSV(planId) {
+    return `${API_BASE}/learn/plans/${planId}/export/notion`;
+  },
+  exportJSON(planId, topicId) {
+    return `${API_BASE}/learn/plans/${planId}/export/json/${topicId}`;
+  },
+  exportStudyNotes(planId, topicId) {
+    return `${API_BASE}/learn/plans/${planId}/export/notes/${topicId}`;
+  },
+  exportBundle(planId) {
+    return `${API_BASE}/learn/plans/${planId}/export/bundle`;
+  },
+
+  // ─── v1.6.1 Multi-Agent Dispatcher ───
+  async listAgents() {
+    return request(`${API_BASE}/learn/agents/list`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+  async getAgentUsage() {
+    return request(`${API_BASE}/learn/agents/usage`, {
+      method: 'POST',
+    }, true);
+  },
 };
 
 export default api;
