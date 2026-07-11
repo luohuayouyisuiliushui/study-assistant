@@ -114,6 +114,26 @@ function writeAtomic(filePath, data, { backup } = {}) {
   }
 }
 
+// ─── Backup cleanup helper ───
+
+/**
+ * Remove a plan's backup files from both .bak and .backups-v2/ directories.
+ * Called when permanently deleting or trashing a plan to prevent orphaned backups.
+ */
+function removePlanBackups(planId) {
+  // 1. Remove .bak file from plans/ directory
+  try {
+    const bakPath = planPath(planId) + '.bak';
+    if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
+  } catch {}
+
+  // 2. Remove backup from .backups-v2/ directory
+  try {
+    const v2Backup = path.join(BACKUP_DIR, planId + '.json');
+    if (fs.existsSync(v2Backup)) fs.unlinkSync(v2Backup);
+  } catch {}
+}
+
 // ─── Per-plan write queue (serializes concurrent writes to same plan) ───
 
 const writeQueues = new Map(); // planId → Promise chain
@@ -329,11 +349,8 @@ export async function permanentlyDeletePlan(planId) {
     }
   } catch {}
 
-  // Delete backup file if exists
-  try {
-    const bak = src + '.bak';
-    if (fs.existsSync(bak)) fs.unlinkSync(bak);
-  } catch {}
+  // Delete all backup files (.bak + .backups-v2/)
+  removePlanBackups(planId);
 
   // Remove from active index
   const index = readIndex().filter(e => e.id !== planId);
@@ -489,6 +506,8 @@ export function permanentlyDeleteTrash(planId) {
   if (trashFile) {
     try { fs.unlinkSync(trashFile); } catch {}
   }
+  // Delete all backup files (.bak + .backups-v2/)
+  removePlanBackups(planId);
   // Remove from trash index
   const trashIndex = readTrashIndex().filter(e => e.id !== planId);
   writeTrashIndex(trashIndex);
@@ -504,6 +523,8 @@ export function emptyTrash() {
     if (trashFile) {
       try { fs.unlinkSync(trashFile); } catch {}
     }
+    // Delete all backup files (.bak + .backups-v2/)
+    removePlanBackups(entry.id);
   }
   writeTrashIndex([]);
   console.log(`[learn-store] 🗑️ Emptied recycle bin (${trashIndex.length} items)`);
@@ -528,6 +549,8 @@ export function cleanExpiredTrash() {
         if (trashFile) {
           try { fs.unlinkSync(trashFile); } catch {}
         }
+        // Delete all backup files (.bak + .backups-v2/)
+        removePlanBackups(entry.id);
       }
       // If hasData, keep the file but remove from index
     } else {
