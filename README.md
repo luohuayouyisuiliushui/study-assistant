@@ -1,129 +1,99 @@
 # Study Assistant
 
-> AI 驱动的交互式学习助手 v1.6.2
+AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节。
 
-## 简介
+## 它能做什么
 
-Study Assistant 帮助你高效学习任何知识领域。创建学习计划，AI 为每个知识点生成详细讲解，支持追问、互动教学、测验考试，并自动追踪你的学习进度和薄弱环节。
+你创建一个学习计划（比如"Python 入门"），添加几个知识点（比如"变量与类型"、"条件判断"、"循环"），然后：
 
-## 功能
+1. AI 为每个知识点生成**详细讲解**（含图表、例题、练习题）
+2. 你可以**追问**任何不理解的地方
+3. 用**7 种互动模式**学习（费曼教学、挑战找错、分段引导等）
+4. 做**练习和测验**，AI 自动批改
+5. 查看**学习分析**，知道哪些知识点还没掌握
+6. 导出为 **Anki 卡片**、Markdown 等格式
 
-| 模块 | 功能 |
-|------|------|
-| **学习计划** | 创建/删除/批量管理，支持 AI 导入大纲、文件批量导入（TXT/MD/CSV） |
-| **AI 讲解** | SSE 流式 Markdown 生成，含 Mermaid 图表、例题、练习题 |
-| **交互教学** | 7 种模式：分段讲解、实时互动、费曼学习、挑战模式、支架教学等 |
-| **追问系统** | 基于对话历史的多轮追问 |
-| **练习测验** | 随堂练习、AI 组卷、错题强化、快速测验 |
-| **学习分析** | 学习报告、核心 20% 分析、薄弱点追踪、用户画像 |
-| **自适应引擎** | 错误状态机 + 干预推荐 + 个性化 prompt |
-| **知识图谱** | D3 + Mermaid 双引擎，12 种关系类型，支持思维导图 |
-| **导出** | Markdown / HTML / Anki / OPML / Notion / JSON / 学习笔记 |
-| **其他** | 深色模式（6 套主题）、语音输入、TTS 语音合成 |
+简单说：**一个懂你学习进度的 AI 家教**。
 
 ## 快速开始
 
 ```bash
-# 安装依赖
 npm install
-
-# 启动开发服务器（前端 :5173 / 后端 :3001）
 npm run dev
-
-# 运行测试
-npm test
 ```
 
-浏览器打开 `http://localhost:5173`，首次使用在设置弹窗中配置 API Key。
+浏览器打开 `http://localhost:5173`，在设置里填入 API Key（支持 OpenAI / DeepSeek / SiliconFlow 等）即可使用。
 
-## 使用指南
+## 截图
 
-### 基本流程
+<!-- 截图占位 -->
 
-```
-创建计划 → 添加知识点 → AI 生成讲解 → 标记进度 → 追问扩展 → 做练习/测验 → 复习巩固 → 导出分享
-```
+## 使用方法
 
-### 配置 API Key
+### 1. 创建学习计划
 
-支持 OpenAI / DeepSeek / SiliconFlow 等 OpenAI 兼容 API。配置方式（优先级从高到低）：
+点击"新建计划"，输入计划名称（如"JavaScript 基础"），然后添加知识点列表。支持手动输入，也支持从 TXT/MD/CSV 文件批量导入。
 
-1. 前端设置弹窗（推荐）
-2. 请求头 `x-api-key`
-3. 环境变量 `OPENAI_API_KEY`
+### 2. 生成讲解
 
-```bash
-# 或创建 .env 文件
-cp server/.env.example server/.env
-```
+点击知识点旁的"生成"按钮，AI 会实时流式输出讲解内容，包含：
+- 核心概念解释
+- Mermaid 图表
+- 代码示例
+- 例题与练习题
 
-### 交互教学模式
+### 3. 互动学习
 
-| 模式 | 说明 |
-|------|------|
-| 分段讲解 | AI 每讲完一个子概念暂停，等你反馈后再继续 |
-| 实时互动 | 小块高频对话式教学 |
-| 费曼学习 | 你讲 AI 听，AI 扮演好奇学生追问 |
-| 挑战模式 | AI 故意埋入错误，考验你是否发现 |
-| 支架教学 | 拆解为递进子问题逐步引导 |
+选择一种互动模式深入学习：
+- **费曼学习**：你向 AI 讲解，AI 追问你不懂的地方
+- **挑战模式**：AI 故意讲错，看你能不能发现
+- **分段讲解**：AI 讲一段停一下，等你反馈再继续
 
-### 数据导出
+### 4. 测验与复习
 
-支持导出为 Anki 卡片、OPML 大纲、Notion CSV、JSON 等格式，便于与其他工具集成。
+完成学习后，可以：
+- 做随堂练习（AI 自动批改）
+- AI 智能组卷考试
+- 查看薄弱点分析
+- 导出 Anki 卡片复习
 
-## 技术架构
+---
+
+<details>
+<summary>技术细节（开发者）</summary>
+
+### 技术栈
 
 | 层 | 技术 |
 |----|------|
 | 前端 | React 19 + Vite 8 + Tailwind CSS 4 + shadcn/ui |
-| 后端 | Node.js + Express 5 + OpenAI SDK（ESM） |
-| AI | OpenAI 兼容 API，SSE 流式响应 |
+| 后端 | Node.js + Express 5 + OpenAI SDK |
+| AI | OpenAI 兼容 API，SSE 流式 |
 | 存储 | JSON 文件系统，原子写入 + 双层备份 |
-| 测试 | Node.js 内置 `node:test`，476 测试用例 |
 
-### 数据飞轮
+### 运行测试
 
+```bash
+cd server && npm test
 ```
-AI 生成（注入个性化上下文）→ 用户行为（练习/考试/提问）→ 画像更新 → 下次生成使用更新后的画像
-```
+
+### API 端点
+
+60+ 端点，涵盖计划管理、AI 生成、交互教学、测验组卷、学习分析、知识图谱、数据导出等。详见 `server/routes/learn.js`。
 
 ### 项目结构
 
 ```
-study-assistant/
-├── client/                     # React 前端
-│   └── src/components/         # UI 组件
-└── server/                     # Express 后端
-    ├── engine/                 # AI 核心（讲解/追问/自适应/核查）
-    ├── routes/                 # API 路由（60+ 端点）
-    └── __tests__/              # 测试用例
+client/          # React 前端
+server/
+├── engine/      # AI 核心（讲解/追问/自适应/核查）
+├── routes/      # API 路由
+└── __tests__/   # 测试用例
 ```
 
-## 开发
-
-### 测试
-
-```bash
-cd server
-npm test
-```
-
-### API 端点一览
-
-| 分类 | 端点 |
-|------|------|
-| 计划 | `GET/POST /api/learn/plans` |
-| 知识点 | `POST .../topics`，`PUT .../reorder` |
-| AI 生成 | `POST .../generate/:topicId`（SSE） |
-| 追问 | `POST .../ask/:topicId` |
-| 交互 | `POST .../interactive-start-sse/:topicId` |
-| 测验 | `POST .../quick-quiz`，`POST .../exam/generate-stream` |
-| 分析 | `POST .../analysis`，`POST .../core-topics` |
-| 图谱 | `GET .../graph` |
-| 导出 | `GET .../export/anki\|opml\|notion\|json\|notes` |
-| 画像 | `GET /api/user-profile` |
-
-### 已知注意事项
+### 已知限制
 
 - Windows 测试需串行（`--test-concurrency=1`）
-- 前端使用 HashRouter（`/#/`），无需服务器配置
+- 前端使用 HashRouter（`/#/`）
+
+</details>
