@@ -1,4 +1,4 @@
-﻿const API_BASE = '/api';
+const API_BASE = '/api';
 
 /** Read API settings from localStorage (set by SettingsModal) */
 function getApiSettings() {
@@ -279,6 +279,13 @@ const api = {
     }, true);
   },
 
+  async submitQuickQuiz(planId, questions, results) {
+    return request(`${API_BASE}/learn/plans/${planId}/quick-quiz/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ questions, results }),
+    });
+  },
+
   async analyzeFeynmanSession(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/feynman-analyze/${topicId}`, {
       method: 'POST',
@@ -362,6 +369,69 @@ const api = {
   async getAgentUsage() {
     return request(`${API_BASE}/learn/agents/usage`, {
       method: 'POST',
+    }, true);
+  },
+
+  // ─── Exam System ───
+  async listExams(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/exams`);
+  },
+  async generateExam(planId, topicIds, config) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ topicIds, config }),
+    }, true);
+  },
+  async generateExamStream(planId, topicIds, config, onEvent) {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const headers = { 'Content-Type': 'application/json' };
+    const body = JSON.stringify({ topicIds, config, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const response = await fetch(`${API_BASE}/learn/plans/${planId}/exam/generate-stream`, {
+      method: 'POST', headers, body,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: '组卷失败' }));
+      throw new Error(err.error || '组卷失败');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+        }
+      }
+    }
+  },
+  async submitExam(planId, examId, answers) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }, true);
+  },
+  async deleteExam(planId, examId) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}`, {
+      method: 'DELETE',
+    });
+  },
+  async practiceExam(planId, examId, count) {
+    return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/practice`, {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    }, true);
+  },
+
+  // ─── Core Topics (Pareto 20%) ───
+  async getCoreTopics(planId, force = false) {
+    return request(`${API_BASE}/learn/plans/${planId}/core-topics`, {
+      method: 'POST',
+      body: force ? { force: true } : {},
     }, true);
   },
 };

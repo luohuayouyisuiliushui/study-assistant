@@ -192,6 +192,101 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
   }
 }
 
+/**
+ * Generate detail content with SSE streaming events.
+ * Accepts a writeEvent callback for real-time chunk delivery.
+ * Events: chunk ({ content }), done ({ topicId, detail }), error ({ message })
+ * Still persists to store (same as generateDetail), but also streams via SSE.
+ */
+export async function generateDetailStream(providerOrConfig, plan, topicId, writeEvent, model = 'gpt-4o-mini') {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  const previousDetail = topic.detail;
+
+  topic.detail = '';
+  topic.done = false;
+  topic.lastError = null;
+  await updateTopic(plan.id, topicId, { detail: '', done: false, lastError: null });
+
+  const provider = _resolveProvider(providerOrConfig, model);
+
+  const warmMessages = buildDetailMessages(plan, topicId);
+  provider.warmCache(warmMessages);
+
+  try {
+    const profile = getUserProfile();
+    const injector = new AdaptivePromptInjector(profile);
+    const adaptiveContext = injector.buildAdaptiveContext();
+
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。');
+
+    if (adaptiveContext && injector.hasMeaningfulProfile) {
+      messages[1] = {
+        ...messages[1],
+        content: messages[1].content + '\n' + adaptiveContext,
+      };
+    }
+
+    engineCacheMonitor.recordShape(messages, 'generateDetail:' + topicId.slice(0, 8));
+
+    let chunkCount = 0;
+    const fullContent = await provider.stream(messages, {
+      maxTokens: 8192,
+      onChunk: (delta) => {
+        topic.detail += delta;
+        chunkCount++;
+        if (writeEvent) writeEvent({ type: 'chunk', content: delta });
+        if (chunkCount % 20 === 0) {
+          updateTopic(plan.id, topicId, { detail: topic.detail });
+        }
+      },
+      onUsage: (usage) => {
+        engineCacheMonitor.recordUsage(usage, 'generateDetail:' + topicId.slice(0, 8));
+      },
+    });
+
+    if (!fullContent) throw new Error('AI 返回内容为空');
+
+    topic.done = true;
+    await updateTopic(plan.id, topicId, { detail: fullContent, done: true, lastError: null });
+    await addHistory(plan.id, topicId, 'ai', fullContent);
+
+    if (writeEvent) writeEvent({ type: 'done', topicId, detail: fullContent });
+
+    factCheckQuickScan(provider, fullContent, topic.title, model).then(result => {
+      if (result && result.flagged) {
+        const summary = buildFactCheckSummary({
+          overallScore: result.flagged ? 0.5 : 0.9,
+          verdict: result.flagged ? 'caution' : 'trusted',
+          summary: result.issues.map(i => i.problem).join('; '),
+          findings: result.issues.map(i => ({ claim: i.claim, verdict: 'uncertain', confidence: 0.4, dimension: 'fact', location: '', explanation: i.problem, correction: '' })),
+        });
+        updateTopic(plan.id, topicId, {
+          factCheck: { flagged: true, issues: result.issues, summary, scannedAt: result.scanTime },
+        }).catch(() => {});
+      } else {
+        updateTopic(plan.id, topicId, {
+          factCheck: { flagged: false, issues: [], summary: '✅ 快速扫描未发现明显问题', scannedAt: result?.scanTime || Date.now() },
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    return fullContent;
+  } catch (err) {
+    console.error('[generateDetailStream]', err);
+    topic.lastError = err.message || '生成失败';
+    const detailToSave = previousDetail || topic.detail || null;
+    await updateTopic(plan.id, topicId, {
+      detail: detailToSave,
+      done: false,
+      lastError: topic.lastError,
+    });
+    if (writeEvent) writeEvent({ type: 'error', data: err.message });
+    throw err;
+  }
+}
+
 // ═══════════════════════════════════════════════════════
 //  INTERACTIVE MODE: stepwise section-by-section + realtime
 // ═══════════════════════════════════════════════════════
@@ -257,6 +352,8 @@ function _getInteractivePrompt(mode) {
   if (mode === 'challenge') return STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT;
   if (mode === 'scaffold') return STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT;
   if (mode === 'feynman') return STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT;
+  if (mode === 'stepwise-challenge') return STABLE_INTERACTIVE_STEPWISE_CHALLENGE_PROMPT;
+  if (mode === 'realtime-challenge') return STABLE_INTERACTIVE_REALTIME_CHALLENGE_PROMPT;
   return STABLE_INTERACTIVE_STEPWISE_SYSTEM_PROMPT;
 }
 
@@ -290,7 +387,7 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
   // Adaptive context: inject user profile if available
   const profile = getUserProfile();
@@ -300,9 +397,9 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
   const enhancedContext = adaptiveContext && injector.hasMeaningfulProfile
     ? context + '\n' + adaptiveContext
     : context;
-  const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
+  const stateMachine = (mode === 'stepwise' || mode === 'stepwise-challenge') ? _initDynamicStateMachine() : null;
 
-  if (mode === 'stepwise') {
+  if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     // ── Stepwise mode: use provider.complete() with tool calling ──
     const stateSnapshot = _buildStateMachineSnapshot({ stateMachine });
     const initialRequest = `请开始${promptName}模式，讲解知识点：「${topic.title}」。\n\n${stateSnapshot}\n\n先讲授第一个部分的内容，讲完后务必调用 ask_user_to_continue 工具暂停，等待我的反馈再继续。`;
@@ -384,9 +481,9 @@ export async function continueInteractiveDetail(providerOrConfig, plan, topicId,
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
-  if (mode === 'stepwise') {
+  if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     // ── Stepwise mode: use provider.complete() with tool calling ──
     session.status = 'ai_thinking';
 
@@ -538,7 +635,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
   const baseContext = buildDeterministicContext(plan, topicId);
 
   // Adaptive context injection
@@ -548,11 +645,11 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
   const context = adaptiveContext && injector.hasMeaningfulProfile
     ? baseContext + '\n' + adaptiveContext
     : baseContext;
-  const stateMachine = mode === 'stepwise' ? _initDynamicStateMachine() : null;
+  const stateMachine = (mode === 'stepwise' || mode === 'stepwise-challenge') ? _initDynamicStateMachine() : null;
 
   const { onChunk, onToolCall, onDone, onError } = callbacks;
 
-  if (mode === 'stepwise') {
+  if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     const stateSnapshot = _buildStateMachineSnapshot({ stateMachine });
     const initialRequest = `请开始${promptName}模式，讲解知识点：「${topic.title}」。\n\n${stateSnapshot}\n\n先讲授第一个部分的内容，讲完后务必调用 ask_user_to_continue 工具暂停，等待我的反馈再继续。`;
 
@@ -651,11 +748,11 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
 
   const provider = _resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
   const systemPrompt = _getInteractivePrompt(mode);
-  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'challenge' ? '考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
+  const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
   const { onChunk, onToolCall, onDone, onError } = callbacks;
 
-  if (mode === 'stepwise') {
+  if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     session.status = 'ai_thinking';
     const lastToolCallId = _findPendingToolCallId(session);
 
@@ -1208,7 +1305,7 @@ export async function analyzeLearning(provider, plan, model = 'gpt-4o-mini', ana
     { role: 'user', content: userContent },
   ];
 
-  const result = await provider.complete(messages, { maxTokens: 4096, temperature: 0.7 });
+  const result = await provider.complete(messages, { maxTokens: 6144, temperature: 0.7 });
 
   return {
     analysis: result.content,
@@ -1246,8 +1343,8 @@ export async function answerAnalysisFollowUp(provider, plan, analysis, question,
  * Uses AI to determine which topics are most important.
  * Results are cached on the plan for reuse.
  */
-export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
-  if (plan.coreAnalysis && plan.coreAnalysis.analyzedAt) {
+export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini', { force = false } = {}) {
+  if (!force && plan.coreAnalysis && plan.coreAnalysis.analyzedAt) {
     return {
       coreTopics: plan.coreAnalysis.coreTopics || [],
       summary: plan.coreAnalysis.summary || '',
@@ -1279,12 +1376,35 @@ export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
 
   try {
     const result = await provider.complete(messages, {
-      maxTokens: 2048,
+      maxTokens: 8192,
       temperature: 0.3,
       responseFormat: { type: 'json_object' },
     });
 
-    const parsed = JSON.parse(result.content || '{}');
+    let parsed;
+    try {
+      parsed = JSON.parse(result.content || '{}');
+    } catch (parseErr) {
+      // Try to recover truncated JSON by extracting the coreTopics array
+      const content = result.content || '';
+      console.warn('[analyzeCoreTopics] JSON parse failed, content length:', content.length, 'finishReason:', result.finishReason);
+      console.warn('[analyzeCoreTopics] Content preview:', content.substring(0, 200));
+      const match = content.match(/"coreTopics"\s*:\s*\[([\s\S]*)/);
+      if (match) {
+        try {
+          parsed = { coreTopics: JSON.parse('[' + match[1].replace(/,\s*$/, '') + ']') };
+        } catch {
+          parsed = {};
+        }
+      } else {
+        parsed = {};
+      }
+      // Also try to extract summary from the truncated content
+      if (!parsed.summary) {
+        const summaryMatch = content.match(/"summary"\s*:\s*"([^"]*)/);
+        if (summaryMatch) parsed.summary = summaryMatch[1];
+      }
+    }
     const aiTopics = (parsed.coreTopics || []).filter(t => t.title);
 
     const coreTopics = aiTopics.map(aiTopic => {
@@ -1313,17 +1433,21 @@ export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini') {
       analyzedAt: Date.now(),
     };
 
-    try {
-      await saveCoreAnalysis(plan.id, analysis);
-      plan.coreAnalysis = analysis;
-    } catch (storeErr) {
-      console.warn('[analyzeCoreTopics] Failed to persist:', storeErr.message);
+    // Only cache results with actual core topics — empty results may be transient AI failures
+    if (coreTopics.length > 0) {
+      try {
+        await saveCoreAnalysis(plan.id, analysis);
+        plan.coreAnalysis = analysis;
+      } catch (storeErr) {
+        console.warn('[analyzeCoreTopics] Failed to persist:', storeErr.message);
+      }
     }
 
     return analysis;
   } catch (err) {
-    console.warn('[analyzeCoreTopics] AI analysis failed:', err.message);
-    return { coreTopics: [], summary: '核心分析暂不可用', corePrinciple: '', analyzedAt: Date.now() };
+    console.warn('[analyzeCoreTopics] AI analysis failed:', err.message || err);
+    console.warn('[analyzeCoreTopics] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+    return { coreTopics: [], summary: '核心分析暂不可用（' + (err.message || '未知错误') + '）', corePrinciple: '', analyzedAt: Date.now() };
   }
 }
 
@@ -1842,32 +1966,50 @@ export function generateBlueprint(providerOrConfig, plan, topicIds, config = {})
   while (remainingChoice > 0) { orders.push({ type: 'choice', difficulty: 'medium' }); remainingChoice--; }
   while (remainingOpen > 0) { orders.push({ type: 'open', difficulty: 'medium' }); remainingOpen--; }
 
-  // Shuffle orders to mix difficulty/types, then distribute across topics via round-robin
+  // Shuffle orders to mix difficulty/types
   for (let i = orders.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [orders[i], orders[j]] = [orders[j], orders[i]];
   }
 
-  // Assign topics round-robin, ensure each topic gets at least 1
-  const topicTitles = selectedTopics.map(t => t.title);
-  const assignments = [];
-  const perTopic = Math.floor(orders.length / topicCount);
-  const extra = orders.length % topicCount;
-  let orderIdx = 0;
+  // ── Weak-point weighted distribution ──
+  // Topics with more weakPoints get proportionally more questions.
+  // Weight = base 1 + weakPointCount (min 1 question per topic guaranteed later).
+  const topicWeights = selectedTopics.map(t => ({
+    title: t.title,
+    weight: 1 + (t.weakPoints || []).length,
+  }));
+  const totalWeight = topicWeights.reduce((s, t) => s + t.weight, 0);
 
-  for (let t = 0; t < topicCount; t++) {
-    const count = perTopic + (t < extra ? 1 : 0);
-    for (let i = 0; i < count && orderIdx < orders.length; i++) {
-      assignments.push({ ...orders[orderIdx], topicTitle: topicTitles[t], index: assignments.length });
-      orderIdx++;
-    }
+  // Assign questions weighted by weakPoints, ensure each topic gets at least 1
+  const assignments = [];
+  const topicAssignCounts = topicWeights.map(t => {
+    const raw = (orders.length * t.weight) / totalWeight;
+    return { title: t.title, count: Math.max(1, Math.round(raw)) };
+  });
+
+  // Normalize to exact total (adjust largest group down if over)
+  let assigned = topicAssignCounts.reduce((s, t) => s + t.count, 0);
+  while (assigned > orders.length) {
+    const largest = topicAssignCounts.reduce((max, t) => t.count > max.count ? t : max);
+    if (largest.count > 1) { largest.count--; assigned--; }
+    else break;
+  }
+  while (assigned < orders.length) {
+    const mostWeak = topicAssignCounts.reduce((max, t, i) => {
+      const wp = (selectedTopics.find(st => st.title === t.title)?.weakPoints || []).length;
+      const mwp = (selectedTopics.find(st => st.title === max.title)?.weakPoints || []).length;
+      return wp > mwp ? t : max;
+    });
+    mostWeak.count++; assigned++;
   }
 
-  // Assign remaining orders if any (rounding)
-  while (orderIdx < orders.length) {
-    const t = orderIdx % topicCount;
-    assignments.push({ ...orders[orderIdx], topicTitle: topicTitles[t], index: assignments.length });
-    orderIdx++;
+  let orderIdx = 0;
+  for (const ta of topicAssignCounts) {
+    for (let i = 0; i < ta.count && orderIdx < orders.length; i++) {
+      assignments.push({ ...orders[orderIdx], topicTitle: ta.title, index: assignments.length });
+      orderIdx++;
+    }
   }
 
   // Build title
@@ -2130,6 +2272,30 @@ export async function gradeExam(providerOrConfig, plan, examId, answers) {
 
   // Save exam results to store
   updateExamResults(plan.id, examId, results);
+
+  // ── Weak point feedback: update topic.weakPoints from wrong answers ──
+  const wrongByTopic = {}; // topicId → Set of conceptTags
+  for (const r of results) {
+    if (r.correct === false) {
+      const q = exam.questions[r.exerciseIndex];
+      if (q && q.topicId) {
+        if (!wrongByTopic[q.topicId]) wrongByTopic[q.topicId] = new Set();
+        if (q.conceptTag) wrongByTopic[q.topicId].add(q.conceptTag);
+      }
+    }
+  }
+  for (const [topicId, wrongTags] of Object.entries(wrongByTopic)) {
+    const topic = plan.topics.find(t => t.id === topicId);
+    if (!topic) continue;
+    const existing = new Set(topic.weakPoints || []);
+    let changed = false;
+    for (const tag of wrongTags) {
+      if (!existing.has(tag)) { existing.add(tag); changed = true; }
+    }
+    if (changed) {
+      await updateTopic(plan.id, topicId, { weakPoints: [...existing] });
+    }
+  }
 
   return results;
 }

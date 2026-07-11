@@ -8,9 +8,17 @@
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "cd server && npm start",
-    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+    "postinstall": "cd server && npm install && cd ../client && npm install",
+    "test": "npm test --prefix server && npm run lint --prefix client",
+    "pretest": "npm run pretest --prefix server",
+    "clean:testdata": "npm run clean:testdata --prefix server",
+    "clean:cache": "npm run clean:cache --prefix server",
+    "clean:backups": "npm run clean:backups --prefix server",
+    "clean:test": "npm run clean:testdata --prefix server && npm run clean:backups --prefix server",
+    "clean:all": "npm run clean:testdata --prefix server && npm run clean:cache --prefix server && npm run clean:backups --prefix server"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.3",
+    "playwright": "^1.61.1"
   }
 }

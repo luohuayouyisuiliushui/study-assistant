@@ -1,4 +1,4 @@
-﻿import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
@@ -7,21 +7,21 @@ import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
 
-function createMockProvider(resultContent) {
+function createMockProvider(resultContent, modelName = 'mock-model') {
   const mockClient = {
     chat: {
       completions: {
         async create(opts) {
           return {
             choices: [{ message: { content: resultContent, role: 'assistant' } }],
-            model: 'mock-model',
+            model: modelName,
             usage: { prompt_tokens: 50, completion_tokens: 100, total_tokens: 150 },
           };
         },
       },
     },
   };
-  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: modelName });
   provider._client = mockClient;
   provider._autoWarm = false;
   return provider;
@@ -934,6 +934,62 @@ describe('analyzeCoreTopics', () => {
     const result = await analyzeCoreTopics(failProvider, p, 'mock-model');
 
     assert.strictEqual(result.summary, '已有分析', 'should return cached result');
+    assert.strictEqual(result.coreTopics[0].title, '知识点A');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should re-analyze when force=true even if cached', async () => {
+    const plan = store.createPlan('core20-force-test');
+    await store.addTopics(plan.id, ['知识点A', '知识点B']);
+
+    // Pre-set coreAnalysis
+    const oldAnalysis = {
+      coreTopics: [{ topicId: '', title: '知识点A', reasons: ['old'], importance: 'high', coverage: '' }],
+      summary: '旧分析',
+      corePrinciple: '旧原则',
+      analyzedAt: Date.now(),
+    };
+    await store.saveCoreAnalysis(plan.id, oldAnalysis);
+
+    const p = store.getPlan(plan.id);
+
+    const mockResult = {
+      coreTopics: [{ topicId: '', title: '知识点B', reasons: ['新分析'], importance: 'high', coverage: '' }],
+      summary: '新分析结果',
+      corePrinciple: '新原则',
+    };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+    const result = await analyzeCoreTopics(provider, p, 'mock-model', { force: true });
+
+    assert.strictEqual(result.summary, '新分析结果', 'should return fresh analysis');
+    assert.strictEqual(result.coreTopics[0].title, '知识点B');
+
+    store.deletePlan(plan.id);
+  });
+
+  it('should not cache empty AI results', async () => {
+    const plan = store.createPlan('core20-empty-cache-test');
+    await store.addTopics(plan.id, ['知识点A', '知识点B']);
+    const p = store.getPlan(plan.id);
+
+    const mockResult = { coreTopics: [], summary: '无核心知识点', corePrinciple: '' };
+    const provider = createMockProvider(JSON.stringify(mockResult));
+
+    await analyzeCoreTopics(provider, p, 'mock-model');
+    const p1 = store.getPlan(plan.id);
+    assert.ok(!p1.coreAnalysis, 'should NOT save empty result to plan');
+
+    // Second call with a different provider should still call AI (not return cached)
+    const mockResult2 = {
+      coreTopics: [{ topicId: '', title: '知识点A', reasons: ['真正核心'], importance: 'high', coverage: '' }],
+      summary: '发现核心',
+      corePrinciple: '原则',
+    };
+    // Use different model name to avoid Provider response cache hitting
+    const provider2 = createMockProvider(JSON.stringify(mockResult2), 'mock-model-v2');
+    const result = await analyzeCoreTopics(provider2, p1, 'mock-model-v2');
+    assert.strictEqual(result.coreTopics.length, 1, 'should have re-analyzed');
     assert.strictEqual(result.coreTopics[0].title, '知识点A');
 
     store.deletePlan(plan.id);

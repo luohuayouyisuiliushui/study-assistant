@@ -1,4 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Helmet } from 'react-helmet-async';
+import { ArrowLeft, RefreshCw, Sparkles, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Target, Clock, FileQuestion } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Button } from '#/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card';
+import { Progress } from '#/components/ui/progress';
 import api from '../api';
 
 function formatDate(ts) {
@@ -16,27 +22,27 @@ function formatDuration(seconds) {
   return `${h}h ${m}min`;
 }
 
+function formatMinutes(v) {
+  return v >= 60 ? `${(v / 60).toFixed(1)}h` : `${v}min`;
+}
+
 function renderMarkdown(text) {
   if (!text) return null;
   return text.split('\n').map((line, i) => {
-    if (line.startsWith('### ')) return <h3 key={i} style={{ marginTop: 12, marginBottom: 6 }}>{line.slice(4)}</h3>;
-    if (line.startsWith('## ')) return <h2 key={i} style={{ marginTop: 16, marginBottom: 8 }}>{line.slice(3)}</h2>;
-    if (line.startsWith('- ')) return <li key={i} style={{ marginLeft: 16, marginBottom: 2 }}>{line.slice(2)}</li>;
+    if (line.startsWith('### ')) return <h3 key={i} className="text-sm font-medium mt-3 mb-1.5">{line.slice(4)}</h3>;
+    if (line.startsWith('## ')) return <h2 key={i} className="text-base font-semibold mt-4 mb-2">{line.slice(3)}</h2>;
+    if (line.startsWith('- ')) return <li key={i} className="ml-4 mb-0.5 text-sm">{line.slice(2)}</li>;
     if (line.trim() === '') return <br key={i} />;
-    return <p key={i} style={{ marginBottom: 4 }}>{line}</p>;
+    return <p key={i} className="text-sm mb-1">{line}</p>;
   });
 }
 
-function MasteryBar({ level, label }) {
-  const pct = Math.round((level || 0) * 100);
-  const color = pct >= 70 ? '#22c55e' : pct >= 40 ? '#eab308' : '#ef4444';
+function StatCard({ value, label, icon: Icon }) {
   return (
-    <div className="profile-bar-row">
-      <span className="profile-bar-label">{label}</span>
-      <div className="profile-bar-track">
-        <div className="profile-bar-fill" style={{ width: pct + '%', background: color }} />
-      </div>
-      <span className="profile-bar-value">{pct}%</span>
+    <div className="flex flex-col items-start gap-1 p-3 rounded-lg bg-muted/50">
+      <Icon className="h-4 w-4 text-muted-foreground" />
+      <div className="text-3xl font-semibold tracking-tight">{value}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -74,7 +80,6 @@ export default function UserProfile({ onBack }) {
     try {
       const d = await api.analyzeUserProfile();
       setProfile(d.profile);
-      // Reload summary to reflect new state
       const sd = await api.getUserProfileSummary();
       setSummary(sd.summary);
     } catch (err) {
@@ -86,27 +91,26 @@ export default function UserProfile({ onBack }) {
 
   if (loading) {
     return (
-      <div className="plan-list">
-        <div className="analysis-loading">
-          <div className="spinner-sm" />
+      <div className="w-full max-w-4xl px-8 py-8">
+        <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
+        <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
           <span>加载画像数据...</span>
         </div>
       </div>
     );
   }
 
-  // No data state
   if (!summary || !summary.hasData) {
     return (
-      <div className="plan-list">
-        <div className="profile-header">
-          <button className="btn btn-sm" onClick={onBack}>← 返回</button>
-          <h2>👤 我的学习画像</h2>
+      <div className="w-full max-w-4xl px-8 py-8 space-y-6">
+        <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />返回</Button>
+          <h2 className="text-xl font-bold">我的学习画像</h2>
         </div>
-        <div className="profile-empty">
-          <p style={{ fontSize: 16, color: '#64748b', textAlign: 'center', padding: 40 }}>
-            还没有学习计划数据。请先创建学习计划并学习知识点，系统将自动生成你的学习画像。
-          </p>
+        <div className="text-center py-12 text-muted-foreground text-sm">
+          还没有学习计划数据。请先创建学习计划并学习知识点，系统将自动生成你的学习画像。
         </div>
       </div>
     );
@@ -115,256 +119,332 @@ export default function UserProfile({ onBack }) {
   const hasFull = profile && summary.hasAIAnalysis;
 
   return (
-    <div className="plan-list" style={{ maxWidth: 720 }}>
-      {/* Header */}
-      <div className="profile-header">
-        <button className="btn btn-sm" onClick={onBack}>← 返回</button>
-        <h2>👤 我的学习画像</h2>
-        <div style={{ display: 'flex', gap: 6 }}>
+    <div className="w-full max-w-4xl px-8 py-8 pb-10 flex flex-col gap-10">
+      <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />返回</Button>
+          <h2 className="text-xl font-bold">我的学习画像</h2>
+        </div>
+        <div className="flex items-center gap-2">
           {summary.lastAnalyzedAt && (
-            <span style={{ fontSize: 11, color: '#94a3b8', alignSelf: 'center' }}>
-              最近分析: {formatDate(summary.lastAnalyzedAt)}
-            </span>
+            <span className="text-xs text-muted-foreground">最近分析: {formatDate(summary.lastAnalyzedAt)}</span>
           )}
-          <button
-            className="btn btn-sm btn-primary"
-            onClick={handleAnalyze}
-            disabled={analyzing}
-          >
-            {analyzing ? '⏳' : '🔄'} {hasFull ? '重新分析' : '生成画像'}
-          </button>
+          <Button size="sm" onClick={handleAnalyze} disabled={analyzing}>
+            {analyzing ? <RefreshCw className="h-4 w-4 mr-1 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
+            {analyzing ? '分析中...' : hasFull ? '重新分析' : '生成画像'}
+          </Button>
         </div>
       </div>
 
       {error && (
-        <div style={{ background: '#fef2f2', color: '#dc2626', padding: '10px 14px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
-          ❌ {error}
+        <div className="flex items-center gap-1.5 text-sm text-destructive bg-destructive/10 rounded-lg px-4 py-2.5">
+          <AlertCircle className="h-4 w-4 shrink-0" />{error}
         </div>
       )}
 
       {analyzing && (
-        <div className="analysis-loading" style={{ marginBottom: 16 }}>
-          <div className="spinner-sm" />
+        <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground text-sm">
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
           <span>AI 正在跨计划分析你的学习数据...</span>
         </div>
       )}
 
-      {/* Cross-Plan Overview */}
-      <div className="profile-card">
-        <h3 className="profile-card-title">📊 跨计划概览</h3>
-        <div className="profile-stats-grid">
-          <div className="profile-stat">
-            <div className="profile-stat-value">{summary.stats.totalPlans}</div>
-            <div className="profile-stat-label">学习计划</div>
+      <Card className="shadow-sm border-0">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-primary" />跨计划概览
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-8">
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+            <StatCard value={summary.stats.totalPlans} label="学习计划" icon={BookOpen} />
+            <StatCard value={summary.stats.totalTopics} label="知识点" icon={Target} />
+            <StatCard value={summary.stats.overallCompletionRate + '%'} label="完成率" icon={TrendingUp} />
+            <StatCard value={formatDuration(summary.stats.totalLearningTime)} label="学习时长" icon={Clock} />
+            <StatCard value={summary.stats.totalQuestions} label="提问数" icon={FileQuestion} />
+            <StatCard
+              value={summary.exerciseStats.total > 0 ? summary.exerciseStats.rate + '%' : '-'}
+              label="练习正确率"
+              icon={TrendingUp}
+            />
           </div>
-          <div className="profile-stat">
-            <div className="profile-stat-value">{summary.stats.totalTopics}</div>
-            <div className="profile-stat-label">知识点</div>
-          </div>
-          <div className="profile-stat">
-            <div className="profile-stat-value">{summary.stats.overallCompletionRate}%</div>
-            <div className="profile-stat-label">完成率</div>
-          </div>
-          <div className="profile-stat">
-            <div className="profile-stat-value">{formatDuration(summary.stats.totalLearningTime)}</div>
-            <div className="profile-stat-label">学习时长</div>
-          </div>
-          <div className="profile-stat">
-            <div className="profile-stat-value">{summary.stats.totalQuestions}</div>
-            <div className="profile-stat-label">提问数</div>
-          </div>
-          <div className="profile-stat">
-            <div className="profile-stat-value">{summary.exerciseStats.total > 0 ? summary.exerciseStats.rate + '%' : '-'}</div>
-            <div className="profile-stat-label">练习正确率</div>
-          </div>
-        </div>
 
-        {/* Plan breakdown */}
-        {summary.planSummaries.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>各计划完成情况</div>
-            {summary.planSummaries.map(p => (
-              <div key={p.id} className="profile-plan-row">
-                <span className="profile-plan-name">{p.name}</span>
-                <div className="profile-bar-track" style={{ flex: 1 }}>
-                  <div
-                    className="profile-bar-fill"
-                    style={{ width: p.completionRate + '%', background: p.completionRate >= 70 ? '#22c55e' : '#60a5fa' }}
-                  />
+          {summary.planSummaries.length > 0 && (
+            <div className="space-y-4">
+              <div className="text-xs text-muted-foreground font-medium">各计划完成情况</div>
+              {summary.planSummaries.map(p => (
+                <div key={p.id} className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm truncate">{p.name}</span>
+                    <span className="text-xs text-muted-foreground shrink-0">{p.doneCount}/{p.topicCount}</span>
+                  </div>
+                  <Progress value={p.completionRate} className="h-2" />
                 </div>
-                <span className="profile-plan-stat">{p.doneCount}/{p.topicCount}</span>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {summary.timeDistribution && summary.timeDistribution.last7Days && (
+        <Card className="shadow-sm border-0">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Clock className="h-4 w-4 text-primary" />学习时长分布
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-4 gap-3 text-center">
+              <div className="p-3 rounded-lg bg-muted/50">
+                <div className="text-2xl font-semibold">{formatDuration(summary.timeDistribution.summary.timeLast7Days)}</div>
+                <div className="text-[10px] text-muted-foreground mt-1">近 7 天</div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Learner Persona (AI generated) */}
-      {hasFull && profile.learnerPersona && (
-        <div className="profile-card">
-          <h3 className="profile-card-title">🧑‍🎓 学习者画像</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-            {(profile.learnerPersona.type || []).map(t => (
-              <span key={t} className="profile-badge">{t}</span>
-            ))}
-          </div>
-          <p style={{ fontSize: 14, lineHeight: 1.7, color: '#334155' }}>
-            {profile.learnerPersona.summary}
-          </p>
-        </div>
-      )}
-
-      {/* Strengths & Weaknesses side by side */}
-      {hasFull && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {/* Strengths */}
-          <div className="profile-card" style={{ flex: 1, minWidth: 200 }}>
-            <h3 className="profile-card-title" style={{ color: '#16a34a' }}>💪 强项</h3>
-            {profile.strengths && profile.strengths.length > 0 ? (
-              profile.strengths.map((s, i) => (
-                <div key={i} style={{ marginBottom: 10 }}>
-                  <MasteryBar level={s.masteryLevel} label={s.domain} />
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                    {s.topics?.join('、')}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p style={{ color: '#94a3b8', fontSize: 13 }}>暂无数据</p>
-            )}
-          </div>
-
-          {/* Weaknesses */}
-          <div className="profile-card" style={{ flex: 1, minWidth: 200 }}>
-            <h3 className="profile-card-title" style={{ color: '#dc2626' }}>⚠️ 待加强</h3>
-            {profile.weaknesses && profile.weaknesses.length > 0 ? (
-              profile.weaknesses.map((w, i) => (
-                <div key={i} style={{ marginBottom: 10 }}>
-                  <MasteryBar level={w.masteryLevel} label={w.domain} />
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                    {w.topics?.join('、')}
-                  </div>
-                  {w.suggestedAction && (
-                    <div style={{ fontSize: 11, color: '#2563eb', marginTop: 1, fontStyle: 'italic' }}>
-                      💡 {w.suggestedAction}
-                    </div>
-                  )}
-                </div>
-              ))
-            ) : (
-              <p style={{ color: '#94a3b8', fontSize: 13 }}>暂无数据</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Cross-plan weak points summary (computed, no AI needed) */}
-      {summary.weakPointsSummary && summary.weakPointsSummary.length > 0 && (
-        <div className="profile-card">
-          <h3 className="profile-card-title">📋 跨计划薄弱知识点</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {summary.weakPointsSummary.map((wp, i) => (
-              <span key={i} className="profile-tag">
-                {wp.name}
-                {wp.count > 1 && <span style={{ color: '#94a3b8', marginLeft: 4 }}>×{wp.count}</span>}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Learning Patterns */}
-      {hasFull && profile.learningPatterns && (
-        <div className="profile-card">
-          <h3 className="profile-card-title">📈 学习模式</h3>
-          <div className="profile-patterns-grid">
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">提问风格</span>
-              <span className="profile-pattern-value">{profile.learningPatterns.questionStyle || '-'}</span>
+              <div className="p-3 rounded-lg bg-muted/50">
+                <div className="text-2xl font-semibold">{formatDuration(summary.timeDistribution.summary.timeLast30Days)}</div>
+                <div className="text-[10px] text-muted-foreground mt-1">近 30 天</div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/50">
+                <div className="text-2xl font-semibold">{summary.timeDistribution.summary.activeDays}</div>
+                <div className="text-[10px] text-muted-foreground mt-1">活跃天数</div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/50">
+                <div className="text-2xl font-semibold">{formatDuration(summary.timeDistribution.summary.avgPerDaySeconds)}</div>
+                <div className="text-[10px] text-muted-foreground mt-1">日均学习</div>
+              </div>
             </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">平均提问/知识点</span>
-              <span className="profile-pattern-value">{profile.learningPatterns.avgQuestionsPerTopic || 0}</span>
-            </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">时间分布</span>
-              <span className="profile-pattern-value">{profile.learningPatterns.timeDistribution || '-'}</span>
-            </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">互动模式偏好</span>
-              <span className="profile-pattern-value">
-                分段{summary.modeCounts?.stepwise || 0} · 
-                挑战{summary.modeCounts?.challenge || 0} · 
-                脚手架{summary.modeCounts?.scaffold || 0} · 
-                费曼{summary.feynmanStats?.sessionCount || 0}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Feynman Stats */}
-      {summary.feynmanStats?.sessionCount > 0 && (
-        <div className="profile-card">
-          <h3 className="profile-card-title">🧑\u200d\ud83c\udfeb 费曼教学法统计</h3>
-          <div className="profile-pattern-grid">
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">使用次数</span>
-              <span className="profile-pattern-value">{summary.feynmanStats.sessionCount} 次</span>
-            </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">教学质量分布</span>
-              <span className="profile-pattern-value">
+            <div className="pt-4">
+              <div className="text-xs text-muted-foreground mb-3 font-medium">近 7 天每日学习时长</div>
+              <div className="h-[220px]">
                 {(() => {
-                  const q = summary.feynmanStats.teachingQualities || [];
-                  const ex = q.filter(x => x === 'excellent').length;
-                  const gd = q.filter(x => x === 'good').length;
-                  const fa = q.filter(x => x === 'fair').length;
-                  const nw = q.filter(x => x === 'needsWork').length;
-                  return ' Excellent ' + ex + ' \u2022 Good ' + gd + ' \u2022 Fair ' + fa + ' \u2022 NeedsWork ' + nw;
+                  const dataMax = Math.max(...summary.timeDistribution.last7Days.map(d => Math.round(d.seconds / 60)), 0);
+                  const step = dataMax <= 30 ? 5 : dataMax <= 120 ? 20 : 60;
+                  const maxVal = Math.ceil(dataMax / step) * step;
+                  const chartData = summary.timeDistribution.last7Days.map(d => ({
+                    date: d.date,
+                    label: new Date(d.date + 'T00:00:00').toLocaleDateString('zh-CN', { weekday: 'short' }),
+                    mins: Math.round(d.seconds / 60),
+                    seconds: d.seconds,
+                  }));
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData} margin={{ top: 10, right: 10, bottom: 10, left: 20 }}>
+                        <XAxis
+                          dataKey="label"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fontSize: 11, fill: 'oklch(0.556 0 0)' }}
+                        />
+                        <YAxis
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fontSize: 10, fill: 'oklch(0.556 0 0)' }}
+                          tickFormatter={formatMinutes}
+                          domain={[0, maxVal]}
+                          tickCount={maxVal / step + 1}
+                        />
+                        <Tooltip
+                          formatter={(v) => [formatMinutes(v), '学习时长']}
+                          labelFormatter={(l) => l}
+                          contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                        />
+                        <Bar dataKey="mins" radius={[4, 4, 0, 0]} barSize={32}>
+                          {chartData.map((d, i) => (
+                            <Cell
+                              key={i}
+                              fill={d.seconds > 0 ? 'oklch(0.546 0.245 262.88 / 0.8)' : 'oklch(0.546 0.245 262.88 / 0.12)'}
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
                 })()}
-              </span>
+              </div>
             </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">精彩讲解摘录</span>
-              <span className="profile-pattern-value">{summary.feynmanStats.sparklingCount} 条</span>
+
+            {summary.timeDistribution.summary.peakDay && (
+              <div className="text-xs text-muted-foreground">
+                学习高峰：<span className="font-medium text-foreground">{summary.timeDistribution.summary.peakDay.date}</span>，共 {formatDuration(summary.timeDistribution.summary.peakDay.seconds)}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {hasFull && profile.learnerPersona && (
+        <Card className="shadow-sm border-0">
+          <CardContent className="pt-6 space-y-3">
+            <h3 className="text-sm font-semibold">学习者画像</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {(profile.learnerPersona.type || []).map(t => (
+                <span key={t} className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">{t}</span>
+              ))}
             </div>
-            <div className="profile-pattern-item">
-              <span className="profile-pattern-label">学生遗留问题</span>
-              <span className="profile-pattern-value">{summary.feynmanStats.lingeringCount} 个</span>
-            </div>
-          </div>
+            <p className="text-sm text-muted-foreground leading-relaxed">{profile.learnerPersona.summary}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {hasFull && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card className="shadow-sm border-0">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-green-600">强项</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {profile.strengths && profile.strengths.length > 0 ? (
+                profile.strengths.map((s, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-sm text-muted-foreground truncate">{s.domain}</span>
+                      <Progress value={(s.masteryLevel || 0) * 100} className="flex-1 h-1.5" />
+                      <span className="w-8 text-right text-xs text-muted-foreground">{Math.round((s.masteryLevel || 0) * 100)}%</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground pl-[88px] leading-relaxed">{s.topics?.join('、')}</div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">暂无数据</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-0">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2 text-orange-600">待加强</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {profile.weaknesses && profile.weaknesses.length > 0 ? (
+                profile.weaknesses.map((w, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-sm text-muted-foreground truncate">{w.domain}</span>
+                      <Progress value={(w.masteryLevel || 0) * 100} className="flex-1 h-1.5" />
+                      <span className="w-8 text-right text-xs text-muted-foreground">{Math.round((w.masteryLevel || 0) * 100)}%</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground pl-[88px] leading-relaxed">{w.topics?.join('、')}</div>
+                    {w.suggestedAction && (
+                      <div className="text-xs text-primary pl-[88px] leading-relaxed">{w.suggestedAction}</div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">暂无数据</p>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
-      {/* AI Recommendations */}
+      {summary.weakPointsSummary && summary.weakPointsSummary.length > 0 && (
+        <Card className="shadow-sm border-0">
+          <CardContent className="pt-6 space-y-3">
+            <h3 className="text-sm font-semibold">跨计划薄弱知识点</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {summary.weakPointsSummary.map((wp, i) => (
+                <span key={i} className="inline-flex items-center gap-0.5 text-xs px-2.5 py-1 rounded-full bg-destructive/10 text-destructive font-medium">
+                  {wp.name}
+                  {wp.count > 1 && <span className="opacity-60">×{wp.count}</span>}
+                </span>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {hasFull && profile.learningPatterns && (
+        <Card className="shadow-sm border-0">
+          <CardContent className="pt-6">
+            <h3 className="text-sm font-semibold mb-3">学习模式</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">提问风格</div>
+                <div className="text-sm font-medium">{profile.learningPatterns.questionStyle || '-'}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">平均提问/知识点</div>
+                <div className="text-sm font-medium">{profile.learningPatterns.avgQuestionsPerTopic || 0}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">时间分布</div>
+                <div className="text-sm font-medium">{profile.learningPatterns.timeDistribution || '-'}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">互动模式偏好</div>
+                <div className="text-sm font-medium">
+                  分段{summary.modeCounts?.stepwise || 0} · 挑战{summary.modeCounts?.challenge || 0} · 脚手架{summary.modeCounts?.scaffold || 0} · 费曼{summary.feynmanStats?.sessionCount || 0}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {summary.feynmanStats?.sessionCount > 0 && (
+        <Card className="shadow-sm border-0">
+          <CardContent className="pt-6">
+            <h3 className="text-sm font-semibold mb-3">费曼教学法统计</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">使用次数</div>
+                <div className="text-sm font-medium">{summary.feynmanStats.sessionCount} 次</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">教学质量分布</div>
+                <div className="text-sm font-medium">
+                  {(() => {
+                    const q = summary.feynmanStats.teachingQualities || [];
+                    const counts = { excellent: 0, good: 0, fair: 0, needsWork: 0 };
+                    q.forEach(x => { if (counts[x] !== undefined) counts[x]++; });
+                    return `优秀 ${counts.excellent} · 良好 ${counts.good} · 一般 ${counts.fair} · 待改进 ${counts.needsWork}`;
+                  })()}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">精彩讲解摘录</div>
+                <div className="text-sm font-medium">{summary.feynmanStats.sparklingCount} 条</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">学生遗留问题</div>
+                <div className="text-sm font-medium">{summary.feynmanStats.lingeringCount} 个</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {hasFull && profile.recommendations && profile.recommendations.length > 0 && (
-        <div className="profile-card" style={{ borderLeft: '3px solid #2563eb' }}>
-          <h3 className="profile-card-title">📌 个性化建议</h3>
-          <ol style={{ paddingLeft: 20, margin: 0 }}>
+        <div className="bg-muted/60 p-4 rounded-lg space-y-2">
+          <h3 className="text-sm font-semibold text-primary">个性化建议</h3>
+          <ol className="list-decimal pl-4 space-y-1 text-sm text-muted-foreground">
             {profile.recommendations.map((r, i) => (
-              <li key={i} style={{ marginBottom: 8, fontSize: 14, lineHeight: 1.6 }}>{r}</li>
+              <li key={i}>{r}</li>
             ))}
           </ol>
         </div>
       )}
 
-      {/* Full AI Analysis Report (expandable) */}
       {hasFull && profile.aiAnalysis && (
-        <div className="profile-card">
-          <div
-            className="profile-collapse-header"
-            onClick={() => setShowReport(!showReport)}
-          >
-            <h3 className="profile-card-title" style={{ margin: 0 }}>📄 完整分析报告</h3>
-            <span style={{ color: '#64748b', fontSize: 12 }}>{showReport ? '收起 ▲' : '展开 ▼'}</span>
-          </div>
-          {showReport && (
-            <div className="analysis-body" style={{ marginTop: 10, maxHeight: 500, overflowY: 'auto' }}>
-              {renderMarkdown(profile.aiAnalysis)}
+        <Card className="shadow-sm border-0">
+          <CardContent className="pt-6">
+            <div
+              className="flex items-center justify-between cursor-pointer select-none"
+              onClick={() => setShowReport(!showReport)}
+            >
+              <h3 className="text-sm font-semibold">完整分析报告</h3>
+              <span className="text-xs text-muted-foreground">
+                {showReport ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </span>
             </div>
-          )}
-        </div>
+            {showReport && (
+              <div className="text-sm text-muted-foreground border-t mt-3 pt-3 leading-relaxed">
+                {renderMarkdown(profile.aiAnalysis)}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

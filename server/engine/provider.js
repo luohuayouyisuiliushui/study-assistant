@@ -528,6 +528,7 @@ export class Provider {
     this._apiKey = opts.apiKey;
     this._baseURL = opts.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
     this._model = opts.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    this._fallbackModels = opts.fallbackModels || ['gpt-4o-mini', 'gpt-4o', 'gpt-4'];
     this._debugCache = opts.debugCache || false;
     this._autoWarm = opts.autoWarm !== false;
 
@@ -556,6 +557,27 @@ export class Provider {
   }
 
   /**
+   * Execute a function with automatic model fallback.
+   * Tries the primary model first; on retryable failure, falls back through this._fallbackModels.
+   * Skips cache update for fallback models to avoid stale data.
+   */
+  async _executeWithModelFallback(fn) {
+    const modelsToTry = [this._model, ...this._fallbackModels.filter(m => m !== this._model)];
+    let lastError;
+    for (const model of modelsToTry) {
+      try {
+        const result = await retryWithBackoff(() => fn(model));
+        return { result, usedFallback: model !== this._model };
+      } catch (err) {
+        lastError = err;
+        if (!isRetryableError(err)) throw err;
+        console.warn(`[provider] Model ${model} failed, trying fallback: ${err.message}`);
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * Non-streaming completion with multi-level caching.
    *
    * Cache lookups (in order):
@@ -564,8 +586,18 @@ export class Provider {
    * 3. API call (with prefix cache diagnostics)
    */
   async complete(messages, opts = {}) {
-    const prefixHash = computePrefixHash(this._model, messages);
-    const requestHash = computeRequestHash(this._model, messages, opts);
+    // ── Inject agent system prompt (merge, don't replace) ──
+    const mergedMessages = this._agentSystemPrompt
+      ? messages.map((m, i) => {
+          if (i === 0 && m.role === 'system') {
+            return { ...m, content: m.content + '\n\n' + this._agentSystemPrompt };
+          }
+          return m;
+        })
+      : messages;
+
+    const prefixHash = computePrefixHash(this._model, mergedMessages);
+    const requestHash = computeRequestHash(this._model, mergedMessages, opts);
 
     this._totalCalls++;
 
@@ -579,7 +611,7 @@ export class Provider {
     }
 
     // ── Layer 2: Prefix-based cache (same system + context, different question) ──
-    const tailHash = computeTailHash(messages);
+    const tailHash = computeTailHash(mergedMessages);
     const prefixKey = 'prefix:' + prefixHash;
     const cachedByPrefix = _responseCache.get(prefixKey);
 
@@ -590,15 +622,14 @@ export class Provider {
       return cachedByPrefix.response;
     }
 
-    // ── Cache miss → make API call ──
-    let responseFormatFailed = false;
-    const result = await retryWithBackoff(async () => {
-      // Encode user messages to bypass relay WAF (cache keys already computed with originals)
-      const apiMessages = messages.map(m =>
+    // ── Cache miss → make API call with model fallback ──
+    const { result, usedFallback } = await this._executeWithModelFallback(async (model) => {
+      let responseFormatFailed = false;
+      const apiMessages = mergedMessages.map(m =>
         m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
       );
       const requestOpts = {
-        model: this._model,
+        model,
         messages: apiMessages,
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 4096,
@@ -613,12 +644,11 @@ export class Provider {
       try {
         resp = await this._client.chat.completions.create(requestOpts);
       } catch (err) {
-        // Relay does not support response_format → retry without it once
         if (opts.responseFormat && !responseFormatFailed && isUnsupportedParameterError(err, 'response_format')) {
           console.warn('[provider] ⚠️ Relay does not support response_format, retrying without it');
           responseFormatFailed = true;
           resp = await this._client.chat.completions.create({
-            model: this._model,
+            model,
             messages: apiMessages,
             temperature: opts.temperature ?? 0.7,
             max_tokens: opts.maxTokens ?? 4096,
@@ -629,12 +659,18 @@ export class Provider {
       }
 
       const message = resp.choices[0]?.message;
+      const finishReason = resp.choices[0]?.finish_reason;
       const usage = extractUsage(resp);
+
+      if (finishReason === 'length') {
+        console.warn('[provider] ⚠️ Response truncated (finish_reason=length), content length:', (message?.content || '').length);
+      }
 
       return {
         content: message?.content || '',
         tool_calls: message?.tool_calls || null,
         usage,
+        finishReason,
         diagnostics: {
           prefixHash,
           prefixChanged: this._lastPrefixHash && this._lastPrefixHash !== prefixHash,
@@ -665,16 +701,14 @@ export class Provider {
       );
     }
 
-    // ── Store in caches ──
-    if (result.content) {
-      // Exact-match cache (short TTL)
+    // ── Store in caches (skip for fallback — different model) ──
+    if (result.content && !usedFallback) {
       _responseCache.set('exact:' + requestHash, result, RESPONSE_CACHE_TTL_FULL);
 
-      // Prefix-based cache (longer TTL) — accumulate tail hashes
       const existing = _responseCache.get(prefixKey);
       if (existing) {
         existing.tailHashes.add(tailHash);
-        existing.response = result; // update cached response if tail already known
+        existing.response = result;
         _responseCache.set(prefixKey, existing, RESPONSE_CACHE_TTL_PREFIX);
       } else {
         const tailHashes = new Set();
@@ -682,7 +716,6 @@ export class Provider {
         _responseCache.set(prefixKey, { tailHashes, response: result }, RESPONSE_CACHE_TTL_PREFIX);
       }
 
-      // Mark prefix as seen on disk (async — don't block response)
       _diskCache.markSeen(prefixHash, this._model);
     }
 
@@ -695,7 +728,17 @@ export class Provider {
    * but prefix stability is still tracked.
    */
   async stream(messages, opts = {}) {
-    const prefixHash = computePrefixHash(this._model, messages);
+    // ── Inject agent system prompt (merge, don't replace) ──
+    const mergedMessages = this._agentSystemPrompt
+      ? messages.map((m, i) => {
+          if (i === 0 && m.role === 'system') {
+            return { ...m, content: m.content + '\n\n' + this._agentSystemPrompt };
+          }
+          return m;
+        })
+      : messages;
+
+    const prefixHash = computePrefixHash(this._model, mergedMessages);
     let fullContent = '';
     let finalUsage = null;
 
@@ -716,19 +759,17 @@ export class Provider {
       }
     };
 
-    let useStreamOptions = opts.streamOptions !== false;
-    let streamOptionsFailed = false;
-
-    await retryWithBackoff(async () => {
-      // Encode user messages to bypass relay WAF (cache key already computed with originals)
-      const apiMessages = messages.map(m =>
+    await this._executeWithModelFallback(async (model) => {
+      let useStreamOptions = opts.streamOptions !== false;
+      let streamOptionsFailed = false;
+      const apiMessages = mergedMessages.map(m =>
         m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
       );
       const requestOpts = {
-        model: this._model,
+        model,
         messages: apiMessages,
-        temperature: opts.temperature ?? 0.7,
-        max_tokens: opts.maxTokens ?? 8192,
+        temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
+        max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
         stream: true,
       };
       if (useStreamOptions && !streamOptionsFailed) {
@@ -739,16 +780,11 @@ export class Provider {
         const stream = await this._client.chat.completions.create(requestOpts);
         await readStream(stream);
       } catch (err) {
-        // Relay does not support stream_options → retry without it once.
-        // NOTE: The fallback path will NOT receive usage data from the API
-        // (no stream_options), so finalUsage stays null and diagnostics
-        // like cache-hit tokens will report zero. This is acceptable for
-        // relay compatibility.
         if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
           const fallbackStream = await this._client.chat.completions.create({
-            model: this._model,
+            model,
             messages: apiMessages,
             temperature: opts.temperature ?? 0.7,
             max_tokens: opts.maxTokens ?? 8192,
@@ -783,7 +819,6 @@ export class Provider {
 
     if (opts.onUsage) opts.onUsage(usage);
 
-    // Mark prefix as seen on disk
     _diskCache.markSeen(prefixHash, this._model);
 
     return fullContent;
@@ -800,7 +835,17 @@ export class Provider {
    * and opts.onToolCall(tool_calls) when a complete tool call is detected.
    */
   async streamWithTools(messages, opts = {}) {
-    const prefixHash = computePrefixHash(this._model, messages);
+    // ── Inject agent system prompt (merge, don't replace) ──
+    const mergedMessages = this._agentSystemPrompt
+      ? messages.map((m, i) => {
+          if (i === 0 && m.role === 'system') {
+            return { ...m, content: m.content + '\n\n' + this._agentSystemPrompt };
+          }
+          return m;
+        })
+      : messages;
+
+    const prefixHash = computePrefixHash(this._model, mergedMessages);
     let fullContent = '';
     let finalUsage = null;
     let toolCallsAccumulator = null;
@@ -818,12 +863,10 @@ export class Provider {
         if (!choice) continue;
 
         const delta = choice.delta;
-        // Accumulate content
         if (delta?.content) {
           fullContent += delta.content;
           if (opts.onChunk) opts.onChunk(delta.content);
         }
-        // Accumulate tool call deltas
         if (delta?.tool_calls) {
           for (const tcDelta of delta.tool_calls) {
             if (!toolCallsAccumulator) toolCallsAccumulator = [];
@@ -836,24 +879,22 @@ export class Provider {
             if (tcDelta.function?.arguments) toolCallsAccumulator[idx].function.arguments += tcDelta.function.arguments;
           }
         }
-        // Track finish reason
         if (choice.finish_reason) {
           finishReason = choice.finish_reason;
         }
       }
     };
 
-    let streamOptionsFailed = false;
-
-    await retryWithBackoff(async () => {
-      const apiMessages = messages.map(m =>
+    await this._executeWithModelFallback(async (model) => {
+      let streamOptionsFailed = false;
+      const apiMessages = mergedMessages.map(m =>
         m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
       );
       const requestOpts = {
-        model: this._model,
+        model,
         messages: apiMessages,
-        temperature: opts.temperature ?? 0.7,
-        max_tokens: opts.maxTokens ?? 8192,
+        temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
+        max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
         stream: true,
       };
       if (opts.tools) requestOpts.tools = opts.tools;

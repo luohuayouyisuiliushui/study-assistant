@@ -154,6 +154,7 @@ export function aggregateAllPlans() {
   let allExamResults = []; // { plan, exam, results[] }
   let modeCounts = { stepwise: 0, challenge: 0, scaffold: 0 };
   let feynmanData = { sessionCount: 0, teachingQualities: [], commonGaps: [], commonStrengths: [], sparklingCount: 0, lingeringCount: 0 };
+  let allTimeLogs = []; // { date, seconds, plan, topic }
 
   const planSummaries = plans.map(plan => {
     const doneCount = plan.topics.filter(t => t.done && !t.lastError).length;
@@ -164,6 +165,12 @@ export function aggregateAllPlans() {
     // Time tracking
     for (const t of plan.topics) {
       totalTime += t.timeSpent || 0;
+      // Collect daily time logs
+      if (t.timeLog && t.timeLog.length > 0) {
+        for (const entry of t.timeLog) {
+          allTimeLogs.push({ date: entry.date, seconds: entry.seconds, plan: plan.name, topic: t.title });
+        }
+      }
       // Feynman data
       if (t.feynmanInsights) {
         feynmanData.sessionCount++;
@@ -260,6 +267,40 @@ export function aggregateAllPlans() {
     .slice(0, 20)
     .map(([name, count]) => ({ name, count }));
 
+  // Time distribution aggregation
+  const dailyTimeMap = {};
+  for (const log of allTimeLogs) {
+    dailyTimeMap[log.date] = (dailyTimeMap[log.date] || 0) + log.seconds;
+  }
+  const sortedDays = Object.entries(dailyTimeMap)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, seconds]) => ({ date, seconds, hours: Math.round(seconds / 3600 * 10) / 10 }));
+
+  // Compute summary stats for different periods
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const d7 = new Date(now); d7.setDate(d7.getDate() - 7);
+  const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
+  const d7Str = d7.toISOString().slice(0, 10);
+  const d30Str = d30.toISOString().slice(0, 10);
+
+  let timeLast7Days = 0, timeLast30Days = 0;
+  const last7Days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now); d.setDate(d.getDate() - i);
+    const ds = d.toISOString().slice(0, 10);
+    const secs = dailyTimeMap[ds] || 0;
+    last7Days.push({ date: ds, seconds: secs, hours: Math.round(secs / 3600 * 10) / 10 });
+    timeLast7Days += secs;
+  }
+  for (const [date, secs] of Object.entries(dailyTimeMap)) {
+    if (date >= d30Str) timeLast30Days += secs;
+  }
+
+  const activeDays = sortedDays.length;
+  const avgPerDay = activeDays > 0 ? Math.round(totalTime / activeDays) : 0;
+  const peakDay = sortedDays.reduce((max, d) => d.seconds > (max?.seconds || 0) ? d : max, null);
+
   return {
     planSummaries,
     stats: {
@@ -287,6 +328,19 @@ export function aggregateAllPlans() {
     weakPointsSummary: sortedWeakPoints,
     modeCounts,
     feynmanData,
+    timeDistribution: {
+      daily: sortedDays,
+      last7Days,
+      summary: {
+        totalTimeSeconds: totalTime,
+        timeLast7Days,
+        timeLast30Days,
+        activeDays,
+        avgPerDaySeconds: avgPerDay,
+        avgPerDayHours: Math.round(avgPerDay / 3600 * 10) / 10,
+        peakDay: peakDay ? { date: peakDay.date, seconds: peakDay.seconds, hours: peakDay.hours } : null,
+      },
+    },
   };
 }
 
@@ -524,7 +578,7 @@ export async function generateUserProfile(provider, model = 'gpt-4o-mini') {
   ];
 
   const result = await provider.complete(messages, {
-    maxTokens: 4096,
+    maxTokens: 8192,
     temperature: 0.7,
   });
 
@@ -593,6 +647,7 @@ export function getProfileSummary() {
     feynmanStats: aggregated.feynmanData,
     planSummaries: aggregated.planSummaries,
     modeCounts: aggregated.modeCounts,
+    timeDistribution: aggregated.timeDistribution,
     // Include AI persona if available
     learnerPersona: stored?.learnerPersona || null,
     strengths: stored?.strengths || null,

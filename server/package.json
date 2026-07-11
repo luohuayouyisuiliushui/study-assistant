@@ -5,7 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test --test-concurrency=1 --test-force-exit \"__tests__/*.test.js\"",
+    "pretest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
+    "posttest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
+    "clean:testdata": "node scripts/clean-test-plans.js",
+    "clean:cache": "node scripts/clean-cache.js",
+    "clean:backups": "node scripts/clean-backups.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

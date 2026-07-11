@@ -117,51 +117,51 @@ export async function factCheckDetail(providerOrConfig, content, topicTitle, mod
     };
   }
 
-  const provider = _resolveProviderForFactCheck(providerOrConfig, model);
   const auditableContent = extractAuditableContent(content);
 
-  const messages = [
-    { role: 'system', content: STABLE_FACT_CHECK_PROMPT },
-    {
-      role: 'user',
-      content: `请审计以下关于「${topicTitle}」的AI生成讲解内容：\n\n---\n${auditableContent}\n---\n\n请按照审计维度逐条检查，并输出 JSON。`,
-    },
-  ];
-
   try {
-    const result = await provider.complete(messages, {
-      maxTokens: 3072,
-      temperature: 0.2,
-      responseFormat: { type: 'json_object' },
-    });
+    return await _withFallback(async (provider, currentModel) => {
+      const messages = [
+        { role: 'system', content: STABLE_FACT_CHECK_PROMPT },
+        {
+          role: 'user',
+          content: `请审计以下关于「${topicTitle}」的AI生成讲解内容：\n\n---\n${auditableContent}\n---\n\n请按照审计维度逐条检查，并输出 JSON。`,
+        },
+      ];
 
-    const parsed = JSON.parse(result.content || '{}');
-    const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
-    const overallScore = typeof parsed.overallScore === 'number'
-      ? parsed.overallScore
-      : computeAggregateScore(findings);
+      const result = await provider.complete(messages, {
+        maxTokens: 3072,
+        temperature: 0.2,
+        responseFormat: { type: 'json_object' },
+      });
 
-    let verdict = parsed.verdict || 'caution';
-    // Validate verdict
-    if (!['trusted', 'caution', 'unreliable'].includes(verdict)) {
-      verdict = overallScore >= 0.8 ? 'trusted' : overallScore >= 0.5 ? 'caution' : 'unreliable';
-    }
+      const parsed = JSON.parse(result.content || '{}');
+      const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
+      const overallScore = typeof parsed.overallScore === 'number'
+        ? parsed.overallScore
+        : computeAggregateScore(findings);
 
-    return {
-      overallScore,
-      verdict,
-      summary: parsed.summary || `审计完成，发现 ${findings.length} 个需要关注的陈述`,
-      findings: findings.map(f => ({
-        claim: f.claim || '',
-        location: f.location || '',
-        dimension: f.dimension || 'fact',
-        confidence: typeof f.confidence === 'number' ? f.confidence : 0.5,
-        verdict: f.verdict || 'uncertain',
-        explanation: f.explanation || '',
-        correction: f.correction || '',
-      })),
-      auditedAt: Date.now(),
-    };
+      let verdict = parsed.verdict || 'caution';
+      if (!['trusted', 'caution', 'unreliable'].includes(verdict)) {
+        verdict = overallScore >= 0.8 ? 'trusted' : overallScore >= 0.5 ? 'caution' : 'unreliable';
+      }
+
+      return {
+        overallScore,
+        verdict,
+        summary: parsed.summary || `审计完成，发现 ${findings.length} 个需要关注的陈述`,
+        findings: findings.map(f => ({
+          claim: f.claim || '',
+          location: f.location || '',
+          dimension: f.dimension || 'fact',
+          confidence: typeof f.confidence === 'number' ? f.confidence : 0.5,
+          verdict: f.verdict || 'uncertain',
+          explanation: f.explanation || '',
+          correction: f.correction || '',
+        })),
+        auditedAt: Date.now(),
+      };
+    }, providerOrConfig, model);
   } catch (err) {
     console.warn('[factCheckDetail] Audit failed:', err.message);
     return {
@@ -189,29 +189,29 @@ export async function factCheckDetail(providerOrConfig, content, topicTitle, mod
 export async function autoFixUncertainClaims(providerOrConfig, uncertainFindings, model = 'gpt-4o-mini') {
   if (!uncertainFindings || uncertainFindings.length === 0) return [];
 
-  const provider = _resolveProviderForFactCheck(providerOrConfig, model);
-
   const claimsList = uncertainFindings
     .map((f, i) => `${i + 1}. [${f.verdict}] ${f.claim}\n   位置：${f.location}\n   原因：${f.explanation || '未提供'}`)
     .join('\n\n');
 
-  const messages = [
-    { role: 'system', content: STABLE_FACT_FIX_PROMPT },
-    {
-      role: 'user',
-      content: `以下陈述在前一轮事实核查中被标记为存疑，请逐一修正：\n\n${claimsList}`,
-    },
-  ];
-
   try {
-    const result = await provider.complete(messages, {
-      maxTokens: 3072,
-      temperature: 0.3,
-      responseFormat: { type: 'json_object' },
-    });
+    return await _withFallback(async (provider, currentModel) => {
+      const messages = [
+        { role: 'system', content: STABLE_FACT_FIX_PROMPT },
+        {
+          role: 'user',
+          content: `以下陈述在前一轮事实核查中被标记为存疑，请逐一修正：\n\n${claimsList}`,
+        },
+      ];
 
-    const parsed = JSON.parse(result.content || '{}');
-    return Array.isArray(parsed.fixes) ? parsed.fixes : [];
+      const result = await provider.complete(messages, {
+        maxTokens: 3072,
+        temperature: 0.3,
+        responseFormat: { type: 'json_object' },
+      });
+
+      const parsed = JSON.parse(result.content || '{}');
+      return Array.isArray(parsed.fixes) ? parsed.fixes : [];
+    }, providerOrConfig, model);
   } catch (err) {
     console.warn('[autoFixUncertainClaims] Auto-fix failed:', err.message);
     return [];
@@ -294,7 +294,6 @@ export async function factCheckQuickScan(providerOrConfig, content, topicTitle, 
     return { flagged: false, issues: [], scanTime: Date.now() };
   }
 
-  const provider = _resolveProviderForFactCheck(providerOrConfig, model);
   const snippet = content.length > 5000 ? content.slice(0, 5000) : content;
 
   const quickScanPrompt =
@@ -306,20 +305,22 @@ export async function factCheckQuickScan(providerOrConfig, content, topicTitle, 
     `内容主题：${topicTitle}\n\n${snippet.slice(0, 4000)}`;
 
   try {
-    const result = await provider.complete(
-      [
-        { role: 'system', content: '你是一个快速内容审查员。只输出JSON。' },
-        { role: 'user', content: quickScanPrompt },
-      ],
-      { maxTokens: 512, temperature: 0.1, responseFormat: { type: 'json_object' } }
-    );
+    return await _withFallback(async (provider, currentModel) => {
+      const result = await provider.complete(
+        [
+          { role: 'system', content: '你是一个快速内容审查员。只输出JSON。' },
+          { role: 'user', content: quickScanPrompt },
+        ],
+        { maxTokens: 512, temperature: 0.1, responseFormat: { type: 'json_object' } }
+      );
 
-    const parsed = JSON.parse(result.content || '{}');
-    return {
-      flagged: parsed.flagged === true,
-      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-      scanTime: Date.now(),
-    };
+      const parsed = JSON.parse(result.content || '{}');
+      return {
+        flagged: parsed.flagged === true,
+        issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+        scanTime: Date.now(),
+      };
+    }, providerOrConfig, model);
   } catch (err) {
     return { flagged: false, issues: [], scanTime: Date.now(), error: err.message };
   }
@@ -406,6 +407,7 @@ export function buildFactCheckSummary(factCheckResult) {
 // ─── Provider resolution (duplicated to avoid circular import with learn-engine) ───
 
 const _providerCache = new Map();
+const FALLBACK_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4'];
 
 function _resolveProviderForFactCheck(providerOrConfig, model) {
   if (providerOrConfig instanceof Provider) return providerOrConfig;
@@ -424,6 +426,27 @@ function _resolveProviderForFactCheck(providerOrConfig, model) {
     _providerCache.set(key, provider);
   }
   return _providerCache.get(key);
+}
+
+/**
+ * Call a fact-check function with automatic model fallback.
+ * Tries the primary model first; on failure, falls back through FALLBACK_MODELS.
+ */
+async function _withFallback(fn, providerOrConfig, model, ...args) {
+  const primaryModel = model || 'gpt-4o-mini';
+  const modelsToTry = [primaryModel, ...FALLBACK_MODELS.filter(m => m !== primaryModel)];
+
+  let lastError;
+  for (const m of modelsToTry) {
+    try {
+      const provider = _resolveProviderForFactCheck(providerOrConfig, m);
+      return await fn(provider, m, ...args);
+    } catch (err) {
+      lastError = err;
+      console.warn(`[fact-checker] Model ${m} failed, trying fallback: ${err.message}`);
+    }
+  }
+  throw lastError;
 }
 
 export default {

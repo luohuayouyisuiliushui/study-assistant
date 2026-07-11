@@ -1,22 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
+import { X, Download, Brain } from 'lucide-react';
+import { Button } from '#/components/ui/button';
 
-/**
- * Build a tree structure from the flat topics and phases.
- * Returns an array of root nodes (phase-level grouping).
- */
 function buildTree(plan) {
   const phaseMap = {};
   for (const p of plan.phases || []) {
     phaseMap[p.id] = { id: p.id, name: p.name, order: p.order || 0, children: [] };
   }
 
-  // Build parent map
   const topicMap = {};
   for (const t of plan.topics) {
     topicMap[t.id] = { ...t, children: [] };
   }
 
-  // Attach children to parents or to phases
   const roots = [];
   for (const t of plan.topics) {
     const node = topicMap[t.id];
@@ -29,37 +25,27 @@ function buildTree(plan) {
     }
   }
 
-  // Sort phases and their children
   for (const phaseId of Object.keys(phaseMap)) {
     const phase = phaseMap[phaseId];
     phase.children.sort((a, b) => a.order - b.order);
     roots.push(phase);
   }
 
-  // Sort root-level items
   roots.sort((a, b) => (a.order || 0) - (b.order || 0));
-
   return roots;
 }
 
-/**
- * Convert tree to Markdown (for markmap).
- * Appends status badges for done topics.
- */
 function treeToMarkdown(nodes, depth = 1) {
   let md = '';
   for (const n of nodes) {
     if (n.name !== undefined) {
-      // Phase node
       const done = n.children.every(c => c.done);
       md += `${'#'.repeat(depth)} ${n.name}${done ? ' ✅' : ''}\n`;
       if (n.children.length > 0) {
-        // Sort children by order
         n.children.sort((a, b) => a.order - b.order);
         md += treeToMarkdown(n.children, depth + 1);
       }
     } else {
-      // Topic node
       const doneMark = n.done ? ' ✅' : n.difficulty === 'hard' ? ' ⚠️' : '';
       md += `${'#'.repeat(depth)} ${n.title}${doneMark}\n`;
       if (n.children.length > 0) {
@@ -85,7 +71,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   const renderMindMap = async () => {
     setError(null);
     try {
-      // Build topic ID map from tree nodes
       const idMap = {};
       function collectIds(nodes) {
         for (const n of nodes) {
@@ -97,34 +82,27 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
       collectIds(tree);
       setTopicIdMap(idMap);
 
-      // Convert tree to Markdown
       const md = treeToMarkdown(tree);
       if (!md.trim()) {
         setError('暂无知识点数据');
         return;
       }
 
-      // Dynamically import markmap
       const { Transformer } = await import('markmap-lib');
       const { Markmap } = await import('markmap-view');
 
-      // Transform markdown to mind map data
       const transformer = new Transformer();
       const { root } = transformer.transform(md);
 
-      // Get extra dataset for click handling
-      // markmap doesn't natively store IDs, so we attach to node payload
-      function attachIds(node, parentTitle) {
-        // We'll handle via SVG click instead
+      function attachIds(node) {
         if (node.children) {
           for (const child of node.children) {
-            attachIds(child, node.content);
+            attachIds(child);
           }
         }
       }
-      attachIds(root, '');
+      attachIds(root);
 
-      // Create markmap
       if (mmRef.current) {
         mmRef.current.destroy();
         mmRef.current = null;
@@ -144,7 +122,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
 
       mmRef.current = mm;
 
-      // Attach click handlers to SVG for topic navigation
       setTimeout(() => {
         const svg = svgRef.current;
         if (!svg) return;
@@ -172,7 +149,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   };
 
   const handleExportXMind = async () => {
-    // XMind 2024 supports Markdown import directly
     const md = treeToMarkdown(buildTree(plan));
     const markdown = `# ${plan.name}\n${md}`;
     const blob = new Blob([markdown], { type: 'text/markdown' });
@@ -185,38 +161,41 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   };
 
   return (
-    <div className="kg-modal-overlay" onClick={onClose}>
-      <div className="kg-modal kg-modal-wide" onClick={e => e.stopPropagation()}>
-        <div className="kg-modal-header">
-          <span>🧠 思维导图 — {plan.name}</span>
-          <div className="kg-modal-actions">
-            <button className="btn-tiny" onClick={handleExportXMind} title="导出 XMind 兼容格式">📥 导出</button>
-            <button className="btn-tiny" onClick={onClose}>✕</button>
+    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
+      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+        <div className='flex items-center justify-between border-b px-4 py-2.5'>
+          <span className='flex items-center gap-2 text-sm font-medium'>
+            <Brain className='h-4 w-4 text-primary' />
+            思维导图 — {plan.name}
+          </span>
+          <div className='flex items-center gap-1'>
+            <Button variant='ghost' size='sm' onClick={handleExportXMind} title='导出 XMind 兼容格式'>
+              <Download className='h-3.5 w-3.5 mr-1' />导出
+            </Button>
+            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
           </div>
         </div>
-        <div className="kg-modal-body">
+        <div className='flex-1 overflow-auto p-4'>
           {error ? (
-            <div className="kg-error">
-              <p>❌ {error}</p>
+            <div className='flex flex-col items-center justify-center h-full text-muted-foreground gap-2'>
+              <p className='text-sm text-destructive'>{error}</p>
             </div>
           ) : (
-            <div className="mindmap-container">
-              <svg ref={svgRef} className="mindmap-svg" />
+            <div className='w-full h-full'>
+              <svg ref={svgRef} className='w-full h-full' />
             </div>
           )}
         </div>
-        <div className="kg-modal-footer">
-          <span className="kg-legend">
-            <span className="kg-legend-item">点击节点跳转到知识点</span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item">滚轮缩放</span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item">拖拽平移</span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item">✅ 已学完</span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item">⚠️ 困难</span>
-          </span>
+        <div className='flex items-center gap-3 border-t px-4 py-1.5 text-xs text-muted-foreground'>
+          <span>点击节点跳转到知识点</span>
+          <span className='text-border'>|</span>
+          <span>滚轮缩放</span>
+          <span className='text-border'>|</span>
+          <span>拖拽平移</span>
+          <span className='text-border'>|</span>
+          <span>✅ 已学完</span>
+          <span className='text-border'>|</span>
+          <span>⚠️ 困难</span>
         </div>
       </div>
     </div>
