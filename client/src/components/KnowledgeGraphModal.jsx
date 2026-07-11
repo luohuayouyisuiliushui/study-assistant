@@ -1,24 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-// ReactMarkdown and remarkGfm imported for future use in node detail popups
-// import ReactMarkdown from 'react-markdown';
-// import remarkGfm from 'remark-gfm';
+import { X, Download, RefreshCw, Filter, Eye, Lightbulb, AlertCircle, CheckCircle, Network, FileJson, FileImage, FileText } from 'lucide-react';
+import { Button } from '#/components/ui/button';
 import api from '../api';
 
-// Phase colors for Mermaid graph nodes
 const PHASE_COLORS = ['#e0f2fe', '#dcfce7', '#fef3c7', '#fce7f3', '#e0e7ff', '#f3e8ff', '#ffedd5', '#d1fae5'];
 
-// All supported relationship types with display labels and visual style
 const RELATION_TYPES = {
   parentOf:               { label: '包含',          style: 'solid',    color: '#475569',  group: 'structure' },
   prerequisite:           { label: '前置依赖',       style: 'dashed',  color: '#dc2626',  group: 'dependency' },
   related:                { label: '相关',           style: 'dotted',  color: '#2563eb',  group: 'association' },
-  // Inferred types from detail text
   extends:                { label: '扩展延伸',       style: 'dashed',  color: '#7c3aed',  group: 'association' },
   exampleOf:              { label: '示例',           style: 'dotted',  color: '#059669',  group: 'association' },
   contrasts:              { label: '对比',           style: 'dashed',  color: '#ea580c',  group: 'association' },
   buildsOn:               { label: '构建于',         style: 'dashed',  color: '#0891b2',  group: 'dependency' },
   references:             { label: '参考',           style: 'dotted',  color: '#78716c',  group: 'association' },
-  // Inferred from transitive/inherited
   transitivePrerequisite: { label: '间接前置依赖',   style: 'dotted',  color: '#f87171',  group: 'dependency' },
   inheritedPrerequisite:  { label: '继承前置依赖',   style: 'dotted',  color: '#fb923c',  group: 'dependency' },
 };
@@ -77,18 +72,15 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     loadGraph();
   }, [plan?.id, loadGraph]);
 
-  // Re-render when filters or highlighting change
   useEffect(() => {
     if (!graphData) return;
     const mermaidDef = buildMermaidGraph(plan, graphData.nodes, filteredEdges(graphData.edges));
     renderMermaid(mermaidDef);
   }, [activeFilters, highlightedNode, graphData]);
 
-  // Attach click handlers to SVG after each render
   useEffect(() => {
     if (!graphSvg || !graphContainerRef.current) return;
     const container = graphContainerRef.current;
-    // Use requestAnimationFrame for safer DOM timing
     const raf = requestAnimationFrame(() => {
       const svgEl = container.querySelector('svg');
       if (svgEl) {
@@ -101,9 +93,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
 
   const filteredEdges = (edges) => {
     return edges.filter(e => {
-      // Always hide transitive/inherited edges if infer is disabled
       if (!inferEnabled && (e.source === 'transitive' || e.source === 'inherited')) return false;
-      // Apply type filter
       if (!activeFilters[e.type]) return false;
       return true;
     });
@@ -123,7 +113,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
 
   const handleNodeClick = (nodeId) => {
     if (highlightedNode === nodeId) {
-      setHighlightedNode(null); // deselect
+      setHighlightedNode(null);
     } else {
       setHighlightedNode(nodeId);
     }
@@ -136,11 +126,9 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     try {
       const result = await api.extractRelations(plan.id);
       setExtractResult(result);
-      // Auto-enable infer mode
       if (!inferEnabled) {
         setInferEnabled(true);
       } else {
-        // Reload to show extracted edges
         await loadGraph();
       }
     } catch (err) {
@@ -150,17 +138,152 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     }
   };
 
-  // Attach click handlers to SVG node elements
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const sanitizeFilename = (name) => name.replace(/[/\\?%*:|"<>]/g, '_');
+
+  const handleExportJSON = () => {
+    if (!graphData) return;
+    const json = JSON.stringify(graphData, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    downloadBlob(blob, `${sanitizeFilename(plan.name)}.知识图谱.json`);
+  };
+
+  const handleExportSVG = () => {
+    if (!graphContainerRef.current) return;
+    const svgEl = graphContainerRef.current.querySelector('svg');
+    if (!svgEl) return;
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('width', '100%');
+    bg.setAttribute('height', '100%');
+    bg.setAttribute('fill', 'white');
+    clone.insertBefore(bg, clone.firstChild);
+    const svgData = new XMLSerializer().serializeToString(clone);
+    const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    downloadBlob(blob, `${sanitizeFilename(plan.name)}.知识图谱.svg`);
+  };
+
+  const handleExportPNG = () => {
+    if (!graphContainerRef.current) return;
+    const svgEl = graphContainerRef.current.querySelector('svg');
+    if (!svgEl) return;
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const viewBox = clone.getAttribute('viewBox');
+    if (viewBox) {
+      const parts = viewBox.split(/\s+/).map(Number);
+      if (parts.length === 4) {
+        clone.setAttribute('width', parts[2]);
+        clone.setAttribute('height', parts[3]);
+      }
+    }
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bg.setAttribute('width', '100%');
+    bg.setAttribute('height', '100%');
+    bg.setAttribute('fill', 'white');
+    clone.insertBefore(bg, clone.firstChild);
+    const svgData = new XMLSerializer().serializeToString(clone);
+    const dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
+    const img = new Image();
+    img.onload = () => {
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, img.width, img.height);
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        if (blob) downloadBlob(blob, `${sanitizeFilename(plan.name)}.知识图谱.png`);
+      }, 'image/png');
+    };
+    img.src = dataUrl;
+  };
+
+  const handleExportMarkdown = () => {
+    if (!graphData || !plan) return;
+    const nodes = graphData.nodes || [];
+    const edges = graphData.edges || [];
+    const phaseNames = {};
+    for (const p of plan.phases || []) phaseNames[p.id] = p.name;
+
+    let md = `# 知识图谱 — ${plan.name}\n\n`;
+    md += `## 知识点（${nodes.length} 个）\n\n`;
+
+    const byPhase = {};
+    const ungrouped = [];
+    for (const n of nodes) {
+      if (n.phaseId && phaseNames[n.phaseId]) {
+        if (!byPhase[n.phaseId]) byPhase[n.phaseId] = [];
+        byPhase[n.phaseId].push(n);
+      } else {
+        ungrouped.push(n);
+      }
+    }
+    const sortedPhaseIds = Object.keys(byPhase).sort((a, b) => {
+      const pa = (plan.phases || []).find(p => p.id === a);
+      const pb = (plan.phases || []).find(p => p.id === b);
+      return (pa?.order || 0) - (pb?.order || 0);
+    });
+    for (const pid of sortedPhaseIds) {
+      md += `### ${phaseNames[pid]}\n`;
+      for (const n of byPhase[pid]) {
+        md += `- ${n.title}${n.done ? ' ✅' : ''}\n`;
+      }
+      md += '\n';
+    }
+    if (ungrouped.length > 0) {
+      md += `### 未分组\n`;
+      for (const n of ungrouped) md += `- ${n.title}${n.done ? ' ✅' : ''}\n`;
+      md += '\n';
+    }
+
+    md += `## 关系（${edges.length} 条）\n\n`;
+    const byType = {};
+    for (const e of edges) {
+      if (!byType[e.type]) byType[e.type] = [];
+      byType[e.type].push(e);
+    }
+    const typeLabels = {
+      parentOf: '包含', prerequisite: '前置依赖', related: '相关',
+      extends: '扩展延伸', exampleOf: '示例', contrasts: '对比',
+      buildsOn: '构建于', references: '参考',
+      transitivePrerequisite: '间接前置依赖', inheritedPrerequisite: '继承前置依赖',
+    };
+    for (const [type, typeEdges] of Object.entries(byType)) {
+      md += `### ${typeLabels[type] || type}\n`;
+      for (const e of typeEdges) {
+        const fromTitle = nodes.find(n => n.id === e.from)?.title || e.from;
+        const toTitle = nodes.find(n => n.id === e.to)?.title || e.to;
+        md += `- ${fromTitle} → ${toTitle}`;
+        if (e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited') md += '（推断）';
+        md += '\n';
+      }
+      md += '\n';
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    downloadBlob(blob, `${sanitizeFilename(plan.name)}.知识图谱.md`);
+  };
+
   const attachNodeClickHandlers = (svgEl) => {
-    // Find all node clusters (Mermaid renders nodes as <g class="node">)
     const nodeGroups = svgEl.querySelectorAll('g.node');
     for (const g of nodeGroups) {
-      // Remove existing handlers
       g.style.cursor = 'pointer';
       g.onclick = null;
       g.addEventListener('click', (e) => {
         e.stopPropagation();
-        // Extract node ID from the anchor or text
         const anchor = g.querySelector('a');
         if (anchor) {
           const href = anchor.getAttribute('href');
@@ -169,14 +292,12 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
             return;
           }
         }
-        // Fallback: look for a title element
         const titleEl = g.querySelector('title');
         if (titleEl) {
           handleNodeClick(titleEl.textContent);
         }
       });
     }
-    // Click on background to deselect
     svgEl.addEventListener('click', (e) => {
       if (e.target === svgEl || e.target.tagName === 'svg') {
         setHighlightedNode(null);
@@ -192,7 +313,6 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       phaseOrder[p.id] = p.order || 0;
     }
 
-    // Group nodes by phase
     const nodesByPhase = {};
     const ungroupedNodes = [];
     for (const n of nodes) {
@@ -206,16 +326,13 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
 
     const sortedPhaseIds = Object.keys(nodesByPhase).sort((a, b) => (phaseOrder[a] || 0) - (phaseOrder[b] || 0));
 
-    // Build phase color map
     const phaseIndex = {};
     for (const p of plan.phases || []) {
       phaseIndex[p.id] = plan.phases.indexOf(p) % PHASE_COLORS.length;
     }
 
-    // Use flowchart for better layout control with subgraphs
     let def = 'flowchart LR;\n';
 
-    // Add ungrouped nodes first (if any)
     for (const n of ungroupedNodes) {
       const nodeId = 'n' + n.id.replace(/-/g, '_');
       const label = n.title
@@ -226,11 +343,9 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       def += `    ${nodeId}["${label}"];\n`;
     }
 
-    // Add grouped nodes with subgraphs
     for (const phaseId of sortedPhaseIds) {
       const phaseNodes = nodesByPhase[phaseId];
       const phaseName = phaseNames[phaseId] || `阶段 ${phaseId}`;
-      const _colorIdx = phaseIndex[phaseId] || 0;
 
       def += `\n    subgraph sg_${phaseId}["${phaseName}"]\n`;
 
@@ -246,20 +361,17 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       def += '    end\n';
     }
 
-    // Add node styling
     for (const n of nodes) {
       const nodeId = 'n' + n.id.replace(/-/g, '_');
       const colorIdx = phaseIndex[n.phaseId] || 0;
       let fillColor = n.done ? '#bbf7d0' : PHASE_COLORS[colorIdx];
 
-      // Highlight styling
       if (highlightedNode) {
         if (n.id === highlightedNode) {
-          fillColor = '#fde68a'; // highlighted node
+          fillColor = '#fde68a';
           def += `    style ${nodeId} fill:${fillColor},stroke:#f59e0b,stroke-width:3px;\n`;
           continue;
         }
-        // Check if this node is connected to the highlighted node
         const connected = edges.some(e =>
           (e.from === highlightedNode && e.to === n.id) ||
           (e.to === highlightedNode && e.from === n.id)
@@ -274,7 +386,6 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       }
     }
 
-    // Add edges with type-specific styling
     for (const e of edges) {
       const fromId = 'n' + e.from.replace(/-/g, '_');
       const toId = 'n' + e.to.replace(/-/g, '_');
@@ -282,7 +393,6 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       const edgeLabel = typeInfo.label;
       const _isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
 
-      // Choose connector based on directionality and line style
       const isBidirectional = e.type === 'related' || e.type === 'contrasts' ||
         (typeInfo.group === 'association' && e.type !== 'buildsOn');
       const isDashed = typeInfo.style === 'dashed' || typeInfo.style === 'dotted' || _isInferred;
@@ -296,14 +406,12 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       def += `    ${fromId} ${connector}|${edgeLabel}| ${toId};\n`;
     }
 
-    // Apply link styles post-definition (per-edge colors, dash styles, and weight thickness)
     for (let i = 0; i < edges.length; i++) {
       const e = edges[i];
       const typeInfo = RELATION_TYPES[e.type] || RELATION_TYPES.related;
       const _isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
       const dashPattern = typeInfo.style === 'dashed' ? '8,4' :
                           typeInfo.style === 'dotted' ? '4,4' : '0,0';
-      // Use weight for stroke thickness (weight 0-1, default 0.5)
       const weight = e.weight != null ? e.weight : 0.5;
       const strokeWidth = weight >= 0.8 ? 2.5 : weight >= 0.5 ? 2 : 1.5;
       def += `\nlinkStyle ${i} stroke:${typeInfo.color},stroke-width:${strokeWidth},stroke-dasharray:${dashPattern},opacity:${Math.min(0.4 + weight * 0.6, 1)};`;
@@ -333,12 +441,11 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     } catch (err) {
       if (!mountedRef.current) return;
       setError('图谱渲染失败: ' + err.message);
-      setGraphSvg('<pre style="background:#f8fafc;padding:16px;border-radius:6px;overflow:auto;font-size:12px;">' +
+      setGraphSvg('<pre class="kg-error-pre">' +
         mermaidDef.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>');
     }
   };
 
-  // Count edge types for display
   const edgeTypeCounts = {};
   if (graphData) {
     for (const e of graphData.edges) {
@@ -346,7 +453,6 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     }
   }
 
-  // Count nodes per phase
   const phaseNodeCounts = {};
   if (graphData && plan) {
     for (const n of graphData.nodes) {
@@ -357,167 +463,140 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
   }
 
   return (
-    <div className="kg-modal-overlay" onClick={onClose}>
-      <div className="kg-modal kg-modal-wide" onClick={e => e.stopPropagation()}>
-        <div className="kg-modal-header">
-          <span>🕸️ 知识图谱 — {plan.name}</span>
-          <div className="kg-modal-actions">
-            <button className="btn-tiny" onClick={loadGraph} title="重新加载">🔄</button>
-            <button className="btn-tiny" onClick={onClose}>✕</button>
+    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
+      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+        <div className='flex items-center justify-between border-b px-4 py-2.5'>
+          <span className='flex items-center gap-2 text-sm font-medium'>
+            <Network className='h-4 w-4 text-primary' />
+            知识图谱 — {plan.name}
+          </span>
+          <div className='flex items-center gap-1'>
+            {graphData && (
+              <div className='flex items-center gap-0.5 mr-2'>
+                <Button variant='ghost' size='sm' onClick={handleExportJSON} title='导出 JSON 数据'><FileJson className='h-3.5 w-3.5 mr-1' />JSON</Button>
+                <Button variant='ghost' size='sm' onClick={handleExportSVG} title='导出 SVG 矢量图'><FileImage className='h-3.5 w-3.5 mr-1' />SVG</Button>
+                <Button variant='ghost' size='sm' onClick={handleExportPNG} title='导出 PNG 图片'><FileImage className='h-3.5 w-3.5 mr-1' />PNG</Button>
+                <Button variant='ghost' size='sm' onClick={handleExportMarkdown} title='导出 Markdown 文档'><FileText className='h-3.5 w-3.5 mr-1' />MD</Button>
+              </div>
+            )}
+            <Button variant='ghost' size='sm' onClick={loadGraph} title='重新加载'><RefreshCw className='h-3.5 w-3.5' /></Button>
+            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
           </div>
         </div>
-        <div className="kg-modal-body">
-          <div className="kg-toolbar">
-            {/* Infer toggle */}
-            <label className="kg-toggle" title="启用 AI 文本提取 + 传递性依赖推导 + 继承依赖">
-              <input
-                type="checkbox"
-                checked={inferEnabled}
-                onChange={() => {
-                  setInferEnabled(!inferEnabled);
-                  setHighlightedNode(null);
-                }}
-              />
+        <div className='flex-1 flex flex-col overflow-hidden'>
+          <div className='flex items-center gap-2 border-b px-4 py-2 flex-wrap'>
+            <label className='flex items-center gap-1.5 text-xs cursor-pointer select-none' title='启用 AI 文本提取 + 传递性依赖推导 + 继承依赖'>
+              <input type='checkbox' checked={inferEnabled} onChange={() => { setInferEnabled(!inferEnabled); setHighlightedNode(null); }} className='rounded' />
+              <Lightbulb className='h-3 w-3 text-muted-foreground' />
               <span>智能推断关系</span>
             </label>
 
-            {/* Extract button */}
-            <button
-              className="btn btn-sm"
-              onClick={handleExtractRelations}
-              disabled={extracting}
-              title="从 AI 生成的讲解文本中提取知识点关系"
-            >
-              {extracting ? '⏳ 提取中...' : '🔍 从文本提取关系'}
-            </button>
+            <Button variant='outline' size='sm' onClick={handleExtractRelations} disabled={extracting} title='从 AI 生成的讲解文本中提取知识点关系'>
+              {extracting ? <RefreshCw className='h-3 w-3 mr-1 animate-spin' /> : <Eye className='h-3 w-3 mr-1' />}
+              {extracting ? '提取中...' : '从文本提取关系'}
+            </Button>
 
-            {/* Clear highlight */}
             {highlightedNode && (
-              <button className="btn btn-sm" onClick={() => setHighlightedNode(null)}>
-                ✕ 取消高亮
-              </button>
+              <Button variant='ghost' size='sm' onClick={() => setHighlightedNode(null)}>
+                <X className='h-3 w-3 mr-1' />取消高亮
+              </Button>
             )}
           </div>
 
-          {/* Extract result banner */}
           {extractResult && !extractResult.error && (
-            <div className="kg-extract-result">
-              <span className="kg-extract-success">
-                ✅ 从讲解文本中提取了 <strong>{extractResult.detailCount || 0}</strong> 条直接关系、
+            <div className='flex items-center justify-between gap-2 border-b bg-green-50 dark:bg-green-950 px-4 py-1.5 text-xs'>
+              <span className='flex items-center gap-1 text-green-700 dark:text-green-300'>
+                <CheckCircle className='h-3 w-3' />
+                从讲解文本中提取了 <strong>{extractResult.detailCount || 0}</strong> 条直接关系、
                 <strong>{extractResult.transitiveCount || 0}</strong> 条传递依赖、
                 <strong>{extractResult.inheritedCount || 0}</strong> 条继承依赖
                 （共 {extractResult.totalCount || 0} 条推断边）
               </span>
-              <button className="btn-tiny" onClick={() => setExtractResult(null)}>✕</button>
+              <Button variant='ghost' size='sm' onClick={() => setExtractResult(null)}><X className='h-3 w-3' /></Button>
             </div>
           )}
           {extractResult && extractResult.error && (
-            <div className="kg-extract-result kg-extract-error">
-              ❌ {extractResult.error}
-              <button className="btn-tiny" onClick={() => setExtractResult(null)}>✕</button>
+            <div className='flex items-center justify-between gap-2 border-b bg-red-50 dark:bg-red-950 px-4 py-1.5 text-xs'>
+              <span className='flex items-center gap-1 text-red-600 dark:text-red-400'>
+                <AlertCircle className='h-3 w-3' />
+                {extractResult.error}
+              </span>
+              <Button variant='ghost' size='sm' onClick={() => setExtractResult(null)}><X className='h-3 w-3' /></Button>
             </div>
           )}
 
-          {/* Filter toolbar */}
-          <div className="kg-filters">
+          <div className='flex items-center gap-3 border-b px-4 py-1.5 flex-wrap'>
             {FILTER_GROUPS.map(group => {
               const allActive = group.types.every(t => activeFilters[t]);
               const someActive = group.types.some(t => activeFilters[t]);
               return (
-                <span key={group.key} className="kg-filter-group">
+                <div key={group.key} className='flex items-center gap-1'>
                   <button
-                    className={`kg-filter-btn ${allActive ? 'active' : someActive ? 'partial' : ''}`}
+                    className={`text-xs px-2 py-0.5 rounded border transition-colors ${allActive ? 'bg-primary/10 border-primary/30 text-primary' : someActive ? 'bg-accent border-border text-muted-foreground' : 'bg-muted border-border text-muted-foreground'}`}
                     onClick={() => toggleFilterGroup(group.types, !allActive)}
                     title={`${allActive ? '隐藏' : '显示'} ${group.label}`}
                   >
+                    <Filter className='h-2.5 w-2.5 inline mr-0.5' />
                     {group.label}
-                    <span className="kg-filter-count">
+                    <span className='ml-0.5 opacity-60'>
                       ({group.types.reduce((s, t) => s + (edgeTypeCounts[t] || 0), 0)})
                     </span>
                   </button>
-                  <span className="kg-filter-detail">
+                  <div className='flex items-center gap-0.5'>
                     {group.types.map(type => (
-                      <label key={type} className="kg-filter-chip" style={{ borderColor: RELATION_TYPES[type]?.color }}>
-                        <input
-                          type="checkbox"
-                          checked={activeFilters[type] || false}
-                          onChange={() => toggleFilter(type)}
-                        />
-                        <span style={{ color: RELATION_TYPES[type]?.color }}>
-                          {RELATION_TYPES[type]?.label}
-                        </span>
-                        <span className="kg-filter-chip-count">{edgeTypeCounts[type] || 0}</span>
+                      <label key={type} className='flex items-center gap-0.5 text-[10px] cursor-pointer select-none px-1 py-0.5 rounded hover:bg-accent transition-colors' style={{ borderColor: RELATION_TYPES[type]?.color }}>
+                        <input type='checkbox' checked={activeFilters[type] || false} onChange={() => toggleFilter(type)} className='w-2.5 h-2.5' />
+                        <span style={{ color: RELATION_TYPES[type]?.color }}>{RELATION_TYPES[type]?.label}</span>
+                        <span className='opacity-50 ml-0.5'>{edgeTypeCounts[type] || 0}</span>
                       </label>
                     ))}
-                  </span>
-                </span>
+                  </div>
+                </div>
               );
             })}
           </div>
 
-          {/* Graph area */}
-          {loading ? (
-            <div className="kg-loading">
-              <div className="spinner" />
-              <p>生成知识图谱...</p>
-            </div>
-          ) : error ? (
-            <div className="kg-error">
-              <p>❌ {error}</p>
-              <button className="btn btn-sm" onClick={loadGraph}>重试</button>
-            </div>
-          ) : graphSvg ? (
-            <div
-              className="kg-svg-container"
-              ref={graphContainerRef}
-              dangerouslySetInnerHTML={{ __html: graphSvg }}
-            />
-          ) : (
-            <p className="kg-empty">暂无知识图谱数据</p>
-          )}
+          <div className='flex-1 overflow-auto p-4'>
+            {loading ? (
+              <div className='flex flex-col items-center justify-center h-full gap-3 text-muted-foreground'>
+                <div className='animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent' />
+                <p className='text-sm'>生成知识图谱...</p>
+              </div>
+            ) : error ? (
+              <div className='flex flex-col items-center justify-center h-full gap-3'>
+                <AlertCircle className='h-8 w-8 text-destructive' />
+                <p className='text-sm text-destructive'>{error}</p>
+                <Button variant='outline' size='sm' onClick={loadGraph}>重试</Button>
+              </div>
+            ) : graphSvg ? (
+              <div className='w-full h-full flex justify-center overflow-auto' ref={graphContainerRef} dangerouslySetInnerHTML={{ __html: graphSvg }} />
+            ) : (
+              <div className='flex items-center justify-center h-full text-muted-foreground text-sm'>
+                暂无知识图谱数据
+              </div>
+            )}
+          </div>
         </div>
-        <div className="kg-modal-footer">
-          <span className="kg-legend">
-            <span className="kg-legend-item">📘 一级(章)</span>
-            <span className="kg-legend-item">📗 二级(节)</span>
-            <span className="kg-legend-item">📙 三级(子节)</span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item" style={{ borderLeft: '2px solid #d1d5db', paddingLeft: '10px' }}>
-              <span style={{ fontWeight: 600, color: '#475569' }}>→</span> 包含
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ color: '#dc2626', fontWeight: 600 }}>- - →</span> 前置依赖
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ color: '#7c3aed', fontWeight: 600 }}>- - →</span> 扩展延伸
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ color: '#059669', fontWeight: 600 }}>···→</span> 示例
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ color: '#2563eb', fontWeight: 600 }}>↔</span> 相关
-            </span>
-            <span className="kg-legend-sep">|</span>
-            <span className="kg-legend-item">
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#bbf7d0', borderRadius: 2, verticalAlign: 'middle', marginRight: 3 }}></span> 已学习
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fde68a', borderRadius: 2, verticalAlign: 'middle', marginRight: 3 }}></span> 选中
-            </span>
-            <span className="kg-legend-item">
-              <span style={{ opacity: 0.4 }}>⬜</span> 未关联
-            </span>
-            {inferEnabled && graphData?.inferredCount > 0 && (
-              <span className="kg-legend-item kg-legend-inferred">
-                💡 推断边 {graphData.baseEdgeCount} 基础 + {graphData.inferredCount} 推断
-              </span>
-            )}
-            {highlightedNode && (
-              <span className="kg-legend-item kg-legend-hint">
-                💡 点击空白取消高亮 | 点击节点查看关联
-              </span>
-            )}
-          </span>
+        <div className='flex items-center gap-2 border-t px-4 py-1.5 text-[11px] text-muted-foreground flex-wrap'>
+          <span>📘 一级(章)</span>
+          <span>📗 二级(节)</span>
+          <span>📙 三级(子节)</span>
+          <span className='text-border'>|</span>
+          <span><span className='font-mono'>&rarr;</span> 包含</span>
+          <span><span className='font-mono'>- - &rarr;</span> 前置依赖</span>
+          <span><span className='font-mono'>- - &rarr;</span> 扩展延伸</span>
+          <span><span className='font-mono'>···&rarr;</span> 示例</span>
+          <span><span className='font-mono'>&#8596;</span> 相关</span>
+          <span className='text-border'>|</span>
+          <span className='flex items-center gap-1'><span className='inline-block w-3 h-3 rounded-sm bg-green-200' /> 已学习</span>
+          <span className='flex items-center gap-1'><span className='inline-block w-3 h-3 rounded-sm bg-yellow-200 border border-yellow-500' /> 选中</span>
+          <span>⬜ 未关联</span>
+          {inferEnabled && graphData?.inferredCount > 0 && (
+            <span className='text-primary'>推断边 {graphData.baseEdgeCount} 基础 + {graphData.inferredCount} 推断</span>
+          )}
+          {highlightedNode && (
+            <span className='text-muted-foreground'>点击空白取消高亮 | 点击节点查看关联</span>
+          )}
         </div>
       </div>
     </div>

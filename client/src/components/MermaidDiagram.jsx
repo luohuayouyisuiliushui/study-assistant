@@ -54,13 +54,13 @@ export default function MermaidDiagram({ code }) {
     return (
       <div className="mermaid-error">
         <div className="mermaid-error-header">
-          <span>⚠️ 图表渲染失败</span>
-          <button className="btn-tiny" onClick={() => { setError(null); setSvg(''); }} title="重新渲染">🔄 重试</button>
+          <span>图表渲染失败</span>
+          <button className="btn-tiny" onClick={() => { setError(null); setSvg(''); }} title="重新渲染">重试</button>
         </div>
         <div className="mermaid-error-body">
           <p className="mermaid-error-reason">{shortMsg}</p>
           {isSyntaxError && (
-            <p className="mermaid-error-hint">💡 提示：Mermaid 图表语法可能有误。常见原因——缺少节点定义、箭头方向错误、括号不匹配。</p>
+            <p className="mermaid-error-hint">提示：Mermaid 图表语法可能有误。常见原因——缺少节点定义、箭头方向错误、括号不匹配。</p>
           )}
           <details>
             <summary>查看源代码</summary>
@@ -76,7 +76,7 @@ export default function MermaidDiagram({ code }) {
   }
 
   if (!svg) {
-    return <div className="mermaid-loading">🔄 渲染图表中...</div>;
+    return <div className="mermaid-loading">渲染图表中...</div>;
   }
 
   return (

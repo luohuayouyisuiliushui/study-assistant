@@ -1295,6 +1295,7 @@ export function updateTopic(planId, topicId, updates) {
 
 /**
  * Accumulate time spent on a topic (in seconds).
+ * Also records a daily time log entry for time distribution tracking.
  */
 export function updateTopicTime(planId, topicId, seconds) {
   return writePlan(planId, (plan) => {
@@ -1302,6 +1303,16 @@ export function updateTopicTime(planId, topicId, seconds) {
     if (!topic) throw new Error(`Topic not found: ${topicId}`);
     topic.timeSpent = (topic.timeSpent || 0) + seconds;
     topic.lastAccessed = Date.now();
+
+    // Record daily time log for distribution tracking
+    const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+    if (!topic.timeLog) topic.timeLog = [];
+    const todayEntry = topic.timeLog.find(e => e.date === today);
+    if (todayEntry) {
+      todayEntry.seconds += seconds;
+    } else {
+      topic.timeLog.push({ date: today, seconds });
+    }
   });
 }
 
@@ -1687,5 +1698,25 @@ export function recordTeachingErrors(planId, topicId, errors) {
     if (!topic) throw new Error(`Topic not found: `);
     topic.teachingErrors = Array.isArray(errors) ? errors : [];
     topic.teachingErrorsUpdatedAt = Date.now();
+  });
+}
+
+/**
+ * Save quick quiz results for a plan.
+ * Stores each quiz attempt with questions, user answers, and correctness.
+ */
+export function saveQuickQuizResults(planId, quizData) {
+  return writePlan(planId, (plan) => {
+    if (!plan.quickQuizHistory) plan.quickQuizHistory = [];
+    plan.quickQuizHistory.push({
+      id: quizData.id || crypto.randomUUID().slice(0, 8),
+      createdAt: Date.now(),
+      questions: quizData.questions,
+      results: quizData.results,
+    });
+    // Keep only last 20 quiz attempts to avoid unbounded growth
+    if (plan.quickQuizHistory.length > 20) {
+      plan.quickQuizHistory = plan.quickQuizHistory.slice(-20);
+    }
   });
 }

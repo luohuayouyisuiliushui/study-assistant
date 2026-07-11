@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, memo } from 'react';
+import { Helmet } from 'react-helmet-async';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import { ArrowLeft, Download, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Search, Wrench, FileText, BarChart3, BookOpen, Play, Mic, X, Lightbulb, Target, Zap, Swords, Layers, Brain, CheckCircle, AlertCircle, List, ThumbsUp, ThumbsDown, Meh, MoreHorizontal } from 'lucide-react';
+import { Button } from '#/components/ui/button';
 import MermaidDiagram from './MermaidDiagram';
 import api from '../api';
 
-// 教学错误类型编码 → 中文标签（与后端 MISCONCEPTION_TAXONOMY 保持一致）
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
   'concept-approx': '概念近似但不精确',
@@ -17,55 +19,36 @@ const ERROR_TYPE_LABELS = {
   procedural: '步骤缺失/顺序错误',
 };
 
-// Custom component map for ReactMarkdown — handles Mermaid diagrams
 const markdownComponents = {
   code({ className, children, ...props }) {
     const isInline = !props?.node?.properties?.className && !className;
     const code = String(children).replace(/\n$/, '');
-
-    // Mermaid code block: class is "language-mermaid"
     if (className && className.includes('language-mermaid') && !isInline) {
       return <MermaidDiagram code={code} />;
     }
-
-    // Inline code
-    if (isInline) {
-      return <code {...props}>{children}</code>;
-    }
-
-    // Regular code block
-    return (
-      <pre {...props}>
-        <code className={className}>{children}</code>
-      </pre>
-    );
+    if (isInline) return <code {...props}>{children}</code>;
+    return <pre {...props}><code className={className}>{children}</code></pre>;
   },
 };
 
-// Memo-optimized content area — only re-renders when the markdown string changes
 const ContentArea = memo(function ContentArea({ content }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{content}</ReactMarkdown>;
 });
 
-// Memo-optimized Q&A message list — only re-renders when qaList changes
 const QaMessages = memo(function QaMessages({ qaList }) {
   return qaList.length === 0 ? (
-    <div className="chat-empty">暂无追问，在下方输入问题开始讨论</div>
+    <div className='text-center text-sm text-muted-foreground py-8'>暂无追问，在下方输入问题开始讨论</div>
   ) : (
     qaList.map((qa, i) => (
-      <div key={i} className="chat-message-group" data-round={i}>
-        {/* User message */}
-        <div className="chat-message user">
-          <div className="chat-bubble user-bubble">
-            {qa.question}
-          </div>
+      <div key={i} className='mb-4' data-round={i}>
+        <div className='flex justify-end mb-2'>
+          <div className='max-w-[75%] rounded-lg bg-primary/10 px-3 py-2 text-sm'>{qa.question}</div>
         </div>
-        {/* AI message */}
-        <div className="chat-message ai">
-          <div className="chat-avatar">🤖</div>
-          <div className="chat-bubble ai-bubble">
+        <div className='flex gap-2'>
+          <span className='text-lg shrink-0 mt-1'>🤖</span>
+          <div className='max-w-[75%] rounded-lg bg-muted px-3 py-2 text-sm'>
             {qa.answer === '...' ? (
-              <span className="typing-text">思考中...</span>
+              <span className='text-muted-foreground animate-pulse'>思考中...</span>
             ) : (
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
             )}
@@ -76,24 +59,31 @@ const QaMessages = memo(function QaMessages({ qaList }) {
   );
 });
 
-/** Parse exercises from AI-generated markdown content (client-side) */
+function stripExerciseSection(detail) {
+  if (!detail) return '';
+  const lines = detail.split('\n');
+  const startIdx = lines.findIndex(l => {
+    const t = l.trim();
+    return t.includes('📝 练习题') || /^#{1,3}\s*练习题/.test(t);
+  });
+  if (startIdx === -1) return detail;
+  return lines.slice(0, startIdx).join('\n').trimEnd();
+}
+
 function parseExercisesFromMarkdown(detail) {
   if (!detail) return [];
   const exercises = [];
   const lines = detail.split('\n');
   let current = null;
   let inSection = false;
-
   for (const line of lines) {
     const t = line.trim();
     if (t.includes('📝 练习题') || /^#{1,3}\s*练习题/.test(t)) { inSection = true; continue; }
     if (!inSection) continue;
-
     const m = t.match(/^>\s*\*\*练习题\s*(\d+)\*\*\s*[（(]([^)）]+)[)）]/);
     if (m) {
       if (current) exercises.push(current);
       current = { index: parseInt(m[1]), type: m[2] === '选择题' ? 'choice' : 'open', question: '', options: [], answer: '', explanation: '', conceptTag: '', userAnswer: null, correct: null };
-      // Find closing paren (ASCII or full-width) to extract question text
       const parenEnd = t.search(/[)）]/);
       if (parenEnd >= 0 && parenEnd + 1 < t.length) current.question = t.slice(parenEnd + 1).replace(/^[）)]\s*/, '').trim();
       continue;
@@ -125,36 +115,33 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [localDetail, setLocalDetail] = useState(topic?.detail || '');
   const qaInputRef = useRef(null);
   const chatPanelRef = useRef(null);
-  const genTriggered = useRef(false); // prevent double trigger
-  const startTimeRef = useRef(Date.now()); // time tracking
-  const hiddenDurationRef = useRef(0); // accumulated time page was hidden
-  const hiddenStartRef = useRef(null); // when page became hidden
+  const genTriggered = useRef(false);
+  const startTimeRef = useRef(Date.now());
+  const hiddenDurationRef = useRef(0);
+  const hiddenStartRef = useRef(null);
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
-  const [revealErrors, setRevealErrors] = useState(null); // null | { hasErrors, errors }
+  const [revealErrors, setRevealErrors] = useState(null);
   const [revealLoading, setRevealLoading] = useState(false);
   const [foundErrorsInput, setFoundErrorsInput] = useState('');
   const lastReportedRef = useRef(0);
   const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
 
-  // ─── Exercise State ───
   const [exercises, setExercises] = useState([]);
   const [exerciseAnswers, setExerciseAnswers] = useState({});
   const [exerciseResults, setExerciseResults] = useState(null);
   const [exerciseLoading, setExerciseLoading] = useState(false);
   const [submittedExercises, setSubmittedExercises] = useState(false);
 
-  // ─── Review Mode State ───
   const [reviewMode, setReviewMode] = useState(false);
   const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
 
-  // ─── Interactive Mode State ───
-  const [interactiveMode, setInteractiveMode] = useState(null); // null | 'stepwise' | 'realtime'
+  const [interactiveMode, setInteractiveMode] = useState(null);
   const [interactiveSections, setInteractiveSections] = useState([]);
-  const [streamingContent, setStreamingContent] = useState(''); // progressive SSE content
+  const [streamingContent, setStreamingContent] = useState('');
   const [interactiveLoading, setInteractiveLoading] = useState(false);
   const [interactiveFinished, setInteractiveFinished] = useState(false);
   const [interactiveInput, setInteractiveInput] = useState('');
@@ -162,41 +149,38 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const interactiveInputRef = useRef(null);
   const interactiveBusyRef = useRef(false);
 
-  // ─── Voice Input State ───
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
   const [voiceSupported, setVoiceSupported] = useState(true);
 
-  // ─── Export State ───
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
-  // ─── Fact-Check State ───
+  useEffect(() => {
+    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const [factCheckData, setFactCheckData] = useState(topic?.factCheck || null);
   const [factCheckLoading, setFactCheckLoading] = useState(false);
   const [factCheckFixing, setFactCheckFixing] = useState(false);
 
-  // ─── Adaptive Analysis State ───
   const [adaptiveData, setAdaptiveData] = useState(null);
   const [adaptiveLoading, setAdaptiveLoading] = useState(false);
 
-  // Check Web Speech API support on mount
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setVoiceSupported(false);
-    }
+    if (!SpeechRecognition) setVoiceSupported(false);
   }, []);
 
-  // Cleanup recognition on unmount
   useEffect(() => {
     return () => {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch {}
-      }
+      if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch {} }
     };
   }, []);
 
-  // Record time spent — heartbeat every 30s + flush on leave
   useEffect(() => {
     const pid = plan?.id;
     const tid = topic?.id;
@@ -205,63 +189,73 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     hiddenDurationRef.current = 0;
     hiddenStartRef.current = null;
 
-    // Pause/resume on visibility change
+    let activeStart = Date.now();
+    let isActive = true;
+    let inactivityTimeout = null;
+    const INACTIVITY_THRESHOLD = 60000;
+
+    const markActive = () => {
+      if (!isActive) {
+        hiddenDurationRef.current += Date.now() - activeStart;
+        isActive = true;
+        activeStart = Date.now();
+      }
+      clearTimeout(inactivityTimeout);
+      inactivityTimeout = setTimeout(() => {
+        if (isActive) { isActive = false; activeStart = Date.now(); }
+      }, INACTIVITY_THRESHOLD);
+    };
+
+    const activityEvents = ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'];
+    activityEvents.forEach(e => document.addEventListener(e, markActive, { passive: true }));
+
+    inactivityTimeout = setTimeout(() => {
+      if (isActive) { isActive = false; activeStart = Date.now(); }
+    }, INACTIVITY_THRESHOLD);
+
     const onVisibility = () => {
       if (document.hidden) {
-        // Page hidden — record when it happened
+        if (isActive) { isActive = false; activeStart = Date.now(); }
         hiddenStartRef.current = Date.now();
       } else if (hiddenStartRef.current) {
-        // Page visible again — add hidden duration
         hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
         hiddenStartRef.current = null;
+        markActive();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    // Helper: effective elapsed time minus hidden periods
     const effectiveElapsed = () => {
       const totalMs = Date.now() - startTimeRef.current;
       let hiddenExtra = hiddenDurationRef.current;
-      if (hiddenStartRef.current) {
-        hiddenExtra += Date.now() - hiddenStartRef.current;
-      }
+      if (hiddenStartRef.current) hiddenExtra += Date.now() - hiddenStartRef.current;
+      if (!isActive) hiddenExtra += Date.now() - activeStart;
       return Math.round((totalMs - hiddenExtra) / 1000);
     };
 
-    // Periodic heartbeat: send accumulated time every 30s
     const heartbeat = setInterval(async () => {
       const total = effectiveElapsed();
       const unreported = total - lastReportedRef.current;
       if (unreported >= 5 && pid && tid) {
-        try {
-          await api.recordTime(pid, tid, unreported);
-          lastReportedRef.current = total;
-        } catch { /* ignore */ }
+        try { await api.recordTime(pid, tid, unreported); lastReportedRef.current = total; } catch {}
       }
     }, 30000);
 
     return () => {
       clearInterval(heartbeat);
+      clearTimeout(inactivityTimeout);
+      activityEvents.forEach(e => document.removeEventListener(e, markActive));
       document.removeEventListener('visibilitychange', onVisibility);
-      // Flush hidden time before leaving
-      if (hiddenStartRef.current) {
-        hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
-      }
-      // Send remaining time on leave
+      if (hiddenStartRef.current) hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
       const elapsed = effectiveElapsed();
       const unreported = elapsed - lastReportedRef.current;
-      if (unreported >= 5 && pid && tid) {
-        api.recordTime(pid, tid, unreported).catch(() => {});
-      }
+      if (unreported >= 5 && pid && tid) { api.recordTime(pid, tid, unreported).catch(() => {}); }
     };
   }, [topic?.id]);
 
-  // Load Q&A history from plan (only on topic change, not on every plan refresh)
   useEffect(() => {
     setLocalDetail(topic?.detail || '');
     setError(topic?.lastError || null);
-
-    // Only load Q&A history on initial topic mount, skip if already has items
     const history = plan.history?.filter(h => h.topicId === topic?.id) || [];
     const pairs = [];
     for (let i = 0; i < history.length; i++) {
@@ -270,69 +264,45 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         i++;
       }
     }
-    // Only set if we don't have a pending question (answer === '...')
     setQaList(prev => {
       const hasPending = prev.some(q => q.answer === '...');
-      if (hasPending) return prev; // don't overwrite mid-Q&A
+      if (hasPending) return prev;
       return pairs;
     });
-  }, [topic?.id]); // removed plan.history to prevent overwrite during polls
+  }, [topic?.id]);
 
-  // Parse exercises from detail content
   useEffect(() => {
     if (!localDetail || generating) return;
-    // Only parse if we haven't loaded exercises from saved topic data
     if (topic?.exercises && topic.exercises.length > 0) {
       setExercises(topic.exercises);
-      // Check if all exercises have been submitted
       if (topic.exercises.every(e => e.correct !== null)) {
         setSubmittedExercises(true);
         setExerciseResults(topic.exercises.map((e, idx) => ({
-          exerciseIndex: idx,
-          correct: e.correct,
-          userAnswer: e.userAnswer,
-          correctAnswer: e.answer,
-          explanation: e.explanation,
+          exerciseIndex: idx, correct: e.correct, userAnswer: e.userAnswer,
+          correctAnswer: e.answer, explanation: e.explanation,
         })));
       }
       return;
     }
-    // Parse from markdown detail
     const parsed = parseExercisesFromMarkdown(localDetail);
-    if (parsed.length > 0) {
-      setExercises(parsed);
-    }
+    if (parsed.length > 0) setExercises(parsed);
   }, [localDetail, generating, topic?.exercises]);
 
-  // Scroll chat panel to bottom on new Q&A
   useEffect(() => {
-    if (chatPanelRef.current) {
-      chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
-    }
+    if (chatPanelRef.current) chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
   }, [qaList.length]);
 
-  // Scroll to a specific round
   const scrollToRound = (index) => {
     const container = chatPanelRef.current;
     if (!container) return;
     const target = container.querySelector(`[data-round="${index}"]`);
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // Auto-generate on first load (only once)
   useEffect(() => {
     if (!topic || genTriggered.current) return;
-    if (topic.detail && topic.done) {
-      setGenerating(false);
-      return;
-    }
-    if (topic.lastError) {
-      setError(topic.lastError);
-      return;
-    }
-    // If detail is empty and not errored, trigger generation
+    if (topic.detail && topic.done) { setGenerating(false); return; }
+    if (topic.lastError) { setError(topic.lastError); return; }
     if (!topic.detail && !topic.done && !topic.lastError) {
       genTriggered.current = true;
       setGenerating(true);
@@ -344,32 +314,22 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }
   }, [topic?.id]);
 
-  // Regenerate only the illustration image for this topic
   const handleGenerateImage = async (topicId) => {
     setGenerating(true);
     try {
       await api.generateDetail(plan.id, topicId);
-      // Wait a moment then refresh
       setTimeout(async () => {
         const fresh = await api.getPlan(plan.id);
-        if (fresh.plan) {
-          setTopic(fresh.plan.topics.find(t => t.id === topicId));
-        }
+        if (fresh.plan) { setTopic(fresh.plan.topics.find(t => t.id === topicId)); }
         setGenerating(false);
       }, 5000);
-    } catch {
-      setGenerating(false);
-    }
+    } catch { setGenerating(false); }
   };
 
-  // Auto-focus Q&A input when generation completes
   useEffect(() => {
-    if (!generating && localDetail && !error) {
-      qaInputRef.current?.focus();
-    }
+    if (!generating && localDetail && !error) qaInputRef.current?.focus();
   }, [generating, localDetail, error]);
 
-  // Poll for generation progress (intermediate content + error detection)
   useEffect(() => {
     if (!generating || !plan) return;
     const timer = setInterval(async () => {
@@ -377,32 +337,17 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         const d = await api.getPlan(plan.id);
         const t = d.plan.topics.find(t => t.id === topic?.id);
         if (!t) { clearInterval(timer); return; }
-
-        if (t.detail && t.detail !== localDetail) {
-          setLocalDetail(t.detail);
-          onRefresh(d.plan);
-        }
-        if (t.lastError) {
-          setError(t.lastError);
-          setGenerating(false);
-          clearInterval(timer);
-        }
-        if (t.done && !t.lastError) {
-          setLocalDetail(t.detail || localDetail);
-          setGenerating(false);
-          clearInterval(timer);
-        }
+        if (t.detail && t.detail !== localDetail) { setLocalDetail(t.detail); onRefresh(d.plan); }
+        if (t.lastError) { setError(t.lastError); setGenerating(false); clearInterval(timer); }
+        if (t.done && !t.lastError) { setLocalDetail(t.detail || localDetail); setGenerating(false); clearInterval(timer); }
       } catch { clearInterval(timer); }
     }, 2000);
     return () => clearInterval(timer);
   }, [generating, plan?.id, topic?.id]);
 
-  // Close export menu on outside click
   useEffect(() => {
     if (!showExportMenu) return;
-    const handler = (e) => {
-      if (!e.target.closest('.export-menu-container')) setShowExportMenu(false);
-    };
+    const handler = (e) => { if (!e.target.closest('.export-menu-container')) setShowExportMenu(false); };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, [showExportMenu]);
@@ -415,32 +360,16 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     setQaInput('');
     setQaLoading(true);
     setQaList(prev => [...prev, { question, answer: '...' }]);
-
     try {
       const d = await api.askQuestion(plan.id, topic.id, question);
-      setQaList(prev => {
-        const list = [...prev];
-        list[list.length - 1] = { question, answer: d.answer };
-        return list;
-      });
-      // Scroll to bottom when answer arrives
-      requestAnimationFrame(() => {
-        if (chatPanelRef.current) {
-          chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
-        }
-      });
+      setQaList(prev => { const list = [...prev]; list[list.length - 1] = { question, answer: d.answer }; return list; });
+      requestAnimationFrame(() => { if (chatPanelRef.current) chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight; });
       const fresh = await api.getPlan(plan.id);
       onRefresh(fresh.plan);
       setTimeout(() => qaInputRef.current?.focus(), 100);
     } catch (err) {
-      setQaList(prev => {
-        const list = [...prev];
-        list[list.length - 1] = { question, answer: `❌ 请求失败: ${err.message}` };
-        return list;
-      });
-    } finally {
-      setQaLoading(false);
-    }
+      setQaList(prev => { const list = [...prev]; list[list.length - 1] = { question, answer: `❌ 请求失败: ${err.message}` }; return list; });
+    } finally { setQaLoading(false); }
   };
 
   const handleExport = () => {
@@ -449,10 +378,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     md += topic.detail + '\n\n';
     if (qaList.length > 0) {
       md += `---\n\n## 📎 扩展讨论\n\n`;
-      qaList.forEach((qa, i) => {
-        md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`;
-        md += `> ${qa.answer}\n\n`;
-      });
+      qaList.forEach((qa, i) => { md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`; md += `> ${qa.answer}\n\n`; });
     }
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -465,144 +391,54 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const handleExportHtml = async () => {
     if (!localDetail) return;
-
-    // Build the full Markdown content (same as handleExport)
     let md = `# ${topic.title}\n\n`;
     md += topic.detail + '\n\n';
     if (qaList.length > 0) {
       md += `---\n\n## 📎 扩展讨论\n\n`;
-      qaList.forEach((qa, i) => {
-        md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`;
-        md += `> ${qa.answer}\n\n`;
-      });
+      qaList.forEach((qa, i) => { md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`; md += `> ${qa.answer}\n\n`; });
     }
-
-    // ── Step 1: Split into segments — regular text vs mermaid blocks ──
-    // Each segment: { type: 'markdown'|'mermaid', content: string }
     const segments = [];
     const mermaidRe = /```mermaid\s*\n([\s\S]*?)```/g;
-    let lastIdx = 0;
-    let match;
+    let lastIdx = 0, match;
     while ((match = mermaidRe.exec(md)) !== null) {
-      if (match.index > lastIdx) {
-        segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
-      }
+      if (match.index > lastIdx) segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
       segments.push({ type: 'mermaid', content: match[1].trim() });
       lastIdx = mermaidRe.lastIndex;
     }
-    if (lastIdx < md.length) {
-      segments.push({ type: 'markdown', content: md.slice(lastIdx) });
-    }
-
-    // ── Step 2: Simple Markdown-to-HTML converter ──
+    if (lastIdx < md.length) segments.push({ type: 'markdown', content: md.slice(lastIdx) });
     const mdToHtml = (text) => {
-      // Escape HTML special chars
-      let h = text
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      // Headings
+      let h = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       h = h.replace(/^##### (.*$)/gm, '<h5>$1</h5>');
       h = h.replace(/^#### (.*$)/gm, '<h4>$1</h4>');
       h = h.replace(/^### (.*$)/gm, '<h3>$1</h3>');
       h = h.replace(/^## (.*$)/gm, '<h2>$1</h2>');
       h = h.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-      // Bold + italic
       h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
       h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      // Inline code
       h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-      // Links
       h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-      // Horizontal rule
       h = h.replace(/^---$/gm, '<hr>');
-      // Blockquote
       h = h.replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>');
-      // Unordered list items
       h = h.replace(/^- (.*$)/gm, '<li>$1</li>');
-      // Ordered list items
       h = h.replace(/^\d+\. (.*$)/gm, '<li>$1</li>');
-      // Wrap consecutive <li> in <ul>
       h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-      // Paragraphs: double newline = new paragraph (skip block-level elements)
       h = h.replace(/\n\n/g, '</p><p>');
-      // Wrap remaining in <p> if not already wrapped
-      if (!h.startsWith('<h') && !h.startsWith('<p>') && !h.startsWith('<ul') && !h.startsWith('<blockquote') && !h.startsWith('<hr')) {
-        h = '<p>' + h;
-      }
-      if (!h.endsWith('>')) {
-        h = h + '</p>';
-      }
-      // Clean empty paragraphs
+      if (!h.startsWith('<h') && !h.startsWith('<p>') && !h.startsWith('<ul') && !h.startsWith('<blockquote') && !h.startsWith('<hr')) h = '<p>' + h;
+      if (!h.endsWith('>')) h = h + '</p>';
       h = h.replace(/<p><\/p>/g, '');
       return h;
     };
-
-    // ── Step 3: Render all segments to HTML (mermaid → SVG) ──
     const { default: mermaid } = await import('mermaid');
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'neutral',
-      securityLevel: 'strict',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    });
-
+    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' });
     let bodyHtml = '';
     for (const seg of segments) {
       if (seg.type === 'mermaid') {
-        try {
-          const id = 'm-export-' + Math.random().toString(36).slice(2, 9);
-          const { svg: svgText } = await mermaid.render(id, seg.content);
-          bodyHtml += `<div class="mermaid-svg">${svgText}</div>`;
-        } catch {
-          bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`;
-        }
-      } else {
-        bodyHtml += mdToHtml(seg.content);
-      }
+        try { const id = 'm-export-' + Math.random().toString(36).slice(2, 9); const { svg: svgText } = await mermaid.render(id, seg.content); bodyHtml += `<div class="mermaid-svg">${svgText}</div>`; } catch { bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`; }
+      } else { bodyHtml += mdToHtml(seg.content); }
     }
-
-    // ── Step 4: Build self-contained HTML ──
     const title = topic.title.replace(/[/\\?%*:|"<>]/g, '_');
-    const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px 20px; line-height: 1.8; color: #1e293b; background: #fff; }
-  h1 { font-size: 24px; margin: 20px 0 10px; }
-  h2 { font-size: 20px; margin: 16px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
-  h3 { font-size: 17px; margin: 12px 0 6px; }
-  h4, h5 { font-size: 15px; margin: 10px 0 5px; }
-  p { margin: 8px 0; }
-  ul, ol { padding-left: 20px; margin: 8px 0; }
-  li { margin: 3px 0; }
-  code { padding: 2px 5px; background: #f1f5f9; border-radius: 3px; font-size: .9em; }
-  pre { padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow-x: auto; font-size: 13px; }
-  pre.mermaid-fallback { background: #fef2f2; border-color: #fca5a5; color: #dc2626; }
-  blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid #60a5fa; background: #f1f5f9; border-radius: 0 6px 6px 0; }
-  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-  th, td { padding: 6px 10px; border: 1px solid #e2e8f0; text-align: left; }
-  th { background: #f1f5f9; font-weight: 600; }
-  hr { margin: 20px 0; border: none; border-top: 1px solid #e2e8f0; }
-  a { color: #2563eb; }
-  .mermaid-svg { margin: 16px 0; display: flex; justify-content: center; overflow-x: auto; padding: 16px 8px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 6px; }
-  .mermaid-svg svg { max-width: 100%; height: auto; }
-  .qa-section { margin-top: 32px; border-top: 2px solid #e2e8f0; padding-top: 16px; }
-  .qa-section h2 { color: #2563eb; }
-  .qa-item { margin: 16px 0; }
-  .qa-question { font-weight: 600; color: #1e293b; padding: 8px 12px; background: #eff6ff; border-radius: 6px; }
-  .qa-answer { padding: 8px 12px 8px 16px; border-left: 3px solid #e2e8f0; margin-left: 4px; }
-  .footer { margin-top: 32px; font-size: 12px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 16px; }
-</style>
-</head>
-<body>
-${bodyHtml}
-<div class="footer">由 Study Assistant 生成</div>
-</body>
-</html>`;
-
+    const html = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>${title}</title>\n<style>\n  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px 20px; line-height: 1.8; color: #1e293b; background: #fff; }\n  h1 { font-size: 24px; margin: 20px 0 10px; } h2 { font-size: 20px; margin: 16px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; } h3 { font-size: 17px; margin: 12px 0 6px; } h4, h5 { font-size: 15px; margin: 10px 0 5px; } p { margin: 8px 0; } ul, ol { padding-left: 20px; margin: 8px 0; } li { margin: 3px 0; } code { padding: 2px 5px; background: #f1f5f9; border-radius: 3px; font-size: .9em; } pre { padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow-x: auto; font-size: 13px; } pre.mermaid-fallback { background: #fef2f2; border-color: #fca5a5; color: #dc2626; } blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid #60a5fa; background: #f1f5f9; border-radius: 0 6px 6px 0; } table { width: 100%; border-collapse: collapse; margin: 10px 0; } th, td { padding: 6px 10px; border: 1px solid #e2e8f0; } th { background: #f1f5f9; } hr { margin: 20px 0; border: none; border-top: 1px solid #e2e8f0; } a { color: #2563eb; } .mermaid-svg { margin: 16px 0; display: flex; justify-content: center; overflow-x: auto; padding: 16px 8px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 6px; } .mermaid-svg svg { max-width: 100%; height: auto; } .qa-section { margin-top: 32px; border-top: 2px solid #e2e8f0; padding-top: 16px; } .qa-section h2 { color: #2563eb; } .qa-item { margin: 16px 0; } .qa-question { font-weight: 600; color: #1e293b; padding: 8px 12px; background: #eff6ff; border-radius: 6px; } .qa-answer { padding: 8px 12px 8px 16px; border-left: 3px solid #e2e8f0; margin-left: 4px; } .footer { margin-top: 32px; font-size: 12px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 16px; }\n</style>\n</head>\n<body>\n${bodyHtml}\n<div class="footer">由 Study Assistant 生成</div>\n</body>\n</html>`;
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -613,124 +449,64 @@ ${bodyHtml}
   };
 
   const handleRetry = () => {
-    setError(null);
-    setLocalDetail('');
-    genTriggered.current = false;
-    setGenerating(true);
+    setError(null); setLocalDetail(''); genTriggered.current = false; setGenerating(true);
     api.generateDetail(plan.id, topic.id).catch(() => {});
   };
 
   const handleDifficulty = async (level) => {
     if (difficultySaving) return;
-    setDifficulty(level);
-    setDifficultySaving(true);
-    try {
-      await api.updateTopic(plan.id, topic.id, { difficulty: level });
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-    } catch { /* ignore */ }
+    setDifficulty(level); setDifficultySaving(true);
+    try { await api.updateTopic(plan.id, topic.id, { difficulty: level }); const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan); } catch {}
     setDifficultySaving(false);
   };
 
   const handleComplete = async () => {
-    // First check for embedded errors (challenge mode — always on)
     setRevealLoading(true);
     try {
       const recognized = foundErrorsInput.split(/[\n;；,，]+/).map(s => s.trim()).filter(Boolean);
       const result = await api.revealErrors(plan.id, topic.id, recognized);
-      if (result.hasErrors && result.errors?.length > 0) {
-        setRevealErrors(result);
-        setRevealLoading(false);
-        return; // Don't mark done yet — wait for user confirmation
-      }
-    } catch { /* silently continue if reveal fails */ }
+      if (result.hasErrors && result.errors?.length > 0) { setRevealErrors(result); setRevealLoading(false); return; }
+    } catch {}
     setRevealLoading(false);
-
-    // No errors found or reveal failed — mark as done directly
     await doComplete();
   };
 
   const doComplete = async () => {
-    try {
-      await api.updateTopic(plan.id, topic.id, { done: true });
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-      onBack();
-    } catch {
-      onBack();
-    }
+    try { await api.updateTopic(plan.id, topic.id, { done: true }); const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan); onBack(); } catch { onBack(); }
   };
 
-  const handleDismissReveal = async () => {
-    setRevealErrors(null);
-    await doComplete();
-  };
+  const handleDismissReveal = async () => { setRevealErrors(null); await doComplete(); };
 
-  // ─── Exercise Handlers ───
-  const handleExerciseAnswer = (exerciseIndex, answer) => {
-    setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer }));
-  };
+  const handleExerciseAnswer = (exerciseIndex, answer) => { setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer })); };
 
   const handleSubmitExercises = async () => {
     if (exerciseLoading || exercises.length === 0) return;
     setExerciseLoading(true);
     try {
-      const answers = Object.entries(exerciseAnswers).map(([idx, answer]) => ({
-        exerciseIndex: parseInt(idx),
-        userAnswer: answer,
-      }));
+      const answers = Object.entries(exerciseAnswers).map(([idx, answer]) => ({ exerciseIndex: parseInt(idx), userAnswer: answer }));
       const d = await api.submitExercises(plan.id, topic.id, answers);
-      setExerciseResults(d.results);
-      setSubmittedExercises(true);
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-    } catch (err) {
-      alert('提交失败: ' + err.message);
-    } finally {
-      setExerciseLoading(false);
-    }
+      setExerciseResults(d.results); setSubmittedExercises(true);
+      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
+    } catch (err) { alert('提交失败: ' + err.message); } finally { setExerciseLoading(false); }
   };
 
-  // ─── Review Mode Handlers ───
   const handleToggleReview = async () => {
-    if (reviewContent) {
-      setReviewMode(!reviewMode);
-      return;
-    }
-    setReviewLoading(true);
-    setReviewMode(true);
+    if (reviewContent) { setReviewMode(!reviewMode); return; }
+    setReviewLoading(true); setReviewMode(true);
     try {
       const d = await api.generateReview(plan.id, topic.id);
       setReviewContent(d.review);
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-    } catch (err) {
-      setReviewError(err.message);
-      setReviewMode(false);
-    } finally {
-      setReviewLoading(false);
-    }
+      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
+    } catch (err) { setReviewError(err.message); setReviewMode(false); } finally { setReviewLoading(false); }
   };
 
-  // Compute related topics data
-  const prerequisites = topic?.prerequisites?.length
-    ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean)
-    : [];
+  const prerequisites = topic?.prerequisites?.length ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
   const childrenTopics = plan.topics.filter(t => t.parentId === topic?.id).sort((a, b) => a.order - b.order);
-  const nextTopics = plan.topics.filter(t =>
-    t.prerequisites?.includes(topic?.id)
-  ).sort((a, b) => a.order - b.order);
-  const relatedTopics = topic?.relatedTopics?.length
-    ? topic.relatedTopics.map(id => plan.topics.find(t => t.id === id)).filter(Boolean)
-    : [];
+  const nextTopics = plan.topics.filter(t => t.prerequisites?.includes(topic?.id)).sort((a, b) => a.order - b.order);
+  const relatedTopics = topic?.relatedTopics?.length ? topic.relatedTopics.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
 
-  // Handle navigation to a related topic
-  const handleNavigateToTopic = (targetTopicId) => {
-    onBack();
-    if (onSelectTopic) onSelectTopic(targetTopicId);
-  };
+  const handleNavigateToTopic = (targetTopicId) => { onBack(); if (onSelectTopic) onSelectTopic(targetTopicId); };
 
-  // ─── Fact-Check Handlers ───
   const handleFactCheck = async () => {
     if (factCheckLoading || !localDetail) return;
     setFactCheckLoading(true);
@@ -741,116 +517,46 @@ ${bodyHtml}
       const freshTopic = fresh.plan.topics.find(t => t.id === topic.id);
       if (freshTopic?.factCheck) setFactCheckData(freshTopic.factCheck);
       onRefresh(fresh.plan);
-    } catch (err) {
-      alert('事实核查失败: ' + err.message);
-    } finally {
-      setFactCheckLoading(false);
-    }
+    } catch (err) { alert('事实核查失败: ' + err.message); } finally { setFactCheckLoading(false); }
   };
 
   const handleFactCheckFix = async () => {
     if (factCheckFixing || !factCheckData?.findings) return;
-    const uncertainFindings = factCheckData.findings.filter(
-      f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination'
-    );
-    if (uncertainFindings.length === 0) {
-      alert('没有需要修正的存疑陈述');
-      return;
-    }
+    const uncertainFindings = factCheckData.findings.filter(f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination');
+    if (uncertainFindings.length === 0) { alert('没有需要修正的存疑陈述'); return; }
     setFactCheckFixing(true);
     try {
       const d = await api.autoFixFacts(plan.id, topic.id, uncertainFindings);
-      if (d.corrected) {
-        setLocalDetail(d.detail);
-        alert(`已修正 ${d.fixedCount} 处内容`);
-      } else {
-        alert('无需修正: ' + (d.message || '修正未能匹配到原文'));
-      }
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-    } catch (err) {
-      alert('自动修正失败: ' + err.message);
-    } finally {
-      setFactCheckFixing(false);
-    }
+      if (d.corrected) { setLocalDetail(d.detail); alert(`已修正 ${d.fixedCount} 处内容`); } else { alert('无需修正: ' + (d.message || '修正未能匹配到原文')); }
+      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
+    } catch (err) { alert('自动修正失败: ' + err.message); } finally { setFactCheckFixing(false); }
   };
 
-  // ─── Adaptive Analysis Handlers ───
   const handleAdaptiveAnalysis = async () => {
     if (adaptiveLoading) return;
     setAdaptiveLoading(true);
-    try {
-      const d = await api.adaptiveAnalysis(plan.id);
-      setAdaptiveData(d);
-    } catch (err) {
-      alert('自适应分析失败: ' + err.message);
-    } finally {
-      setAdaptiveLoading(false);
-    }
+    try { const d = await api.adaptiveAnalysis(plan.id); setAdaptiveData(d); } catch (err) { alert('自适应分析失败: ' + err.message); } finally { setAdaptiveLoading(false); }
   };
 
-  // ─── Export handlers for v1.6.0 formats ───
   const handleExportFormat = (format) => {
-    if (!localDetail) return;
-    setShowExportMenu(false);
-    const urls = {
-      anki: api.exportAnkiCSV(plan.id, topic.id),
-      opml: api.exportOPML(plan.id, topic.id),
-      notas: api.exportNotionCSV(plan.id),
-      json: api.exportJSON(plan.id, topic.id),
-      notes: api.exportStudyNotes(plan.id, topic.id),
-      bundle: api.exportBundle(plan.id),
-    };
-    const url = urls[format];
-    if (!url) return;
-    window.open(url, '_blank');
+    if (!localDetail) return; setShowExportMenu(false);
+    const urls = { anki: api.exportAnkiCSV(plan.id, topic.id), opml: api.exportOPML(plan.id, topic.id), notas: api.exportNotionCSV(plan.id), json: api.exportJSON(plan.id, topic.id), notes: api.exportStudyNotes(plan.id, topic.id), bundle: api.exportBundle(plan.id) };
+    const url = urls[format]; if (!url) return; window.open(url, '_blank');
   };
-
-  // ─── Interactive Mode Handlers ───
 
   const handleStartInteractive = async (mode) => {
     if (interactiveBusyRef.current) return;
     interactiveBusyRef.current = true;
-    setInteractiveMode(mode);
-    setInteractiveSections([]);
-    setStreamingContent('');
-    setInteractiveFinished(false);
-    setInteractiveLoading(true);
+    setInteractiveMode(mode); setInteractiveSections([]); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(true);
     try {
-      let fullContent = '';
-      let sessionData = null;
+      let fullContent = ''; let sessionData = null;
       await api.startInteractiveSSE(plan.id, topic.id, mode, (event) => {
-        if (event.type === 'chunk') {
-          fullContent += event.content;
-          setStreamingContent(fullContent); // progressive typewriter effect
-        } else if (event.type === 'pause') {
-          // Section complete — push to sections, clear streaming
-          setInteractiveSections(prev => [...prev, { content: fullContent }]);
-          setStreamingContent('');
-          fullContent = '';
-        } else if (event.type === 'done') {
-          if (fullContent && !sessionData) {
-            // No pause happened — push as single section
-            setInteractiveSections(prev => [...prev, { content: fullContent }]);
-          }
-          setStreamingContent('');
-          sessionData = event.session;
-          if (event.session?.stateMachine) {
-            setInteractiveStateMachine(event.session.stateMachine);
-          }
-          if (event.finished) {
-            setInteractiveFinished(true);
-          }
-        } else if (event.type === 'error') {
-          setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]);
-        }
+        if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
+        else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; }
+        else if (event.type === 'done') { if (fullContent && !sessionData) setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); sessionData = event.session; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); if (event.finished) setInteractiveFinished(true); }
+        else if (event.type === 'error') { setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]); }
       });
-    } catch (err) {
-      setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]);
-    } finally {
-      setInteractiveLoading(false);
-      interactiveBusyRef.current = false;
-    }
+    } catch (err) { setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]); } finally { setInteractiveLoading(false); interactiveBusyRef.current = false; }
   };
 
   const handleSendInteractiveFeedback = async () => {
@@ -866,246 +572,156 @@ ${bodyHtml}
 
   const handleContinueInteractive = async (feedback) => {
     if (!interactiveMode || interactiveBusyRef.current) return;
-    interactiveBusyRef.current = true;
-    setInteractiveLoading(true);
-    setInteractiveInput('');
-    setStreamingContent('');
+    interactiveBusyRef.current = true; setInteractiveLoading(true); setInteractiveInput(''); setStreamingContent('');
     try {
       let fullContent = '';
       await api.continueInteractiveSSE(plan.id, topic.id, interactiveMode, feedback, (event) => {
-        if (event.type === 'chunk') {
-          fullContent += event.content;
-          setStreamingContent(fullContent);
-        } else if (event.type === 'pause') {
-          setInteractiveSections(prev => [...prev, { content: fullContent }]);
-          setStreamingContent('');
-          fullContent = '';
-          if (event.session?.stateMachine) {
-            setInteractiveStateMachine(event.session.stateMachine);
-          }
-        } else if (event.type === 'done') {
-          if (fullContent) {
-            setInteractiveSections(prev => [...prev, { content: fullContent }]);
-          }
-          setStreamingContent('');
-          if (event.session?.stateMachine) {
-            setInteractiveStateMachine(event.session.stateMachine);
-          }
-          if (event.finished) {
-            setInteractiveFinished(true);
-          }
-        } else if (event.type === 'error') {
-          setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]);
-        }
+        if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
+        else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); }
+        else if (event.type === 'done') { if (fullContent) setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); if (event.finished) setInteractiveFinished(true); }
+        else if (event.type === 'error') { setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]); }
       });
-    } catch (err) {
-      setInteractiveSections(prev => [...prev, { content: '❌ 响应失败: ' + err.message }]);
-    } finally {
-      setInteractiveLoading(false);
-      interactiveBusyRef.current = false;
-    }
+    } catch (err) { setInteractiveSections([{ content: '❌ 响应失败: ' + err.message }]); } finally { setInteractiveLoading(false); interactiveBusyRef.current = false; }
   };
 
   const handleExitInteractive = () => {
     const wasFeynman = interactiveMode === 'feynman';
-    const currentPlanId = plan?.id;
-    const currentTopicId = topic?.id;
-    
-    setInteractiveMode(null);
-    setInteractiveSections([]);
-    setInteractiveFinished(false);
-    setInteractiveInput('');
-    setInteractiveStateMachine(null);
-
-    // Auto-analyze Feynman session in the background
-    if (wasFeynman && currentPlanId && currentTopicId) {
-      api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => {
-        if (insights && insights.summary) {
-          console.log('[Feynman] 分析完成:', insights.summary);
-        }
-      }).catch(() => {});
-    }
+    const currentPlanId = plan?.id; const currentTopicId = topic?.id;
+    setInteractiveMode(null); setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
+    if (wasFeynman && currentPlanId && currentTopicId) { api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => { if (insights && insights.summary) console.log('[Feynman] 分析完成:', insights.summary); }).catch(() => {}); }
   };
-
-  // ─── Voice Input Handler ───
 
   const handleVoiceInput = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('您的浏览器不支持语音输入，请使用 Chrome 或 Edge');
-      return;
-    }
-
-    if (isRecording) {
-      // Stop recording
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch {}
-      }
-      setIsRecording(false);
-      return;
-    }
-
+    if (!SpeechRecognition) { alert('您的浏览器不支持语音输入，请使用 Chrome 或 Edge'); return; }
+    if (isRecording) { if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} } setIsRecording(false); return; }
     const recognition = new SpeechRecognition();
-    recognition.lang = 'zh-CN';
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-
+    recognition.lang = 'zh-CN'; recognition.continuous = false; recognition.interimResults = true; recognition.maxAlternatives = 1;
     let finalTranscript = '';
-
     recognition.onresult = (event) => {
-      // Only append FINAL results to avoid text duplication from interim callbacks
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          finalTranscript += result[0].transcript;
-        }
-      }
-      // Always show the latest interim + final transcript in input
-      const latestTranscript = Array.from(event.results)
-        .map(r => r[0].transcript)
-        .join('');
+      for (let i = event.resultIndex; i < event.results.length; i++) { if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript; }
+      const latestTranscript = Array.from(event.results).map(r => r[0].transcript).join('');
       setQaInput(latestTranscript);
     };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-      // Use the accumulated final transcript for auto-submit
-      if (finalTranscript.trim()) {
-        // Set input and immediately submit
-        setQaInput(finalTranscript.trim());
-        setTimeout(() => handleAsk(), 50);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      setIsRecording(false);
-      if (event.error === 'not-allowed') {
-        alert('语音输入需要麦克风权限，请在浏览器设置中允许');
-      } else if (event.error === 'no-speech') {
-        // Silent: no speech detected, user can try again
-      }
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsRecording(true);
+    recognition.onend = () => { setIsRecording(false); if (finalTranscript.trim()) { setQaInput(finalTranscript.trim()); setTimeout(() => handleAsk(), 50); } };
+    recognition.onerror = (event) => { console.error('Speech recognition error:', event.error); setIsRecording(false); if (event.error === 'not-allowed') alert('语音输入需要麦克风权限，请在浏览器设置中允许'); };
+    recognitionRef.current = recognition; recognition.start(); setIsRecording(true);
   };
 
   return (
-    <div className="topic-detail">
-      <div className="topic-detail-header">
-        <button className="btn btn-sm" onClick={onBack}>← 返回列表</button>
-        <h2>{topic.title}</h2>
-        {generating && <span className="generating-badge">⏳ 生成中...</span>}
-        {error && <span className="error-badge">❌ 生成失败</span>}
-        {localDetail && !error && !generating && (
-          <div className="export-menu-container" style={{ position: 'relative', display: 'inline-block' }}>
-            <button className="btn btn-sm" onClick={() => setShowExportMenu(!showExportMenu)} title="导出为多种格式">
-              ⬇️ 导出 {showExportMenu ? '▴' : '▾'}
-            </button>
-            {showExportMenu && (
-              <div className="export-dropdown" style={{
-                position: 'absolute', top: '100%', right: 0, background: 'white',
-                border: '1px solid #ddd', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                zIndex: 1000, minWidth: '210px', padding: '4px 0', marginTop: '4px',
-              }}>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={handleExport}>📝 Markdown (.md)</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={handleExportHtml}>🌐 HTML (.html)</button>
-                <hr style={{ margin: '4px 8px', borderColor: '#eee' }} />
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('anki')}>🃏 Anki CSV (.csv)</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('opml')}>🗂️ OPML 大纲 (.opml)</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('notas')}>🗃️ Notion CSV</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('json')}>📋 结构化 JSON</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('notes')}>📄 学习笔记 (.md)</button>
-                <button className="btn btn-sm" style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'none', padding: '6px 12px', borderRadius: 0 }} onClick={() => handleExportFormat('bundle')}>📦 计划数据包 (JSON)</button>
-              </div>
-            )}
-          </div>
-        )}
+    <div className='w-full max-w-4xl px-10 py-8 space-y-6'>
+      <Helmet><title>study-assistant - {topic.title}</title></Helmet>
+      <div className='flex items-center flex-wrap gap-2'>
+        <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
+        <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
+        {generating && <span className='inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full'><RotateCcw className='h-3 w-3 animate-spin' />生成中...</span>}
+        {error && <span className='inline-flex items-center gap-1 text-xs text-destructive bg-destructive/10 px-2 py-0.5 rounded-full'><AlertCircle className='h-3 w-3' />生成失败</span>}
         {localDetail && !error && !generating && topic.done === false && (
-          <button className="btn btn-sm" onClick={handleComplete} disabled={revealLoading} style={{ background: '#22c55e', color: 'white', borderColor: '#22c55e' }} title="标记为已学完并返回列表">
-            {revealLoading ? '⏳ 检查中...' : '✅ 学完了'}
-          </button>
+          <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
+            {revealLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <CheckCheck className='h-3.5 w-3.5 mr-1' />}
+            {revealLoading ? '检查中...' : '学完了'}
+          </Button>
         )}
         {localDetail && !error && !generating && topic.done && (
-          <button className="btn btn-sm" onClick={handleToggleReview} style={{ background: reviewMode ? '#6366f1' : '#8b5cf6', color: 'white', borderColor: reviewMode ? '#6366f1' : '#8b5cf6' }} title="复习模式">
-            {reviewLoading ? '⏳' : '🔄'} {reviewMode ? '返回讲解' : '复习'}
-          </button>
-        )}
-        {/* Interactive mode buttons */}
-        {!generating && localDetail && !error && !interactiveMode && (
-          <>
-            <button className="btn btn-sm interactive-btn stepwise-btn" onClick={() => handleStartInteractive('stepwise')} title="分段讲解，每部分等你反馈后再继续">
-              📖 分段讲解
-            </button>
-            <button className="btn btn-sm interactive-btn realtime-btn" onClick={() => handleStartInteractive('realtime')} title="实时互动，更灵活的教学节奏">
-              🎙️ 实时互动
-            </button>
-            <button className="btn btn-sm interactive-btn feynman-btn" onClick={() => handleStartInteractive('feynman')} title="你讲AI听，通过费曼学习法检验理解">
-              🧑‍🏫 费曼学习法
-            </button>
-          </>
+          <Button size='sm' className='bg-indigo-500 hover:opacity-90 text-white' onClick={handleToggleReview} title='复习模式'>
+            {reviewLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <RotateCcw className='h-3.5 w-3.5 mr-1' />}
+            {reviewMode ? '返回讲解' : '复习'}
+          </Button>
         )}
         {interactiveMode && (
-          <button className="btn btn-sm" onClick={handleExitInteractive} style={{ background: '#ef4444', color: 'white', borderColor: '#ef4444' }}>
-            ✕ 退出互动
-          </button>
+          <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white' onClick={handleExitInteractive}>
+            <X className='h-3.5 w-3.5 mr-1' />退出互动
+          </Button>
         )}
-        {/* v1.6.0 Fact-Check button */}
-        {localDetail && !error && !generating && (
-          <button className="btn btn-sm" onClick={handleFactCheck} disabled={factCheckLoading} title="AI 事实核查：检查讲解内容中的潜在错误">
-            {factCheckLoading ? '⏳' : '🔍'} 事实核查
-          </button>
-        )}
-        {/* v1.6.0 Adaptive Analysis button */}
-        {!generating && (
-          <button className="btn btn-sm" onClick={handleAdaptiveAnalysis} disabled={adaptiveLoading} title="自适应学习分析：根据薄弱点推荐学习策略">
-            {adaptiveLoading ? '⏳' : '📊'} 自适应分析
-          </button>
-        )}
+        <div className='relative' ref={menuRef}>
+          <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+            <MoreHorizontal className='h-4 w-4' />
+          </Button>
+          {menuOpen && (
+            <div className='absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-popover p-1 shadow-md'>
+              {/* 导出功能组 */}
+              {localDetail && !error && !generating && (
+                <>
+                  <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mb-1'>导出</div>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExport(); setMenuOpen(false); }}>Markdown (.md)</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportHtml(); setMenuOpen(false); }}>HTML (.html)</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('anki'); setMenuOpen(false); }}>Anki CSV (.csv)</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('opml'); setMenuOpen(false); }}>OPML 大纲 (.opml)</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('json'); setMenuOpen(false); }}>结构化 JSON</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('notes'); setMenuOpen(false); }}>学习笔记 (.md)</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('bundle'); setMenuOpen(false); }}>计划数据包 (JSON)</button>
+                </>
+              )}
+
+              {/* 教学模式组 */}
+              {!generating && localDetail && !error && !interactiveMode && (
+                <>
+                  <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mt-2 mb-1'>教学模式</div>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('stepwise'); setMenuOpen(false); }}>分段讲解</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('realtime'); setMenuOpen(false); }}>实时互动</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('feynman'); setMenuOpen(false); }}>费曼学习法</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('challenge'); setMenuOpen(false); }}>挑战模式</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('stepwise-challenge'); setMenuOpen(false); }}>分段挑战</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('realtime-challenge'); setMenuOpen(false); }}>实时挑战</button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('scaffold'); setMenuOpen(false); }}>支架教学</button>
+                </>
+              )}
+
+              {/* 分析工具组 */}
+              {!generating && (localDetail && !error) && (
+                <>
+                  <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mt-2 mb-1'>分析工具</div>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleFactCheck(); setMenuOpen(false); }} disabled={factCheckLoading}>
+                    <Search className='h-3.5 w-3.5' />事实核查
+                  </button>
+                  <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleAdaptiveAnalysis(); setMenuOpen(false); }} disabled={adaptiveLoading}>
+                    <BarChart3 className='h-3.5 w-3.5' />自适应分析
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="topic-detail-body">
-        {/* Relationship section (shown when not generating) */}
+      <div className='space-y-4'>
         {!generating && (prerequisites.length > 0 || childrenTopics.length > 0 || nextTopics.length > 0 || relatedTopics.length > 0) && (
-          <div className="topic-relations">
+          <div className='flex flex-wrap gap-2 text-xs text-muted-foreground'>
             {prerequisites.length > 0 && (
-              <div className="relation-section">
-                <span className="relation-label">📖 前置知识：</span>
+              <div className='flex items-center gap-1 flex-wrap'>
+                <span>前置知识：</span>
                 {prerequisites.map(p => (
-                  <span key={p.id} className="relation-chip" onClick={() => handleNavigateToTopic(p.id)} title="跳转到该知识点">
+                  <span key={p.id} className='inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-muted cursor-pointer hover:bg-accent transition-colors' onClick={() => handleNavigateToTopic(p.id)} title='跳转到该知识点'>
                     {p.title} {p.done ? '✅' : '⏳'}
                   </span>
                 ))}
               </div>
             )}
             {childrenTopics.length > 0 && (
-              <div className="relation-section">
-                <span className="relation-label">📂 子知识点：</span>
+              <div className='flex items-center gap-1 flex-wrap'>
+                <span>子知识点：</span>
                 {childrenTopics.map(c => (
-                  <span key={c.id} className="relation-chip" onClick={() => handleNavigateToTopic(c.id)} title="跳转到该知识点">
+                  <span key={c.id} className='inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-muted cursor-pointer hover:bg-accent transition-colors' onClick={() => handleNavigateToTopic(c.id)} title='跳转到该知识点'>
                     {c.title} {c.done ? '✅' : '⏳'}
                   </span>
                 ))}
               </div>
             )}
             {nextTopics.length > 0 && (
-              <div className="relation-section">
-                <span className="relation-label">➡️ 后续知识点：</span>
+              <div className='flex items-center gap-1 flex-wrap'>
+                <span>后续知识点：</span>
                 {nextTopics.map(n => (
-                  <span key={n.id} className="relation-chip" onClick={() => handleNavigateToTopic(n.id)} title="跳转到该知识点">
+                  <span key={n.id} className='inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-muted cursor-pointer hover:bg-accent transition-colors' onClick={() => handleNavigateToTopic(n.id)} title='跳转到该知识点'>
                     {n.title} {n.done ? '✅' : '⏳'}
                   </span>
                 ))}
               </div>
             )}
             {relatedTopics.length > 0 && (
-              <div className="relation-section">
-                <span className="relation-label">🔗 相关知识：</span>
+              <div className='flex items-center gap-1 flex-wrap'>
+                <span>相关知识：</span>
                 {relatedTopics.map(r => (
-                  <span key={r.id} className="relation-chip" onClick={() => handleNavigateToTopic(r.id)} title="跳转到该知识点">
+                  <span key={r.id} className='inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-muted cursor-pointer hover:bg-accent transition-colors' onClick={() => handleNavigateToTopic(r.id)} title='跳转到该知识点'>
                     {r.title} {r.done ? '✅' : '⏳'}
                   </span>
                 ))}
@@ -1113,208 +729,138 @@ ${bodyHtml}
             )}
           </div>
         )}
+
         {revealLoading && (
-          <div className="reveal-overlay">
-            <div className="reveal-modal">
-              <div className="spinner-sm" />
-              <p>正在检查讲解内容中的潜在错误...</p>
+          <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50'>
+            <div className='rounded-lg bg-muted/30 p-6 text-center space-y-3'>
+              <div className='animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent mx-auto' />
+              <p className='text-sm text-muted-foreground'>正在检查讲解内容中的潜在错误...</p>
             </div>
           </div>
         )}
+
         {revealErrors && (
-          <div className="reveal-overlay">
-            <div className="reveal-modal">
-              <div className="reveal-modal-header">
-                🔍 等一下！AI 在内容中埋了挑战
-              </div>
-              <p style={{ margin: '12px 0', color: '#666', fontSize: '14px' }}>
-                这份讲解中包含了一些微妙的错误，用来考验你是否真正理解了。
-                你没发现的错误有：
-              </p>
+          <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50'>
+            <div className='rounded-lg bg-muted/30 p-6 max-w-lg w-full mx-4 space-y-3'>
+              <div className='text-base font-medium text-amber-600'>等一下！AI 在内容中埋了挑战</div>
+              <p className='text-sm text-muted-foreground'>这份讲解中包含了一些微妙的错误，用来考验你是否真正理解了。你没发现的错误有：</p>
               {revealErrors.errors.map((err, i) => (
-                <div key={i} className={"reveal-error-item" + (err.recognized ? " reveal-error-recognized" : "")}>
-                  <div className="reveal-error-location">
-                    {err.recognized ? "✅ 你发现了：" : "📍 "}{err.location || "位置未知"}
-                  </div>
-                  <div className="reveal-error-desc">{err.description}</div>
-                  <div className="reveal-error-correction">✅ 正确版本：{err.correction}</div>
-                  {err.misconception && (
-                    <div className="reveal-error-misconception">🧠 针对的误区：{err.misconception}</div>
-                  )}
-                  <div className="reveal-error-tags">
-                    {(err.errorType || err.type) && (
-                      <span className="reveal-error-type">{ERROR_TYPE_LABELS[err.errorType] || err.errorType || err.type}</span>
-                    )}
-                    {err.bloomLevel && <span className="reveal-error-bloom">认知层次：{err.bloomLevel}</span>}
+                <div key={i} className={`border rounded-md p-3 text-sm space-y-1 ${err.recognized ? 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800' : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'}`}>
+                  <div className='font-medium text-xs'><span className={err.recognized ? 'text-green-600' : ''}>{err.recognized ? '你发现了：' : ''}</span>{err.location || '位置未知'}</div>
+                  <div className='text-muted-foreground'>{err.description}</div>
+                  <div className='text-green-600 text-xs'>正确版本：{err.correction}</div>
+                  {err.misconception && <div className='text-xs text-muted-foreground'>针对的误区：{err.misconception}</div>}
+                  <div className='flex gap-1 text-[10px]'>
+                    {(err.errorType || err.type) && <span className='px-1.5 py-0.5 rounded bg-muted'>{ERROR_TYPE_LABELS[err.errorType] || err.errorType || err.type}</span>}
+                    {err.bloomLevel && <span className='px-1.5 py-0.5 rounded bg-muted'>认知层次：{err.bloomLevel}</span>}
                   </div>
                 </div>
               ))}
-              <button className="btn btn-primary" onClick={handleDismissReveal} style={{ marginTop: '16px', width: '100%' }}>
-                我知道了，标记完成
-              </button>
+              <Button className='w-full' onClick={handleDismissReveal}>我知道了，标记完成</Button>
             </div>
           </div>
         )}
-        {/* Generating — show spinner + any intermediate content */}
+
         {generating && !localDetail && (
-          <div className="generating-placeholder">
-            <div className="spinner" />
-            <p>AI 正在为您生成「{topic.title}」的详细讲解...</p>
-            <p className="hint">首次生成可能需要 30 秒到 1 分钟</p>
+          <div className='flex flex-col items-center justify-center py-16 gap-3'>
+            <div className='animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent' />
+            <p className='text-sm text-muted-foreground'>AI 正在为您生成「{topic.title}」的详细讲解...</p>
+            <p className='text-xs text-muted-foreground'>首次生成可能需要 30 秒到 1 分钟</p>
           </div>
         )}
 
-        {/* Error — show error + retry */}
         {error && (
-          <div className="error-state">
-            <p>❌ {error}</p>
-            <button className="btn btn-primary" onClick={handleRetry}>重试</button>
+          <div className='flex flex-col items-center gap-3 py-8'>
+            <AlertCircle className='h-8 w-8 text-destructive' />
+            <p className='text-sm text-destructive'>{error}</p>
+            <Button variant='outline' size='sm' onClick={handleRetry}>重试</Button>
           </div>
         )}
 
-        {/* Interactive Mode Content */}
         {interactiveMode && (
-          <div className="topic-content">
-            <div className="interactive-mode-header">
-              <span className="interactive-mode-badge">{interactiveMode === 'stepwise' ? '📖 分段讲解' : interactiveMode === 'feynman' ? '🧑‍🏫 费曼学习法' : '🎙️ 实时互动'}</span>
-              {interactiveLoading && <span className="typing-text">导师正在思考...</span>}
-              {interactiveFinished && <span className="interactive-finished-badge">✅ 讲解完成</span>}
+          <div className='space-y-5'>
+            <div className='flex items-center gap-2 text-sm'>
+              <span className='inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs font-medium'>
+                {interactiveMode === 'stepwise' ? '分段讲解' : interactiveMode === 'stepwise-challenge' ? '分段挑战' : interactiveMode === 'feynman' ? '费曼学习法' : interactiveMode === 'challenge' ? '挑战模式' : interactiveMode === 'realtime-challenge' ? '实时挑战' : interactiveMode === 'scaffold' ? '支架教学' : '实时互动'}
+              </span>
+              {interactiveLoading && <span className='text-xs text-muted-foreground animate-pulse'>导师正在思考...</span>}
+              {interactiveFinished && <span className='text-xs text-green-600'>讲解完成</span>}
             </div>
 
-            {/* Dynamic progress counter for stepwise mode */}
-            {interactiveMode === 'stepwise' && interactiveStateMachine && (
-              <div className="sm-progress-bar">
-                <div className="sm-progress-text">
-                  {interactiveStateMachine.completedSteps > 0
-                    ? `✅ 已完成 ${interactiveStateMachine.completedSteps} 部分`
-                    : '📖 第 1 部分'}
-                </div>
+            {(interactiveMode === 'stepwise' || interactiveMode === 'stepwise-challenge') && interactiveStateMachine && (
+              <div className='text-xs text-muted-foreground'>
+                {interactiveStateMachine.completedSteps > 0 ? `已完成 ${interactiveStateMachine.completedSteps} 部分` : '第 1 部分'}
               </div>
             )}
 
-            <div className="interactive-sections">
+            <div className='space-y-3'>
               {interactiveSections.map((section, i) => (
-                <div key={i} className="interactive-section">
-                  <div className="interactive-section-number">第 {i + 1} 部分</div>
+                <div key={i} className='rounded-md bg-muted/20 p-4'>
+                  <div className='text-xs text-muted-foreground mb-2'>第 {i + 1} 部分</div>
                   <ContentArea content={section.content} />
                 </div>
               ))}
             </div>
 
-            {/* Live streaming content (typewriter effect) */}
             {streamingContent && (
-              <div className="interactive-section streaming-section">
-                <div className="interactive-section-number">⏳ 正在生成...</div>
+              <div className='border rounded-md p-4 border-dashed'>
+                <div className='text-xs text-muted-foreground mb-2'>正在生成...</div>
                 <ContentArea content={streamingContent} />
               </div>
             )}
 
             {interactiveLoading && (
-              <div className="interactive-loading">
-                <div className="spinner-sm" />
+              <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+                <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
                 <span>{streamingContent ? '正在生成内容...' : '导师正在思考...'}</span>
               </div>
             )}
 
             {!interactiveLoading && !interactiveFinished && interactiveSections.length > 0 && (
-              <div className="interactive-actions">
+              <div className='space-y-3'>
                 {interactiveMode === 'feynman' ? (
                   <>
-                    <p className="interactive-prompt">🗣️ 请用你自己的话讲解这段内容</p>
-                    <div className="interactive-quick-buttons">
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('我继续讲解下面部分')}>
-                        ✅ 我继续讲
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('这样理解对吗？请指出我的问题')}>
-                        🤔 这样对吗？
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('我换个角度来解释')}>
-                        💡 换个角度
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('这部分我讲完了，你觉得还有什么疑问？')}>
-                        📖 我讲完了
-                      </button>
+                    <p className='text-sm text-muted-foreground'>请用你自己的话讲解这段内容</p>
+                    <div className='flex flex-wrap gap-1.5'>
+                      {['我继续讲', '这样对吗？', '换个角度', '我讲完了'].map((text, i) => {
+                        const actions = ['我继续讲解下面部分', '这样理解对吗？请指出我的问题', '我换个角度来解释', '这部分我讲完了，你觉得还有什么疑问？'];
+                        return <Button key={i} variant='outline' size='sm' onClick={() => handleQuickAction(actions[i])}>{text}</Button>;
+                      })}
                     </div>
-                    <div className="interactive-input-area">
-                      <textarea
-                        ref={interactiveInputRef}
-                        value={interactiveInput}
-                        onChange={e => setInteractiveInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSendInteractiveFeedback();
-                          }
-                        }}
-                        placeholder="输入你的讲解或回答...（Enter 发送）"
-                        rows={2}
-                      />
+                    <div className='flex gap-2'>
+                      <textarea ref={interactiveInputRef} value={interactiveInput} onChange={e => setInteractiveInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendInteractiveFeedback(); } }} placeholder='输入你的讲解或回答...（Enter 发送）' rows={2} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' />
                       {voiceSupported && (
-                        <button
-                          type="button"
-                          className={"voice-btn" + (isRecording ? ' recording' : '')}
-                          onClick={handleVoiceInput}
-                          disabled={interactiveLoading}
-                          title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
-                        >
-                          🎤
-                        </button>
+                        <Button variant='outline' size='icon' onClick={handleVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
+                          <Mic className='h-4 w-4' />
+                        </Button>
                       )}
-                      <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
-                        发送
-                      </button>
+                      <Button onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
+                        <SendHorizonal className='h-4 w-4' />
+                      </Button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <p className="interactive-prompt">💬 你的回应是什么？</p>
-                    <div className="interactive-quick-buttons">
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('继续')}>
-                        ✅ 继续
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('不太懂，详细解释')}>
-                        🤔 不太懂
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('给我举个例子')}>
-                        💡 举例
-                      </button>
-                      <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('和前面讲的有什么关系？')}>
-                        🔗 关联
-                      </button>
+                    <p className='text-sm text-muted-foreground'>你的回应是什么？</p>
+                    <div className='flex flex-wrap gap-1.5'>
+                      {['继续', '不太懂', '举例', '关联'].map((text, i) => {
+                        const actions = ['继续', '不太懂，详细解释', '给我举个例子', '和前面讲的有什么关系？'];
+                        return <Button key={i} variant='outline' size='sm' onClick={() => handleQuickAction(actions[i])}>{text}</Button>;
+                      })}
                       {interactiveMode === 'realtime' && (
-                        <button className="btn btn-sm interactive-quick-btn" onClick={() => handleQuickAction('换个角度解释')}>
-                          🔄 换角度
-                        </button>
+                        <Button variant='outline' size='sm' onClick={() => handleQuickAction('换个角度解释')}>换角度</Button>
                       )}
                     </div>
-                    <div className="interactive-input-area">
-                      <textarea
-                        ref={interactiveInputRef}
-                        value={interactiveInput}
-                        onChange={e => setInteractiveInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSendInteractiveFeedback();
-                          }
-                        }}
-                        placeholder="输入你的问题或反馈...（Enter 发送）"
-                        rows={2}
-                      />
+                    <div className='flex gap-2'>
+                      <textarea ref={interactiveInputRef} value={interactiveInput} onChange={e => setInteractiveInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendInteractiveFeedback(); } }} placeholder='输入你的问题或反馈...（Enter 发送）' rows={2} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' />
                       {voiceSupported && (
-                        <button
-                          type="button"
-                          className={"voice-btn" + (isRecording ? ' recording' : '')}
-                          onClick={handleVoiceInput}
-                          disabled={interactiveLoading}
-                          title={isRecording ? '点击停止录音' : '语音输入（点击后说话）'}
-                        >
-                          🎤
-                        </button>
+                        <Button variant='outline' size='icon' onClick={handleVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
+                          <Mic className='h-4 w-4' />
+                        </Button>
                       )}
-                      <button className="btn btn-primary interactive-send-btn" onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
-                        发送
-                      </button>
+                      <Button onClick={handleSendInteractiveFeedback} disabled={!interactiveInput.trim()}>
+                        <SendHorizonal className='h-4 w-4' />
+                      </Button>
                     </div>
                   </>
                 )}
@@ -1322,398 +868,245 @@ ${bodyHtml}
             )}
 
             {interactiveFinished && (
-              <div className="interactive-finished-actions">
-                {interactiveMode === 'feynman' ? (
-                  <p>🎉 费曼练习已完成！AI 正在分析你的讲解...</p>
-                ) : (
-                  <p>🎉 互动讲解已完成！你可以继续提问或退出互动模式。</p>
-                )}
-                <div className="interactive-finished-buttons">
-                  <button className="btn btn-sm" onClick={() => handleQuickAction('我还有问题想问')}>
-                    💬 继续提问
-                  </button>
-                  <button className="btn btn-sm" onClick={handleExitInteractive}>
-                    ✅ 结束互动
-                  </button>
+              <div className='text-center py-4 space-y-2'>
+                <p className='text-sm text-muted-foreground'>
+                  {interactiveMode === 'feynman' ? '费曼练习已完成！AI 正在分析你的讲解...' : '互动讲解已完成！你可以继续提问或退出互动模式。'}
+                </p>
+                <div className='flex justify-center gap-2'>
+                  <Button variant='outline' size='sm' onClick={() => handleQuickAction('我还有问题想问')}><MessageSquare className='h-3.5 w-3.5 mr-1' />继续提问</Button>
+                  <Button size='sm' onClick={handleExitInteractive}><CheckCheck className='h-3.5 w-3.5 mr-1' />结束互动</Button>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Content + inline Q&A */}
         {localDetail && !error && !interactiveMode && (
-          <div className="topic-content">
-            {/* Generated illustration */}
-            <div className="topic-illustration-section">
-              {topic.imageUrl ? (
-                <div className="topic-illustration">
-                  <div className="topic-illustration-header">
-                    <span>📊 知识点配图</span>
-                    <button
-                      className="btn-tiny"
-                      onClick={() => handleGenerateImage(topic.id)}
-                      disabled={generating}
-                      title="重新生成配图"
-                    >🔄</button>
-                  </div>
-                  <img src={topic.imageUrl} alt={topic.title} className="topic-illustration-img" />
+          <div className='flex flex-col' style={{ gap: '144px' }}>
+            {topic.imageUrl ? (
+            <div className='rounded-lg bg-muted/20 overflow-hidden'>
+              <div className='flex items-center justify-between px-4 py-2 bg-muted/50 text-xs text-muted-foreground'>
+                  <span>知识点配图</span>
+                  <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs' onClick={() => handleGenerateImage(topic.id)} disabled={generating} title='重新生成配图'><RotateCcw className='h-3 w-3' /></Button>
                 </div>
-              ) : localDetail && !generating && settings.imageApiKey && (
-                <div className="topic-illustration-placeholder">
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => handleGenerateImage(topic.id)}
-                  >
-                    🎨 生成配图
-                  </button>
-                  <span className="field-hint">使用硅基流动 AI 为知识点生成插图</span>
-                </div>
-              )}
-            </div>
-            <ContentArea content={localDetail} />
-            {generating && <div className="streaming-indicator">⏳ 继续生成中...</div>}
+                <img src={topic.imageUrl} alt={topic.title} className='w-full' />
+              </div>
+            ) : localDetail && !generating && settings.imageApiKey && (
+              <div className='flex items-center gap-2'>
+                <Button variant='outline' size='sm' onClick={() => handleGenerateImage(topic.id)}><Image className='h-3.5 w-3.5 mr-1' />生成配图</Button>
+                <span className='text-xs text-muted-foreground'>使用硅基流动 AI 为知识点生成插图</span>
+              </div>
+            )}
 
-            {/* Chat panel for Q&A (DS-web style) */}
-            <div className="chat-panel">
-              <div className="chat-panel-header">
-                <h2>📎 扩展讨论</h2>
-                {qaList.length > 0 && <span className="chat-count">{qaList.length} 轮</span>}
+            <div className='rounded-lg bg-muted/20 px-8 py-6'>
+              <div className='reading-content text-sm leading-7'>
+                <ContentArea content={stripExerciseSection(localDetail)} />
+              </div>
+            </div>
+            {generating && <div className='flex items-center gap-1.5 text-xs text-muted-foreground'><RotateCcw className='h-3 w-3 animate-spin' />继续生成中...</div>}
+
+            <div className='rounded-lg bg-muted/20'>
+              <div className='flex items-center justify-between px-4 py-3'>
+                <h2 className='text-sm font-medium'>扩展讨论</h2>
+                {qaList.length > 0 && <span className='text-xs text-muted-foreground'>{qaList.length} 轮</span>}
               </div>
               {qaList.length >= 2 && (
-                <div className="chat-round-nav">
+                <div className='flex gap-1.5 px-4 py-2 overflow-x-auto'>
                   {qaList.map((qa, i) => (
-                    <div key={i} className="chat-round-chip-wrapper">
-                      <button
-                        className="chat-round-chip"
-                        onClick={() => scrollToRound(i)}
-                        onMouseEnter={() => setHoveredRound(i)}
-                        onMouseLeave={() => setHoveredRound(null)}
-                        title={qa.question}
-                      >
+                    <div key={i} className='relative'>
+                      <button className='text-xs w-6 h-6 rounded-full bg-muted hover:bg-accent transition-colors' onClick={() => scrollToRound(i)} onMouseEnter={() => setHoveredRound(i)} onMouseLeave={() => setHoveredRound(null)} title={qa.question}>
                         {i + 1}
                       </button>
                       {hoveredRound === i && (
-                        <div className="chat-round-preview">
-                          <div className="chat-round-preview-label">追问 {i + 1}</div>
-                          <div className="chat-round-preview-text">{qa.question}</div>
+                        <div className='absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md border bg-popover text-xs shadow-md z-10'>
+                          <div className='font-medium mb-0.5'>追问 {i + 1}</div>
+                          <div className='text-muted-foreground truncate'>{qa.question}</div>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
               )}
-              <div className="chat-messages" ref={chatPanelRef}>
+              <div className='max-h-80 overflow-y-auto p-4' ref={chatPanelRef}>
                 <QaMessages qaList={qaList} />
               </div>
-              <div className="chat-input">
-                <form onSubmit={e => { e.preventDefault(); }}>
-                  <textarea
-                    ref={qaInputRef}
-                    value={qaInput}
-                    onChange={e => setQaInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleAsk();
-                      }
-                    }}
-                    placeholder="输入你的追问...（Shift+Enter 换行，Enter 发送）"
-                    disabled={qaLoading}
-                    rows={1}
-                    onInput={e => {
-                      // Auto-resize textarea
-                      e.target.style.height = 'auto';
-                      e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
-                    }}
-                  />
-                  <button type="button" className="chat-send-btn" onClick={handleAsk} disabled={!qaInput.trim() || qaLoading}>
-                    {qaLoading ? <span className="typing-text">思考中...</span> : '➤'}
-                  </button>
+              <div className='p-4'>
+                <form onSubmit={e => { e.preventDefault(); }} className='flex gap-2'>
+                  <textarea ref={qaInputRef} value={qaInput} onChange={e => setQaInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAsk(); } }} placeholder='输入你的追问...（Shift+Enter 换行，Enter 发送）' disabled={qaLoading} rows={1} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none' />
+                  <Button type='button' onClick={handleAsk} disabled={!qaInput.trim() || qaLoading} size='icon'>
+                    {qaLoading ? <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' /> : <SendHorizonal className='h-4 w-4' />}
+                  </Button>
                 </form>
               </div>
             </div>
 
-            {/* ─── Review Mode Content ─── */}
             {!generating && reviewMode && reviewContent && !reviewLoading && (
-              <div className="review-section">
-                <hr />
-                <div className="review-content">
-                  <ContentArea content={reviewContent} />
-                </div>
+              <div className='pt-4'>
+                <ContentArea content={reviewContent} />
               </div>
             )}
             {reviewLoading && (
-              <div className="generating-placeholder" style={{ padding: '16px' }}>
-                <div className="spinner-sm" />
-                <p>AI 正在生成复习内容，针对你的薄弱点进行巩固...</p>
+              <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+                <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
+                <span>AI 正在生成复习内容，针对你的薄弱点进行巩固...</span>
               </div>
             )}
-            {/* ─── Exercise Section ─── */}
+
             {!generating && !reviewMode && exercises.length > 0 && !submittedExercises && (
-              <div className="exercise-section">
-                <hr />
-                <h3>📝 练习题</h3>
+              <div className='pt-4 space-y-6'>
+                <h3 className='text-sm font-medium'>练习题</h3>
                 {exercises.map((ex, i) => (
-                  <div key={i} className="exercise-card">
-                    <div className="exercise-header">
-                      <span className="exercise-number">练习题 {i + 1}</span>
-                      <span className="exercise-type-badge">{ex.type === 'choice' ? '选择题' : '简答题'}</span>
-                      {ex.conceptTag && <span className="exercise-concept-tag">{ex.conceptTag}</span>}
+                  <div key={i} className='rounded-md bg-muted/20 p-4 space-y-3'>
+                    <div className='flex items-center gap-1.5 text-xs'>
+                      <span className='font-medium'>练习题 {i + 1}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${ex.type === 'choice' ? 'bg-primary/10 text-primary' : 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300'}`}>{ex.type === 'choice' ? '选择题' : '简答题'}</span>
+                      {ex.conceptTag && <span className='px-1.5 py-0.5 rounded bg-muted text-muted-foreground'>{ex.conceptTag}</span>}
                     </div>
-                    <p className="exercise-question">{ex.question}</p>
+                    <p className='text-sm'>{ex.question}</p>
                     {ex.type === 'choice' && ex.options && ex.options.length > 0 ? (
-                      <div className="exercise-options">
+                      <div className='space-y-1'>
                         {ex.options.map((opt, oi) => (
-                          <label key={oi} className={"exercise-option" + (exerciseAnswers[i] === opt.charAt(0) ? ' selected' : '')}>
-                            <input
-                              type="radio"
-                              name={"ex-" + i}
-                              value={opt.charAt(0)}
-                              checked={exerciseAnswers[i] === opt.charAt(0)}
-                              onChange={() => handleExerciseAnswer(i, opt.charAt(0))}
-                            />
+                          <label key={oi} className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${exerciseAnswers[i] === opt.charAt(0) ? 'bg-primary/10 border border-primary/30' : 'border border-transparent hover:bg-accent'}`}>
+                            <input type='radio' name={'ex-' + i} value={opt.charAt(0)} checked={exerciseAnswers[i] === opt.charAt(0)} onChange={() => handleExerciseAnswer(i, opt.charAt(0))} className='accent-primary' />
                             <span>{opt}</span>
                           </label>
                         ))}
                       </div>
                     ) : (
-                      <textarea
-                        className="exercise-text-input"
-                        placeholder="输入你的答案..."
-                        value={exerciseAnswers[i] || ''}
-                        onChange={e => handleExerciseAnswer(i, e.target.value)}
-                        rows={3}
-                      />
+                      <textarea className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' placeholder='输入你的答案...' value={exerciseAnswers[i] || ''} onChange={e => handleExerciseAnswer(i, e.target.value)} rows={3} />
                     )}
                   </div>
                 ))}
-                <button className="btn btn-primary" onClick={handleSubmitExercises} disabled={exerciseLoading || Object.keys(exerciseAnswers).length === 0}>
-                  {exerciseLoading ? '⏳ 批改中...' : '📤 提交答案'}
-                </button>
+                <Button onClick={handleSubmitExercises} disabled={exerciseLoading || Object.keys(exerciseAnswers).length === 0}>
+                  {exerciseLoading ? <RotateCcw className='h-4 w-4 mr-1 animate-spin' /> : <SendHorizonal className='h-4 w-4 mr-1' />}
+                  {exerciseLoading ? '批改中...' : '提交答案'}
+                </Button>
               </div>
             )}
-            {/* ─── Exercise Results ─── */}
+
             {!generating && !reviewMode && submittedExercises && exerciseResults && (
-              <div className="exercise-results">
-                <hr />
-                <h3>📊 练习结果</h3>
+              <div className='pt-4 space-y-3'>
+                <h3 className='text-sm font-medium'>练习结果</h3>
                 {exerciseResults.map((res, i) => (
-                  <div key={i} className={"exercise-result-card " + (res.correct ? 'correct' : 'wrong')}>
-                    <div className="exercise-result-header">
-                      <span className="exercise-result-icon">{res.correct ? '✅' : '❌'}</span>
-                      <span className="exercise-result-label">练习题 {i + 1}</span>
+                  <div key={i} className={`border rounded-md p-3 text-sm ${res.correct ? 'border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/30' : 'border-red-200 bg-red-50/50 dark:border-red-800 dark:bg-red-950/30'}`}>
+                    <div className='flex items-center gap-1.5 mb-1'>
+                      <span>{res.correct ? '✅' : '❌'}</span>
+                      <span className='font-medium'>练习题 {i + 1}</span>
                     </div>
-                    <p className="exercise-result-detail">
-                      <strong>你的答案：</strong>{res.userAnswer || '未作答'}
-                      {!res.correct && <><br /><strong>正确答案：</strong>{res.correctAnswer}</>}
-                    </p>
-                    {res.explanation && <p className="exercise-explanation">💡 {res.explanation}</p>}
+                    <p className='text-xs text-muted-foreground'><strong>你的答案：</strong>{res.userAnswer || '未作答'}{!res.correct && <><br /><strong>正确答案：</strong>{res.correctAnswer}</>}</p>
+                    {res.explanation && <p className='text-xs text-muted-foreground mt-1'>{res.explanation}</p>}
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Feynman Insights */}
             {topic?.feynmanInsights && topic.feynmanInsights.summary && (
-              <div className="feynman-insights">
-                <hr />
-                <h3>🧑\u200d\ud83c\udfeb 费曼教学评估</h3>
-                <p className="feynman-quality">
-                  作为教材质量：{topic.feynmanInsights.teachingQuality === 'excellent' ? '🟢 优秀，可以直接用' : topic.feynmanInsights.teachingQuality === 'good' ? '🔵 良好，稍有不足' : topic.feynmanInsights.teachingQuality === 'fair' ? '🟡 一般，有不少模糊处' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '🔴 需要大改' : '⚪ 未评估'}
-                </p>
-                <p className="feynman-summary">{topic.feynmanInsights.summary}</p>
-
+              <div className='pt-4 space-y-3'>
+                <h3 className='text-sm font-medium'>费曼教学评估</h3>
+                <p className='text-sm'>{topic.feynmanInsights.teachingQuality === 'excellent' ? '优秀，可以直接用' : topic.feynmanInsights.teachingQuality === 'good' ? '良好，稍有不足' : topic.feynmanInsights.teachingQuality === 'fair' ? '一般，有不少模糊处' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '需要大改' : '未评估'}</p>
+                <p className='text-sm text-muted-foreground'>{topic.feynmanInsights.summary}</p>
                 {topic.feynmanInsights.strengths?.length > 0 && (
-                  <div className="feynman-section">
-                    <h4>✅ 讲得好的地方</h4>
-                    <ul>
-                      {topic.feynmanInsights.strengths.map((s, i) => (
-                        <li key={i}>{s}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  <div><h4 className='text-xs font-medium text-green-600 mb-1'>讲得好的地方</h4><ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul></div>
                 )}
-
                 {topic.feynmanInsights.gaps?.length > 0 && (
-                  <div className="feynman-section">
-                    <h4>📋 教材遗漏的重要内容</h4>
-                    <ul>
-                      {topic.feynmanInsights.gaps.map((g, i) => (
-                        <li key={i}>{g}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  <div><h4 className='text-xs font-medium text-orange-600 mb-1'>教材遗漏的重要内容</h4><ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul></div>
                 )}
-
                 {topic.feynmanInsights.lingeringQuestions?.length > 0 && (
-                  <div className="feynman-section">
-                    <h4>💭 学生听完后还会问的问题</h4>
-                    <p className="feynman-hint">试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
-                    <ul className="feynman-questions">
-                      {topic.feynmanInsights.lingeringQuestions.map((q, i) => (
-                        <li key={i} className="feynman-question-item">
-                          <div className="feynman-question">❓ {q.question}</div>
-                          {q.whyThisMatters && <div className="feynman-why">💡 为什么重要：{q.whyThisMatters}</div>}
-                          {q.relatedTopic && <div className="feynman-related">🔗 关联：{q.relatedTopic}</div>}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                  <div><h4 className='text-xs font-medium mb-1'>学生听完后还会问的问题</h4><p className='text-xs text-muted-foreground mb-2'>试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
+                  <div className='space-y-2'>{topic.feynmanInsights.lingeringQuestions.map((q, i) => (
+                    <div key={i} className='rounded-md bg-muted/20 p-3 text-sm space-y-1'>
+                      <div>❓ {q.question}</div>
+                      {q.whyThisMatters && <div className='text-xs text-muted-foreground'>为什么重要：{q.whyThisMatters}</div>}
+                      {q.relatedTopic && <div className='text-xs text-muted-foreground'>关联：{q.relatedTopic}</div>}
+                    </div>
+                  ))}</div></div>
                 )}
-
                 {topic.feynmanInsights.sparklingExplanations?.length > 0 && (
-                  <div className="feynman-section">
-                    <h4>📝 可以直接当作教材的精彩讲解</h4>
-                    {topic.feynmanInsights.sparklingExplanations.map((note, i) => (
-                      <blockquote key={i} className="feynman-note">{note.content}</blockquote>
-                    ))}
-                  </div>
+                  <div><h4 className='text-xs font-medium mb-1'>可以直接当作教材的精彩讲解</h4>{topic.feynmanInsights.sparklingExplanations.map((note, i) => <blockquote key={i} className='border-l-2 border-primary pl-3 text-sm text-muted-foreground italic'>{note.content}</blockquote>)}</div>
                 )}
               </div>
             )}
 
-            {/* Difficulty self-rating */}
             {!generating && (
-              <div className="difficulty-rating">
-                <hr />
-                <p className="difficulty-label">这个知识点对你来说？</p>
-                <div className="difficulty-buttons">
-                  <button
-                    className={'diff-btn' + (difficulty === 'easy' ? ' active easy' : '')}
-                    onClick={() => handleDifficulty('easy')}
-                    disabled={difficultySaving}
-                  >🟢 简单</button>
-                  <button
-                    className={'diff-btn' + (difficulty === 'medium' ? ' active medium' : '')}
-                    onClick={() => handleDifficulty('medium')}
-                    disabled={difficultySaving}
-                  >🟡 适中</button>
-                  <button
-                    className={'diff-btn' + (difficulty === 'hard' ? ' active hard' : '')}
-                    onClick={() => handleDifficulty('hard')}
-                    disabled={difficultySaving}
-                  >🔴 困难</button>
+              <div className='pt-4 space-y-2'>
+                <p className='text-sm text-muted-foreground'>这个知识点对你来说？</p>
+                <div className='flex gap-2'>
+                  {['easy', 'medium', 'hard'].map(level => {
+                    const labels = { easy: '简单', medium: '适中', hard: '困难' };
+                    return (
+                      <Button key={level} variant={difficulty === level ? 'default' : 'outline'} size='sm' onClick={() => handleDifficulty(level)} disabled={difficultySaving}>
+                        {labels[level]}
+                      </Button>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* Self-report: which errors did you catch? (feeds challenge-mode recognition) */}
-            <div className="found-errors-box">
-              <label className="found-errors-label" htmlFor="found-errors-input">
-                🔎 你在讲解中发现了哪些错误？（选填，每行一条，点“学完了”后会核对）
-              </label>
-              <textarea
-                id="found-errors-input"
-                className="found-errors-input"
-                rows={2}
-                placeholder="例如：边界条件应该是 <= 而不是 <"
-                value={foundErrorsInput}
-                onChange={(e) => setFoundErrorsInput(e.target.value)}
-              />
+            <div className='space-y-1.5'>
+              <label className='text-sm text-muted-foreground' htmlFor='found-errors-input'>你在讲解中发现了哪些错误？（选填，每行一条，点"学完了"后会核对）</label>
+              <textarea id='found-errors-input' className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' rows={2} placeholder='例如：边界条件应该是 <= 而不是 <' value={foundErrorsInput} onChange={e => setFoundErrorsInput(e.target.value)} />
             </div>
-            {/* ─── v1.6.0 Fact-Check Results ─── */}
+
             {factCheckData && (
-              <div className="factcheck-section">
-                <hr />
-                <div className="factcheck-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h3>🔍 事实核查结果</h3>
-                  <button className="btn btn-sm" onClick={() => setFactCheckData(null)}>✕ 关闭</button>
+              <div className='pt-4 space-y-3'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>事实核查结果</h3>
+                  <Button variant='ghost' size='sm' onClick={() => setFactCheckData(null)}><X className='h-3.5 w-3.5' /></Button>
                 </div>
                 {factCheckData.overallScore !== undefined && (
-                  <p style={{ margin: '8px 0' }}>
-                    可信度评分：<strong>{Math.round(factCheckData.overallScore * 100)}%</strong>
-                    {' '}·{' '}
-                    <span style={{
-                      color: factCheckData.verdict === 'trusted' ? '#22c55e' :
-                        factCheckData.verdict === 'caution' ? '#f59e0b' : '#ef4444',
-                      fontWeight: 'bold',
-                    }}>
-                      {factCheckData.verdict === 'trusted' ? '✅ 可信' :
-                        factCheckData.verdict === 'caution' ? '⚠️ 需注意' :
-                          factCheckData.verdict === 'unreliable' ? '❌ 不可靠' : '🔴 有误'}
-                    </span>
-                  </p>
+                  <p className='text-sm'>可信度评分：<strong>{Math.round(factCheckData.overallScore * 100)}%</strong> · <span className={`font-semibold ${factCheckData.verdict === 'trusted' ? 'text-green-600' : factCheckData.verdict === 'caution' ? 'text-amber-500' : 'text-red-600'}`}>{factCheckData.verdict === 'trusted' ? '可信' : factCheckData.verdict === 'caution' ? '需注意' : factCheckData.verdict === 'unreliable' ? '不可靠' : '有误'}</span></p>
                 )}
-                {factCheckData.summary && (
-                  <p style={{ margin: '8px 0', color: '#666', fontSize: '14px' }}>
-                    {typeof factCheckData.summary === 'string' ? factCheckData.summary : ''}
-                  </p>
-                )}
+                {factCheckData.summary && <p className='text-sm text-muted-foreground'>{typeof factCheckData.summary === 'string' ? factCheckData.summary : ''}</p>}
                 {factCheckData.findings && factCheckData.findings.length > 0 && (
-                  <div style={{ marginTop: '12px' }}>
+                  <div className='space-y-2'>
                     {factCheckData.findings.map((f, i) => (
-                      <div key={i} style={{
-                        border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px',
-                        margin: '8px 0',                         borderLeft: '4px solid ' +
-                          (f.verdict === 'confirmed' || f.verdict === 'likely_correct' ? '#22c55e' :
-                            f.verdict === 'uncertain' ? '#f59e0b' : '#ef4444'),
-                      }}>
+                      <div key={i} className='border-l-4 rounded-md border p-3 text-sm' style={{ borderLeftColor: f.verdict === 'confirmed' || f.verdict === 'likely_correct' ? '#22c55e' : f.verdict === 'uncertain' ? '#f59e0b' : '#ef4444' }}>
                         <strong>陈述 {i + 1}：</strong>{f.claim || f.location}
-                        <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888' }}>
-                          [{f.dimension}] 置信度: {Math.round((f.confidence || 0.5) * 100)}%
-                        </span>
-                        {f.explanation && <p style={{ margin: '4px 0', color: '#555', fontSize: '13px' }}>{f.explanation}</p>}
-                        {f.correction && <p style={{ margin: '4px 0', color: '#22c55e', fontSize: '13px' }}>✅ 修正建议: {f.correction}</p>}
+                        <span className='ml-2 text-xs text-muted-foreground'>[{f.dimension}] 置信度: {Math.round((f.confidence || 0.5) * 100)}%</span>
+                        {f.explanation && <p className='mt-1 text-xs text-muted-foreground'>{f.explanation}</p>}
+                        {f.correction && <p className='mt-1 text-xs text-green-600'>修正建议: {f.correction}</p>}
                       </div>
                     ))}
                   </div>
                 )}
                 {factCheckData.findings && factCheckData.findings.some(f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination') && (
-                  <button className="btn btn-sm" onClick={handleFactCheckFix} disabled={factCheckFixing} style={{ marginTop: '8px', background: '#f59e0b', color: 'white', borderColor: '#f59e0b' }}>
-                    {factCheckFixing ? '⏳' : '🔧'} 自动修正存疑内容
-                  </button>
+                  <Button size='sm' className='bg-amber-500 hover:bg-amber-600 text-white' onClick={handleFactCheckFix} disabled={factCheckFixing}>
+                    {factCheckFixing ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <Wrench className='h-3.5 w-3.5 mr-1' />}
+                    {factCheckFixing ? '修正中...' : '自动修正存疑内容'}
+                  </Button>
                 )}
               </div>
             )}
 
-            {/* ─── v1.6.0 Adaptive Analysis Results ─── */}
             {adaptiveData && (
-              <div className="adaptive-section">
-                <hr />
-                <div className="adaptive-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h3>📊 自适应学习分析</h3>
-                  <button className="btn btn-sm" onClick={() => setAdaptiveData(null)}>✕ 关闭</button>
+              <div className='pt-4 space-y-3'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>自适应学习分析</h3>
+                  <Button variant='ghost' size='sm' onClick={() => setAdaptiveData(null)}><X className='h-3.5 w-3.5' /></Button>
                 </div>
                 {adaptiveData.summary && (
-                  <div style={{ margin: '8px 0', padding: '12px', background: '#f9fafb', borderRadius: '8px' }}>
+                  <div className='bg-muted/50 rounded-md p-3 space-y-1'>
                     {adaptiveData.summary.stateMachine && (
-                      <div style={{ margin: '8px 0' }}>
-                        <strong>错误状态机：</strong>
-                        <span style={{ margin: '0 8px' }}>总概念 {adaptiveData.summary.stateMachine.totalConcepts} 个</span>
-                        <span style={{ margin: '0 8px', color: '#ef4444' }}>需干预 {adaptiveData.summary.stateMachine.interventionNeeded} 个</span>
-                        <span style={{ margin: '0 8px', color: '#f59e0b' }}>观察中 {adaptiveData.summary.stateMachine.watching} 个</span>
-                        <span style={{ margin: '0 8px', color: '#22c55e' }}>已解决 {adaptiveData.summary.stateMachine.resolved} 个</span>
+                      <div className='flex flex-wrap gap-2 text-sm'>
+                        <span><strong>错误状态机：</strong>总概念 {adaptiveData.summary.stateMachine.totalConcepts} 个</span>
+                        <span className='text-red-500'>需干预 {adaptiveData.summary.stateMachine.interventionNeeded} 个</span>
+                        <span className='text-amber-500'>观察中 {adaptiveData.summary.stateMachine.watching} 个</span>
+                        <span className='text-green-500'>已解决 {adaptiveData.summary.stateMachine.resolved} 个</span>
                       </div>
                     )}
-                    {adaptiveData.summary.interventionCount !== undefined && (
-                      <p style={{ margin: '4px 0' }}>推荐操作数：{adaptiveData.summary.interventionCount}</p>
-                    )}
+                    {adaptiveData.summary.interventionCount !== undefined && <p className='text-xs text-muted-foreground'>推荐操作数：{adaptiveData.summary.interventionCount}</p>}
                   </div>
                 )}
                 {adaptiveData.recommendations && adaptiveData.recommendations.length > 0 && (
-                  <div style={{ marginTop: '12px' }}>
-                    <h4>📋 学习建议</h4>
+                  <div className='space-y-2'>
+                    <h4 className='text-xs font-medium'>学习建议</h4>
                     {adaptiveData.recommendations.map((rec, i) => (
-                      <div key={i} style={{
-                        border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px',
-                        margin: '8px 0', borderLeft: '4px solid ' +
-                          (rec.urgency === 'critical' ? '#ef4444' :
-                            rec.urgency === 'high' ? '#f59e0b' :
-                              rec.urgency === 'medium' ? '#3b82f6' : '#22c55e'),
-                      }}>
-                        <strong>{rec.topicTitle}</strong>{' '}
-                        <span style={{ color: rec.urgency === 'critical' ? '#ef4444' : rec.urgency === 'high' ? '#f59e0b' : '#888' }}>
-                          [{rec.urgency}] {rec.errorCount} 个错误
-                        </span>
+                      <div key={i} className='border-l-4 rounded-md border p-3 text-sm' style={{ borderLeftColor: rec.urgency === 'critical' ? '#ef4444' : rec.urgency === 'high' ? '#f59e0b' : rec.urgency === 'medium' ? '#3b82f6' : '#22c55e' }}>
+                        <strong>{rec.topicTitle}</strong> <span className={`text-xs ${rec.urgency === 'critical' ? 'text-red-500' : rec.urgency === 'high' ? 'text-amber-500' : 'text-muted-foreground'}`}>[{rec.urgency}] {rec.errorCount} 个错误</span>
                         {rec.suggestions && rec.suggestions.length > 0 && (
-                          <div style={{ marginTop: '4px' }}>
-                            {rec.suggestions.map((s, j) => (
-                              <span key={j} style={{
-                                display: 'inline-block', margin: '2px 4px', padding: '2px 8px',
-                                background: '#f0f9ff', borderRadius: '12px', fontSize: '12px',
-                              }}>{s}</span>
-                            ))}
+                          <div className='flex flex-wrap gap-1 mt-1'>
+                            {rec.suggestions.map((s, j) => <span key={j} className='text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300'>{s}</span>)}
                           </div>
                         )}
                       </div>
@@ -1723,11 +1116,11 @@ ${bodyHtml}
               </div>
             )}
 
-            {/* Mark complete & go back */}
-            <div className="topic-complete-bar">
-              <button className="btn-complete" onClick={handleComplete} disabled={revealLoading} title="标记为已学完并返回列表">
-                {revealLoading ? '⏳ 检查错误中...' : '✅ 学完了，返回列表'}
-              </button>
+            <div className='flex justify-center pt-2'>
+              <Button size='lg' className='bg-green-600 hover:bg-green-700 text-white min-w-[200px]' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
+                {revealLoading ? <RotateCcw className='h-4 w-4 mr-2 animate-spin' /> : <CheckCheck className='h-4 w-4 mr-2' />}
+                {revealLoading ? '检查错误中...' : '学完了，返回列表'}
+              </Button>
             </div>
           </div>
         )}

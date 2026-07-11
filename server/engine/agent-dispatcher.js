@@ -131,6 +131,12 @@ export class AgentDispatcher {
     for (const model of modelsToTry) {
       try {
         const provider = this.provider(taskType, model);
+        // Inject agent-specific system prompt into the provider.
+        // The provider will MERGE this with the original messages[0].content
+        // (not replace it), preserving format constraints and knowledge boundaries.
+        provider._agentSystemPrompt = profile.systemPrompt;
+        provider._agentTemperature = profile.temperature;
+        provider._agentMaxTokens = profile.maxTokens;
         const result = await execute(provider, model);
         _recordUsage(taskType, result?.usage || result?.diagnostics);
         return {

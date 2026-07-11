@@ -217,6 +217,15 @@ export class ErrorStateMachine {
           }
         }
       }
+
+      // Feynman gaps — knowledge gaps identified during Feynman teaching sessions
+      if (topic.feynmanInsights && topic.feynmanInsights.gaps) {
+        for (const gap of topic.feynmanInsights.gaps) {
+          if (gap) {
+            sm.recordError(gap, ERROR_SOURCES.FEYNMAN_GAP, topic.title);
+          }
+        }
+      }
     }
 
     // Exam errors
@@ -431,6 +440,7 @@ export class InterventionRecommender {
       ...exerciseConcepts,
       ...(topic.weakPoints || []),
       ...((topic.teachingErrors || []).filter(e => e?.recognized === false).map(e => e.misconception || '')),
+      ...((topic.feynmanInsights?.gaps || []).filter(Boolean)),
     ]);
 
     let maxErrorCount = 0;
@@ -459,8 +469,9 @@ export class InterventionRecommender {
     const exerciseErrorCount = (topic.exercises || []).filter(e => e.correct === false).length;
     const weakPointCount = (topic.weakPoints || []).length;
     const unrecognizedErrors = (topic.teachingErrors || []).filter(e => e?.recognized === false).length;
+    const feynmanGapCount = (topic.feynmanInsights?.gaps || []).length;
 
-    const totalErrors = exerciseErrorCount + weakPointCount + unrecognizedErrors;
+    const totalErrors = exerciseErrorCount + weakPointCount + unrecognizedErrors + feynmanGapCount;
 
     if (totalErrors > 0) {
       recs.push({
@@ -470,6 +481,7 @@ export class InterventionRecommender {
         exerciseErrors: exerciseErrorCount,
         weakPoints: weakPointCount,
         unrecognizedErrors,
+        feynmanGaps: feynmanGapCount,
         urgency: totalErrors >= 5 ? 'critical' : totalErrors >= 3 ? 'high' : totalErrors >= 1 ? 'medium' : 'low',
         interventions: [],
       });
@@ -523,6 +535,16 @@ export class InterventionRecommender {
           priority: 'medium',
           description: '费曼学习法：尝试向AI讲解这个知识点来检验理解',
           action: 'POST /api/learn/plans/:id/interactive-start/:topicId (mode=feynman)',
+        });
+      }
+
+      // Feynman gaps: knowledge gaps identified during Feynman sessions
+      if (feynmanGapCount > 0) {
+        rec.interventions.push({
+          type: 'reteach',
+          priority: 'medium',
+          description: `费曼教学法发现了 ${feynmanGapCount} 个知识缺口，建议重新学习这些部分`,
+          action: 'POST /api/learn/plans/:id/review/:topicId',
         });
       }
 

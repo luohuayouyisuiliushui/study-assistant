@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Data-layer — barrel re-export (v1.5.0 modular split).
  *
  * Originally a 51 KB monolith. Internal helpers preserved in store/core.js
@@ -16,4 +16,5 @@ export {
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview, buildLearningProfile,
   addExamPaper, getExamPapers, updateExamResults, deleteExamPaper,
   recordTeachingErrors, saveCoreAnalysis, writeFlag, readFlags, clearFlag,
+  saveQuickQuizResults,
 } from './store/crud.js';

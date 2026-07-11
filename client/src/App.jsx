@@ -1,181 +1,189 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import PlanList from './components/PlanList';
-import PlanView from './components/PlanView';
-import TopicDetail from './components/TopicDetail';
-import UserProfile from './pages/UserProfile';
-import SettingsModal from './components/SettingsModal';
-import api from './api';
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom'
+import { BookOpen, User, Settings, ArrowLeft } from 'lucide-react'
+import PlanList from './components/PlanList'
+import PlanView from './components/PlanView'
+import TopicDetail from './components/TopicDetail'
+import UserProfile from './pages/UserProfile'
+import SettingsModal from './components/SettingsModal'
+import ThemeSwitcher from './components/ThemeSwitcher'
+import api from './api'
+import { PlanProvider, usePlan } from '#/lib/plan-context.jsx'
 
 function loadApiSettings() {
   try {
-    const raw = localStorage.getItem('textbook-maker-settings');
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+    const raw = localStorage.getItem('textbook-maker-settings')
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
 }
 
-export default function App() {
-  const [plans, setPlans] = useState([]);
-  const [currentPlanId, setCurrentPlanId] = useState(null);
-  const [currentPlan, setCurrentPlan] = useState(null);
-  const [activeTopicId, setActiveTopicId] = useState(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(!!loadApiSettings().apiKey);
-  const [showProfile, setShowProfile] = useState(false);
-  const planPollRef = useRef(null);
+function PlanViewWrapper({ onGenerate }) {
+  const { planId } = useParams()
+  const { currentPlan, setCurrentPlan, refreshPlan } = usePlan()
+  const planPollRef = useRef(null)
 
-  // Load plans
-  const refreshPlans = useCallback(async () => {
-    try { const d = await api.listPlans(); setPlans(d.plans); }
-    catch { /* ignore */ }
-  }, []);
-  useEffect(() => { refreshPlans(); }, [refreshPlans]);
-
-  // Refresh plans when restored from trash (custom event from PlanList)
   useEffect(() => {
-    const handler = () => refreshPlans();
-    window.addEventListener('plan-restored', handler);
-    return () => window.removeEventListener('plan-restored', handler);
-  }, [refreshPlans]);
+    if (!planId) { setCurrentPlan(null); return; }
+    refreshPlan(planId)
+    planPollRef.current = setInterval(() => refreshPlan(planId), 5000)
+    return () => { clearInterval(planPollRef.current); planPollRef.current = null }
+  }, [planId, refreshPlan, setCurrentPlan])
 
-  // Load current plan (auto-refresh for generation progress)
-  useEffect(() => {
-    if (!currentPlanId) { setCurrentPlan(null); return; }
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const d = await api.getPlan(currentPlanId);
-        if (!cancelled) setCurrentPlan(d.plan);
-      } catch {
-        if (!cancelled) {
-          setCurrentPlan(null);
-          setActiveTopicId(null);
-        }
-      }
-    };
-    load();
-    planPollRef.current = setInterval(load, 5000);
-    return () => { cancelled = true; clearInterval(planPollRef.current); planPollRef.current = null; };
-  }, [currentPlanId]);
+  const handleAddTopics = useCallback(async (titles) => {
+    if (!planId) return
+    const d = await api.addTopics(planId, titles)
+    setCurrentPlan(d.plan)
+  }, [planId, setCurrentPlan])
 
-  const goToList = useCallback(() => {
-    setCurrentPlanId(null);
-    setActiveTopicId(null);
-    if (planPollRef.current) {
-      clearInterval(planPollRef.current);
-      planPollRef.current = null;
-    }
-  }, []);
-
-  const handleSettingsSave = (settings) => {
-    setHasApiKey(!!settings.apiKey);
-  };
-
-  const handleCreatePlan = async (name) => {
-    const d = await api.createPlan(name);
-    setPlans(prev => [d.plan, ...prev]);
-    setCurrentPlanId(d.plan.id);
-    setShowProfile(false);
-  };
-
-  const handleDeletePlan = async (id) => {
-    await api.deletePlan(id);
-    if (currentPlanId === id) goToList();
-    refreshPlans();
-  };
-
-  const handleImportPlan = async (text) => {
-    const d = await api.importPlan(text);
-    setPlans(prev => [d.plan, ...prev]);
-    setCurrentPlanId(d.plan.id);
-    setShowProfile(false);
-  };
-
-  const handleAddTopics = async (titles) => {
-    if (!currentPlanId) return;
-    const d = await api.addTopics(currentPlanId, titles);
-    setCurrentPlan(d.plan);
-  };
-
-  const handleRemoveTopic = async (topicId) => {
-    if (!currentPlanId) return;
-    const d = await api.removeTopic(currentPlanId, topicId);
-    setCurrentPlan(d.plan);
-    if (activeTopicId === topicId) setActiveTopicId(null);
-  };
-
-  const handleGenerate = (topicId) => {
-    if (!currentPlanId) return;
-    setActiveTopicId(topicId);
-  };
-
-  const activeTopic = currentPlan?.topics.find(t => t.id === activeTopicId) || null;
-
-  const handleShowProfile = () => {
-    setShowProfile(true);
-  };
-
-  const handleHideProfile = () => {
-    setShowProfile(false);
-  };
-
-  // Determine header and navigation context
-  const showProfileInHeader = !showProfile;
-  const showBackToList = currentPlanId && !showProfile;
+  const handleRemoveTopic = useCallback(async (topicId) => {
+    if (!planId) return
+    const d = await api.removeTopic(planId, topicId)
+    setCurrentPlan(d.plan)
+  }, [planId, setCurrentPlan])
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="app-title">
-          <h1>📖 知识点学习助手</h1>
-          <span className="subtitle">逐个知识点深入，AI 自适应讲解</span>
+    <PlanView
+      plan={currentPlan}
+      onAddTopics={handleAddTopics}
+      onRemoveTopic={handleRemoveTopic}
+      onSelectTopic={(topicId) => onGenerate(topicId)}
+      onGenerate={onGenerate}
+    />
+  )
+}
+
+function TopicDetailWrapper({ onSelectTopic }) {
+  const { planId, topicId } = useParams()
+  const { currentPlan, setCurrentPlan, refreshPlan } = usePlan()
+  const navigate = useNavigate()
+
+  const topic = currentPlan?.topics.find(t => t.id === topicId) || null
+
+  const handleBack = useCallback(() => {
+    navigate(`/plan/${planId}`, { replace: true })
+  }, [navigate, planId])
+
+  const handleRefresh = useCallback((plan) => {
+    setCurrentPlan(plan)
+  }, [setCurrentPlan])
+
+  if (!currentPlan) {
+    return <div className='flex items-center justify-center py-16 text-muted-foreground text-sm'>加载中...</div>
+  }
+
+  return (
+    <TopicDetail
+      plan={currentPlan}
+      topic={topic}
+      onBack={handleBack}
+      onRefresh={handleRefresh}
+      onSelectTopic={onSelectTopic}
+    />
+  )
+}
+
+function AppContent() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { plans, setPlans, setCurrentPlan, refreshPlans } = usePlan()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [hasApiKey, setHasApiKey] = useState(!!loadApiSettings().apiKey)
+
+  const showBackToList = location.pathname.startsWith('/plan/')
+  const showProfileInHeader = location.pathname !== '/profile'
+
+  const goToList = useCallback(() => {
+    setCurrentPlan(null)
+    navigate('/')
+  }, [navigate, setCurrentPlan])
+
+  const handleShowProfile = () => navigate('/profile')
+  const handleHideProfile = () => navigate('/')
+
+  const handleSettingsSave = (settings) => { setHasApiKey(!!settings.apiKey) }
+
+  const handleCreatePlan = async (name) => {
+    const d = await api.createPlan(name)
+    setPlans(prev => [d.plan, ...prev])
+    navigate(`/plan/${d.plan.id}`)
+  }
+
+  const handleDeletePlan = async (id) => {
+    await api.deletePlan(id)
+    if (location.pathname === `/plan/${id}`) goToList()
+    refreshPlans()
+  }
+
+  const handleImportPlan = async (text) => {
+    const d = await api.importPlan(text)
+    setPlans(prev => [d.plan, ...prev])
+    navigate(`/plan/${d.plan.id}`)
+  }
+
+  const handleGenerate = (topicId) => {
+    const match = location.pathname.match(/^\/plan\/([^/]+)/)
+    if (match) navigate(`/plan/${match[1]}/topic/${topicId}`)
+  }
+
+  return (
+    <div className='flex flex-col h-screen bg-background'>
+      <header className='flex items-center justify-between border-b bg-card px-6 py-3'>
+        <div className='flex items-center gap-2'>
+          <BookOpen className='h-5 w-5 text-primary' />
+          <h1 className='text-base font-semibold'>知识点学习助手</h1>
+          <span className='hidden sm:inline text-xs text-muted-foreground'>逐个知识点深入，AI 自适应讲解</span>
         </div>
-        <div className="header-actions">
-          {!hasApiKey && <span className="no-key-warning">⚙️ 请先设置 API Key</span>}
+        <div className='flex items-center gap-2'>
+          {!hasApiKey && <span className='text-xs text-destructive'>请先设置 API Key</span>}
           {showProfileInHeader && (
-            <button className="btn btn-sm" onClick={handleShowProfile} title="查看跨计划学习画像">
-              👤 画像
+            <button onClick={handleShowProfile} className='inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors' title='学习画像'>
+              <User className='h-4 w-4' /><span className='hidden sm:inline'>画像</span>
             </button>
           )}
-          <button className="btn btn-icon" onClick={() => setSettingsOpen(true)} title="API 设置">
-            ⚙️
+          <ThemeSwitcher />
+          <button onClick={() => setSettingsOpen(true)} className='rounded-md p-1.5 hover:bg-accent transition-colors' title='API 设置'>
+            <Settings className='h-4 w-4' />
           </button>
           {showBackToList && (
-            <button className="btn btn-sm" onClick={goToList}>← 返回列表</button>
+            <button onClick={goToList} className='inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors'>
+              <ArrowLeft className='h-4 w-4' />返回
+            </button>
           )}
-          {showProfile && (
-            <button className="btn btn-sm" onClick={handleHideProfile}>← 返回</button>
+          {location.pathname === '/profile' && (
+            <button onClick={handleHideProfile} className='inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors'>
+              <ArrowLeft className='h-4 w-4' />返回
+            </button>
           )}
         </div>
       </header>
 
-      <main className="app-main">
-        {showProfile ? (
-          <UserProfile onBack={handleHideProfile} />
-        ) : !currentPlanId ? (
-          <PlanList
-            plans={plans}
-            onCreate={handleCreatePlan}
-            onImport={handleImportPlan}
-            onSelect={(id) => { setCurrentPlanId(id); }}
-            onDelete={handleDeletePlan}
-          />
-        ) : !activeTopic ? (
-          <PlanView
-            plan={currentPlan}
-            onAddTopics={handleAddTopics}
-            onRemoveTopic={handleRemoveTopic}
-            onSelectTopic={(id) => setActiveTopicId(id)}
-            onGenerate={handleGenerate}
-          />
-        ) : (
-          <TopicDetail
-            plan={currentPlan}
-            topic={activeTopic}
-            onBack={() => setActiveTopicId(null)}
-            onRefresh={(plan) => setCurrentPlan(plan)}
-            onSelectTopic={(id) => setActiveTopicId(id)}
-          />
-        )}
+      <main className='flex-1 overflow-auto flex justify-center'>
+        <Routes>
+          <Route path="/" element={
+            <PlanList
+              plans={plans}
+              onCreate={handleCreatePlan}
+              onImport={handleImportPlan}
+              onSelect={(id) => navigate(`/plan/${id}`)}
+              onDelete={handleDeletePlan}
+            />
+          } />
+          <Route path="/plan/:planId" element={
+            <PlanViewWrapper onGenerate={handleGenerate} />
+          } />
+          <Route path="/plan/:planId/topic/:topicId" element={
+            <TopicDetailWrapper
+              onSelectTopic={(id) => {
+                const match = location.pathname.match(/^\/plan\/([^/]+)/)
+                if (match) navigate(`/plan/${match[1]}/topic/${id}`, { replace: true })
+              }}
+            />
+          } />
+          <Route path="/profile" element={
+            <UserProfile onBack={() => navigate('/')} />
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
 
       <SettingsModal
@@ -184,5 +192,13 @@ export default function App() {
         onSave={handleSettingsSave}
       />
     </div>
-  );
+  )
+}
+
+export default function App() {
+  return (
+    <PlanProvider>
+      <AppContent />
+    </PlanProvider>
+  )
 }

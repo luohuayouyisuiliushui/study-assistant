@@ -1,4 +1,11 @@
 import 'dotenv/config';
+// Force stdout/stderr to be unbuffered on Windows (real-time log visibility)
+if (process.stdout._handle && typeof process.stdout._handle.setBlocking === 'function') {
+  process.stdout._handle.setBlocking(true);
+}
+if (process.stderr._handle && typeof process.stderr._handle.setBlocking === 'function') {
+  process.stderr._handle.setBlocking(true);
+}
 import express from 'express';
 import cors from 'cors';
 import path from 'path';

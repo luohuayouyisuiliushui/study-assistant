@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, generateExam, gradeExam, generateExamPractice, analyzeCoreTopics, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, generateExam, gradeExam, generateExamPractice, analyzeCoreTopics, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
 import { analyzePlanAdaptive, ErrorStateMachine, AdaptivePromptInjector, InterventionRecommender, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
@@ -494,6 +494,76 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
     }
   } catch (err) {
     console.error('Generate failed:', err.message);
+    // Store error on topic so frontend polling can detect failure
+    try {
+      await store.updateTopic(req.params.planId, req.params.topicId, {
+        lastError: '生成失败: ' + err.message,
+        done: false,
+      });
+    } catch { /* best-effort */ }
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/generate-sse/:topicId
+ * SSE streaming variant of generate. Streams content chunks in real-time.
+ * Events: chunk ({ content }), done ({ topicId, detail }), error ({ data })
+ * Supports agent dispatch via x-use-agent-dispatch header.
+ */
+router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  try {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
+
+    const timeout = setTimeout(() => {
+      try {
+        res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时，请重试' }) + '\n\n');
+        res.end();
+      } catch {}
+    }, 180_000);
+
+    let aborted = false;
+    res.on('close', () => { aborted = true; clearTimeout(timeout); });
+
+    const writeEvent = (event) => {
+      if (aborted) return;
+      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
+    };
+
+    const model = getModel(req);
+
+    if (wantsAgentDispatch(req)) {
+      const dispatcher = getDispatcher(req);
+      await dispatcher.dispatch('explain',
+        (provider) => generateDetailStream(provider, plan, req.params.topicId, writeEvent, model)
+      );
+    } else {
+      const provider = getProvider(req);
+      const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
+      const imageModel = req.body?.imageModel || '';
+      await generateDetailStream(provider, plan, req.params.topicId, writeEvent, model);
+      if (imageApiKey) {
+        generateTopicImage(topic, imageApiKey, imageModel).then(imageUrl => {
+          if (imageUrl) store.updateTopic(plan.id, topic.id, { imageUrl }).catch(() => {});
+        }).catch(() => {});
+      }
+    }
+
+    clearTimeout(timeout);
+    if (!aborted) res.end();
+  } catch (err) {
+    console.error('[generate-sse]', err);
+    if (!res.headersSent) return res.status(500).json({ error: err.message });
+    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
   }
 });
 
@@ -514,8 +584,8 @@ router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
   const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold 或 feynman' });
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman', 'stepwise-challenge', 'realtime-challenge'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold、feynman、stepwise-challenge 或 realtime-challenge' });
   }
 
   try {
@@ -531,7 +601,7 @@ router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
 /**
  * POST /api/learn/plans/:planId/interactive-continue/:topicId
  * Continue an interactive session with user feedback.
- * Body: { mode: 'stepwise'|'realtime', feedback: '...' }
+ * Body: { mode: 'stepwise'|'realtime'|'stepwise-challenge'|'realtime-challenge', feedback: '...' }
  */
 router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => {
   const plan = store.getPlan(req.params.planId);
@@ -569,8 +639,8 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
   const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold 或 feynman' });
+  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman', 'stepwise-challenge', 'realtime-challenge'].includes(mode)) {
+    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold、feynman、stepwise-challenge 或 realtime-challenge' });
   }
 
   try {
@@ -834,7 +904,8 @@ router.post('/plans/:planId/core-topics', async (req, res) => {
     if (!plan) return res.status(404).json({ error: '计划不存在' });
 
     const provider = getProvider(req);
-    const result = await analyzeCoreTopics(provider, plan, getModel(req));
+    const force = req.body?.force === true;
+    const result = await analyzeCoreTopics(provider, plan, getModel(req), { force });
     res.json(result);
   } catch (err) {
     console.error('[core-topics]', err);
@@ -944,6 +1015,27 @@ router.post('/plans/:planId/quick-quiz', async (req, res) => {
   } catch (err) {
     console.error('[quick-quiz]', err);
     res.status(500).json({ error: '测验生成失败: ' + (err.message || err) });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/quick-quiz/submit
+ * Save quick quiz results for persistence and profile feedback.
+ */
+router.post('/plans/:planId/quick-quiz/submit', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  try {
+    const { questions, results } = req.body;
+    if (!questions || !results) {
+      return res.status(400).json({ error: '缺少 questions 或 results' });
+    }
+    store.saveQuickQuizResults(req.params.planId, { questions, results });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[quick-quiz-submit]', err);
+    res.status(500).json({ error: '保存测验结果失败: ' + (err.message || err) });
   }
 });
 
