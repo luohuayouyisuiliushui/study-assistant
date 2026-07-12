@@ -20,7 +20,7 @@ import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUnce
 import { AdaptivePromptInjector } from './adaptive-engine.js';
 import { getUserProfile } from './user-profile.js';
 import { buildDetailMessages, buildDeterministicContext } from './learn-prompts.js';
-import { updateTopic, addHistory, recordTeachingErrors } from './learn-store.js';
+import { updateTopic, addHistory } from './learn-store.js';
 import { generateExam, gradeExam, generateExamPractice,
   generateBlueprint, generateSingleQuestion, selfCorrectQuestion,
   generateExamStream, evaluateQuestionQuality } from './exam-engine.js';
