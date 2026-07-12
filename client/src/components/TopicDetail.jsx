@@ -8,6 +8,7 @@ import RegenerateDialog from './RegenerateDialog';
 import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
 import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
+import ExercisePanel from './ExercisePanel.jsx';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -814,37 +815,15 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </div>
             </div>
 
-            {!generating && !reviewMode && exercises.length > 0 && !submittedExercises && (
-              <div className='pt-4 space-y-6'>
-                <h3 className='text-sm font-medium'>练习题</h3>
-                {exercises.map((ex, i) => (
-                  <div key={i} className='rounded-md bg-muted/20 p-4 space-y-3'>
-                    <div className='flex items-center gap-1.5 text-xs'>
-                      <span className='font-medium'>练习题 {i + 1}</span>
-                      <span className={`px-1.5 py-0.5 rounded ${ex.type === 'choice' ? 'bg-primary/10 text-primary' : 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300'}`}>{ex.type === 'choice' ? '选择题' : '简答题'}</span>
-                      {ex.conceptTag && <span className='px-1.5 py-0.5 rounded bg-muted text-muted-foreground'>{ex.conceptTag}</span>}
-                    </div>
-                    <p className='text-sm'>{ex.question}</p>
-                    {ex.type === 'choice' && ex.options && ex.options.length > 0 ? (
-                      <div className='space-y-1'>
-                        {ex.options.map((opt, oi) => (
-                          <label key={oi} className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-sm cursor-pointer transition-colors ${exerciseAnswers[i] === opt.charAt(0) ? 'bg-primary/10 border border-primary/30' : 'border border-transparent hover:bg-accent'}`}>
-                            <input type='radio' name={'ex-' + i} value={opt.charAt(0)} checked={exerciseAnswers[i] === opt.charAt(0)} onChange={() => handleExerciseAnswer(i, opt.charAt(0))} className='accent-primary' />
-                            <span>{opt}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <textarea className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' placeholder='输入你的答案...' value={exerciseAnswers[i] || ''} onChange={e => handleExerciseAnswer(i, e.target.value)} rows={3} />
-                    )}
-                  </div>
-                ))}
-                <Button onClick={handleSubmitExercises} disabled={exerciseLoading || Object.keys(exerciseAnswers).length === 0}>
-                  {exerciseLoading ? <RotateCcw className='h-4 w-4 mr-1 animate-spin' /> : <SendHorizonal className='h-4 w-4 mr-1' />}
-                  {exerciseLoading ? '批改中...' : '提交答案'}
-                </Button>
-              </div>
-            )}
+            <ExercisePanel
+          exercises={exercises}
+          answers={exerciseAnswers}
+          onAnswer={handleExerciseAnswer}
+          onSubmit={handleSubmitExercises}
+          loading={exerciseLoading}
+          submitted={submittedExercises}
+          results={exerciseResults}
+        />
 
             {!generating && !reviewMode && submittedExercises && exerciseResults && (
               <div className='pt-4 space-y-3'>
