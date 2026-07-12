@@ -36,6 +36,8 @@ import OpenAI from 'openai';
 
 // ─── Constants ───
 
+const DEBUG = process.env.DEBUG_CACHE === 'true' || process.env.NODE_ENV !== 'production';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = path.join(__dirname, '..', 'cache');
 
@@ -407,9 +409,12 @@ export function formatConnectionError(err, baseURL, model) {
 
   if (isConnErr || msg.includes('connection error') || msg.includes('econnrefused')) {
     if (msg.includes('timeout') || err.constructor?.name === 'APIConnectionTimeoutError') {
-      return '连接超时，请检查 Base URL 是否可达，或网络连接是否正常';
+      return '连接超时，请检查 AI 服务是否启动、Base URL 是否可达';
     }
-    return '无法连接到 API 服务器，请检查 Base URL 是否正确、网络是否畅通';
+    if (msg.includes('econnrefused')) {
+      return 'AI 服务未启动或拒绝连接，请检查本地 AI 服务（如 Ollama）是否运行';
+    }
+    return '无法连接到 AI 服务，请检查 Base URL 是否正确、网络是否畅通';
   }
 
   if (err.code === 'ECONNREFUSED') return '无法连接到服务器，请检查 Base URL';
@@ -449,8 +454,8 @@ function encodeForRelay(text) {
 // ─── Retry with exponential backoff + jitter ───
 
 const INITIAL_DELAY = 1000;
-const MAX_DELAY = 30_000;
-const MAX_RETRIES = 5;
+const MAX_DELAY = 15_000;
+const MAX_RETRIES = 2;
 const BACKOFF_MULTIPLIER = 2;
 
 function isRetryableError(err) {
@@ -470,7 +475,7 @@ function isRetryableError(err) {
  * Throws if no chunk is received for `timeoutMs` milliseconds.
  * Each successful chunk resets the idle timer.
  */
-async function* withStreamTimeout(iterable, timeoutMs = 120_000) {
+async function* withStreamTimeout(iterable, timeoutMs = 60_000) {
   const iterator = iterable[Symbol.asyncIterator]();
   let lastActivity = Date.now();
 
@@ -552,7 +557,7 @@ export class Provider {
       apiKey: this._apiKey,
       baseURL: this._baseURL,
       maxRetries: 0, // We handle retry ourselves
-      timeout: 120_000,
+      timeout: 30_000,
     });
   }
 
@@ -959,7 +964,7 @@ export class Provider {
     // We just mark them as needing warm — the first actual call will warm.
     // This avoids making API calls during construction.
     if (this._debugCache) {
-      console.log('[provider] Disk cache ready: ' + _diskCache.stats.entries + ' known prefixes');
+      if (DEBUG) console.log('[provider] Disk cache ready: ' + _diskCache.stats.entries + ' known prefixes');
     }
   }
 
@@ -995,7 +1000,7 @@ export class Provider {
       this.diagnostics.warmedPrefixes++;
 
       if (this._debugCache) {
-        console.log('[provider] ✅ Cache warmed for prefix: ' + shortId(prefixHash));
+        if (DEBUG) console.log('[provider] ✅ Cache warmed for prefix: ' + shortId(prefixHash));
       }
     } catch (err) {
       if (this._debugCache) {

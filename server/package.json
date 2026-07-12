@@ -11,7 +11,10 @@
     "posttest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
     "clean:testdata": "node scripts/clean-test-plans.js",
     "clean:cache": "node scripts/clean-cache.js",
-    "clean:backups": "node scripts/clean-backups.js"
+    "clean:backups": "node scripts/clean-backups.js",
+    "lint": "npx oxlint",
+    "check:data": "node scripts/check-data-integrity.js",
+    "check:data:fix": "node scripts/check-data-integrity.js --fix"
   },
   "dependencies": {
     "cors": "^2.8.5",

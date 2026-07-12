@@ -1,47 +1,12 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, generateExam, gradeExam, generateExamPractice, analyzeCoreTopics, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
+import { answerFollowUp, answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
-import { analyzePlanAdaptive, ErrorStateMachine, AdaptivePromptInjector, InterventionRecommender, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { AdaptivePromptInjector, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
-import { generateAnkiCSV, generateOPML, generateNotionCSV, generateTopicJSON, generateStudyNotes, exportPlanBundle } from '../engine/export-engine.js';
-import AgentDispatcher from '../engine/agent-dispatcher.js';
+import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
 
 const router = Router();
-
-// ─── Middleware: get or create Provider instance ───
-
-function getProvider(req) {
-  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
-  const baseURL = req.headers['x-api-base'] || req.body?.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-  const model = req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  return createProviderFromConfig(apiKey, baseURL, model);
-}
-
-function getModel(req) {
-  return req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-}
-
-// ─── Agent Dispatcher (opt-in via x-use-agent-dispatch header or body.useAgentDispatch) ───
-
-function getDispatcher(req) {
-  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
-  const baseURL = req.headers['x-api-base'] || req.body?.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-  const model = req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  return new AgentDispatcher({ apiKey, baseURL, defaultModel: model });
-}
-
-/**
- * Check if the request wants agent dispatch (opt-in).
- * Enable by setting header: x-use-agent-dispatch: true
- * or body: { useAgentDispatch: true }
- */
-function wantsAgentDispatch(req) {
-  return (
-    req.headers['x-use-agent-dispatch'] === 'true' ||
-    (req.body && req.body.useAgentDispatch === true)
-  );
-}
 
 // ─── Test Connection ───
 
@@ -65,12 +30,12 @@ router.get('/plans', (req, res) => {
   res.json({ plans: store.listPlans() });
 });
 
-router.post('/plans', (req, res) => {
+router.post('/plans', async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '请输入学习计划名称' });
   }
-  const plan = store.createPlan(name.trim());
+  const plan = await store.createPlan(name.trim());
   res.json({ plan });
 });
 
@@ -199,17 +164,18 @@ router.post('/plans/:id/topics', async (req, res) => {
     const plan = await store.addTopics(req.params.id, titles.map(t => t.trim()).filter(Boolean));
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 router.put('/plans/:id/topics/reorder', async (req, res) => {
   const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds)) return res.status(400).json({ error: 'orderedIds 必须是数组' });
   try {
     const plan = await store.reorderTopics(req.params.id, orderedIds);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -218,7 +184,7 @@ router.delete('/plans/:planId/topics/:topicId', async (req, res) => {
     const plan = await store.removeTopic(req.params.planId, req.params.topicId);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -228,7 +194,7 @@ router.put('/plans/:planId/topics/:topicId', async (req, res) => {
     const plan = await store.updateTopic(req.params.planId, req.params.topicId, { done, difficulty });
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -245,7 +211,7 @@ router.post('/plans/:planId/topics/:topicId/time', async (req, res) => {
     const plan = await store.updateTopicTime(req.params.planId, req.params.topicId, seconds);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -462,389 +428,6 @@ router.get('/plans/:id/extract-relations', (req, res) => {
 
 // ─── Generation & Q&A ───
 
-router.post('/plans/:planId/generate/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  res.json({ status: 'generating', topicId: req.params.topicId });
-
-  try {
-    const model = getModel(req);
-
-    // ── Agent dispatch (opt-in): use AgentDispatcher if requested ──
-    if (wantsAgentDispatch(req)) {
-      const dispatcher = getDispatcher(req);
-      const { result: dispatchedResult } = await dispatcher.dispatch('explain',
-        (provider) => generateDetail(provider, plan, req.params.topicId, model)
-      );
-      return; // generateDetail already writes to plan via store
-    }
-
-    const provider = getProvider(req);
-    const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
-    const imageModel = req.body?.imageModel || '';
-    if (imageApiKey) {
-      // Generate text + illustration
-      await generateDetailWithImage(provider, plan, req.params.topicId, imageApiKey, provider.model, imageModel);
-    } else {
-      await generateDetail(provider, plan, req.params.topicId, provider.model);
-    }
-  } catch (err) {
-    console.error('Generate failed:', err.message);
-    // Store error on topic so frontend polling can detect failure
-    try {
-      await store.updateTopic(req.params.planId, req.params.topicId, {
-        lastError: '生成失败: ' + err.message,
-        done: false,
-      });
-    } catch { /* best-effort */ }
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/generate-sse/:topicId
- * SSE streaming variant of generate. Streams content chunks in real-time.
- * Events: chunk ({ content }), done ({ topicId, detail }), error ({ data })
- * Supports agent dispatch via x-use-agent-dispatch header.
- */
-router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  try {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
-
-    const timeout = setTimeout(() => {
-      try {
-        res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时，请重试' }) + '\n\n');
-        res.end();
-      } catch {}
-    }, 180_000);
-
-    let aborted = false;
-    res.on('close', () => { aborted = true; clearTimeout(timeout); });
-
-    const writeEvent = (event) => {
-      if (aborted) return;
-      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
-    };
-
-    const model = getModel(req);
-
-    if (wantsAgentDispatch(req)) {
-      const dispatcher = getDispatcher(req);
-      await dispatcher.dispatch('explain',
-        (provider) => generateDetailStream(provider, plan, req.params.topicId, writeEvent, model)
-      );
-    } else {
-      const provider = getProvider(req);
-      const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
-      const imageModel = req.body?.imageModel || '';
-      await generateDetailStream(provider, plan, req.params.topicId, writeEvent, model);
-      if (imageApiKey) {
-        generateTopicImage(topic, imageApiKey, imageModel).then(imageUrl => {
-          if (imageUrl) store.updateTopic(plan.id, topic.id, { imageUrl }).catch(() => {});
-        }).catch(() => {});
-      }
-    }
-
-    clearTimeout(timeout);
-    if (!aborted) res.end();
-  } catch (err) {
-    console.error('[generate-sse]', err);
-    if (!res.headersSent) return res.status(500).json({ error: err.message });
-    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-//  INTERACTIVE MODE ROUTES (stepwise + realtime)
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/plans/:planId/interactive-start/:topicId
- * Start an interactive explanation session.
- * Body: { mode: 'stepwise'|'realtime' }
- */
-router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman', 'stepwise-challenge', 'realtime-challenge'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold、feynman、stepwise-challenge 或 realtime-challenge' });
-  }
-
-  try {
-    const provider = getProvider(req);
-    const result = await startInteractiveDetail(provider, plan, req.params.topicId, mode, provider.model);
-    res.json(result);
-  } catch (err) {
-    console.error('[interactive-start]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/interactive-continue/:topicId
- * Continue an interactive session with user feedback.
- * Body: { mode: 'stepwise'|'realtime'|'stepwise-challenge'|'realtime-challenge', feedback: '...' }
- */
-router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  const { mode, feedback } = req.body;
-  if (!mode || !feedback || !feedback.trim()) {
-    return res.status(400).json({ error: '\u8bf7\u63d0\u4f9b mode \u548c feedback \u53c2\u6570' });
-  }
-
-  try {
-    const provider = getProvider(req);
-    const result = await continueInteractiveDetail(provider, plan, req.params.topicId, mode, feedback.trim(), provider.model);
-    res.json(result);
-  } catch (err) {
-    console.error('[interactive-continue]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/interactive-start-sse/:topicId
- * SSE streaming version: start an interactive session and stream content.
- * Body: { mode: 'stepwise'|'realtime' }
- * Events: chunk, pause (tool_calls), done, error
- */
-router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  const mode = req.body?.mode || 'stepwise';
-  if (!['stepwise', 'realtime', 'challenge', 'scaffold', 'feynman', 'stepwise-challenge', 'realtime-challenge'].includes(mode)) {
-    return res.status(400).json({ error: 'mode 必须是 stepwise、realtime、challenge、scaffold、feynman、stepwise-challenge 或 realtime-challenge' });
-  }
-
-  try {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
-
-    let idleTimer = null;
-    const resetIdleTimer = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
-      }, 120_000);
-    };
-
-    let aborted = false;
-    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
-
-    const provider = getProvider(req);
-    const writeEvent = (event) => {
-      if (aborted) return;
-      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
-    };
-    resetIdleTimer();
-
-    await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
-      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
-      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
-      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
-      onError: (err) => writeEvent({ type: 'error', data: err.message }),
-    });
-
-    if (idleTimer) clearTimeout(idleTimer);
-    if (!aborted) res.end();
-  } catch (err) {
-    console.error('[interactive-start-sse]', err);
-    if (!res.headersSent) return res.status(500).json({ error: err.message });
-    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/interactive-continue-sse/:topicId
- * SSE streaming version: continue an interactive session.
- * Body: { mode: 'stepwise'|'realtime', feedback: '...' }
- * Events: chunk, pause (tool_calls), done, error
- */
-router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  const { mode, feedback } = req.body;
-  if (!mode || !feedback || !feedback.trim()) {
-    return res.status(400).json({ error: '请提供 mode 和 feedback 参数' });
-  }
-
-  try {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
-
-    let idleTimer = null;
-    const resetIdleTimer = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        try { res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时' }) + '\n\n'); res.end(); } catch {}
-      }, 120_000);
-    };
-
-    let aborted = false;
-    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
-
-    const provider = getProvider(req);
-    const writeEvent = (event) => {
-      if (aborted) return;
-      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
-    };
-    resetIdleTimer();
-
-    await streamInteractiveContinue(provider, plan, req.params.topicId, mode, feedback.trim(), {
-      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
-      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
-      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
-      onError: (err) => writeEvent({ type: 'error', data: err.message }),
-    });
-
-    if (idleTimer) clearTimeout(idleTimer);
-    if (!aborted) res.end();
-  } catch (err) {
-    console.error('[interactive-continue-sse]', err);
-    if (!res.headersSent) return res.status(500).json({ error: err.message });
-    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-//  CHALLENGE: reveal embedded errors on completion
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/plans/:planId/reveal-errors/:topicId
- * Analyze topic content for subtle embedded errors.
- */
-router.post('/plans/:planId/reveal-errors/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  try {
-    const provider = getProvider(req);
-    const recognizedErrors = Array.isArray(req.body && req.body.recognizedErrors) ? req.body.recognizedErrors : [];
-    const result = await revealEmbeddedErrors(provider, plan, req.params.topicId, provider.model, recognizedErrors);
-    res.json(result);
-  } catch (err) {
-    console.error('[reveal-errors]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-//  SCAFFOLD: decompose a topic into sub-topics
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/plans/:planId/decompose/:topicId
- * Decompose a topic into 3-6 sub-topics using AI.
- */
-router.post('/plans/:planId/decompose/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-
-  try {
-    const provider = getProvider(req);
-    const subtopics = await decomposeTopic(provider, plan, req.params.topicId, getModel(req));
-    res.json({ subtopics });
-  } catch (err) {
-    console.error('[decompose]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-//  TTS: text-to-speech via SiliconFlow
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/tts
- * Synthesize speech from text.
- * Body: { text: '...', imageApiKey: '...' }
- * Returns: audio/mpeg binary
- */
-router.post('/tts', async (req, res) => {
-  const { text } = req.body;
-  const apiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
-
-  if (!text || !text.trim()) {
-    return res.status(400).json({ error: '请输入文本' });
-  }
-  if (!apiKey) {
-    return res.status(400).json({ error: '请先配置硅基流动 API Key（设置中的图片API Key）' });
-  }
-
-  try {
-    const audioBuffer = await textToSpeech(apiKey, text);
-    res.set('Content-Type', 'audio/mpeg');
-    res.set('Content-Length', audioBuffer.length.toString());
-    res.end(audioBuffer);
-  } catch (err) {
-    console.error('[tts]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/ask/:topicId
- * Ask a follow-up question on a topic.
- * Body: { question }
- */
-router.post('/plans/:planId/ask/:topicId', async (req, res) => {
-  const { question } = req.body;
-  if (!question || !question.trim()) {
-    return res.status(400).json({ error: '请输入问题' });
-  }
-
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  try {
-    const provider = getProvider(req);
-    const answer = await answerFollowUp(provider, plan, req.params.topicId, question.trim(), provider.model);
-    res.json({ answer });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ─── Learning Analysis ───
 
@@ -939,6 +522,7 @@ router.post('/plans/:planId/review/:topicId', async (req, res) => {
     const exercises = store.parseExercisesFromDetail(review);
     res.json({ review, exercises });
   } catch (err) {
+  console.error('[review]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -996,6 +580,7 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
 
     res.json({ weakPoints: results });
   } catch (err) {
+  console.error('[weak-points]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1049,459 +634,6 @@ router.get('/plans/:planId/review-needs', (req, res) => {
 
   const needs = store.getTopicsNeedingReview(plan);
   res.json({ needs });
-});
-
-// ═══════════════════════════════════════════════════════
-//  EXAM PAPER ROUTES
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/plans/:planId/exam/generate
- * Generate an exam paper covering selected topics.
- * Body: { topicIds: string[], config: { questionCount, choiceRatio } }
- */
-router.post('/plans/:planId/exam/generate', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const { topicIds, config } = req.body;
-  if (!topicIds || !Array.isArray(topicIds) || topicIds.length === 0) {
-    return res.status(400).json({ error: '请选择至少一个知识点' });
-  }
-
-  try {
-    const model = getModel(req);
-
-    // ── Agent dispatch (opt-in) ──
-    if (wantsAgentDispatch(req)) {
-      const dispatcher = getDispatcher(req);
-      const { result } = await dispatcher.dispatch('examGenerate',
-        (provider) => generateExam(provider, plan, topicIds, config || {}, model)
-      );
-      return res.json({ exam: result });
-    }
-
-    const provider = getProvider(req);
-    const exam = await generateExam(provider, plan, topicIds, config || {}, model);
-    res.json({ exam });
-  } catch (err) {
-    console.error('[exam/generate]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/exam/:examId/submit
- * Submit exam answers for AI grading.
- * Body: { answers: [{ exerciseIndex, userAnswer }] }
- */
-router.post('/plans/:planId/exam/:examId/submit', async (req, res) => {
-  const { answers } = req.body;
-  if (!answers || !Array.isArray(answers) || answers.length === 0) {
-    return res.status(400).json({ error: '请提供试卷答案' });
-  }
-
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  try {
-    const provider = getProvider(req);
-    const results = await gradeExam(provider, plan, req.params.examId, answers);
-
-    // ── Data flywheel: update user profile with latest exam results ──
-    try {
-      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
-      dataFlywheelUpdate(allPlans);
-    } catch (fwErr) {
-      console.warn('[flywheel] exam submit update failed (non-fatal):', fwErr.message);
-    }
-
-    res.json({ results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/exam/generate-stream
- * Generate exam with SSE streaming (questions arrive progressively).
- * Body: { topicIds: string[], config: { questionCount, choiceRatio } }
- */
-router.post('/plans/:planId/exam/generate-stream', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-  const { topicIds, config } = req.body;
-  if (!topicIds || !Array.isArray(topicIds) || topicIds.length === 0) {
-    return res.status(400).json({ error: '请选择至少一个知识点' });
-  }
-  if (topicIds.length > 50) {
-    return res.status(400).json({ error: '一次性最多选择50个知识点' });
-  }
-  try {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    
-    // Connection keepalive: send initial event
-    res.write('data: ' + JSON.stringify({ type: 'connected' }) + '\n\n');
-
-    // Timeout protection: abort after 120 seconds
-    const timeout = setTimeout(() => {
-      try {
-        res.write('data: ' + JSON.stringify({ type: 'error', data: '生成超时，请重试' }) + '\n\n');
-        res.end();
-      } catch {}
-    }, 120_000);
-
-    // Client disconnect cleanup
-    let aborted = false;
-    res.on('close', () => { aborted = true; clearTimeout(timeout); });
-
-    const provider = getProvider(req);
-    const writeEvent = (event) => {
-      if (aborted) return;
-      try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
-    };
-    await generateExamStream(provider, plan, topicIds, config || {}, writeEvent, getModel(req));
-    clearTimeout(timeout);
-    if (!aborted) res.end();
-  } catch (err) {
-    console.error('[exam/generate-stream]', err);
-    if (!res.headersSent) return res.status(500).json({ error: err.message });
-    try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
-  }
-});
-
-
-/**
- * GET /api/learn/plans/:planId/exams
- * List all saved exam papers.
- */
-router.get('/plans/:planId/exams', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const exams = store.getExamPapers(req.params.planId);
-  res.json({ exams });
-});
-
-/**
- * DELETE /api/learn/plans/:planId/exam/:examId
- * Delete a saved exam paper.
- */
-router.delete('/plans/:planId/exam/:examId', (req, res) => {
-  try {
-    store.deleteExamPaper(req.params.planId, req.params.examId);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/exam/:examId/practice
- * Generate targeted practice questions based on exam mistakes.
- * Body: { count: number }
- */
-router.post('/plans/:planId/exam/:examId/practice', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const count = req.body?.count || 5;
-  try {
-    const provider = getProvider(req);
-    const questions = await generateExamPractice(provider, plan, req.params.examId, count, getModel(req));
-    res.json({ questions });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-/**
- * GET /api/learn/cache-diagnostics
- * Get cumulative cache performance metrics.
- * Useful for monitoring how well the cache optimization is working.
- */
-router.get('/cache-diagnostics', (req, res) => {
-  const diagnostics = getEngineCacheDiagnostics();
-  res.json({ diagnostics });
-});
-
-// ═══════════════════════════════════════════════════════
-//  FACT-CHECK ROUTES (Anti-Hallucination Engine)
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/plans/:planId/fact-check/:topicId
- * Run a full fact-check audit on a topic's generated detail.
- * Returns structured findings with confidence scores.
- */
-router.post('/plans/:planId/fact-check/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容' });
-
-  try {
-    const provider = getProvider(req);
-    const result = await factCheckDetail(provider, topic.detail, topic.title, getModel(req));
-
-    // Store fact-check result on topic
-    await store.updateTopic(req.params.planId, req.params.topicId, { factCheck: result });
-
-    // Also build a human-readable report
-    const report = buildFactCheckReport(result);
-    res.json({ factCheck: result, report });
-  } catch (err) {
-    console.error('[fact-check]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/fact-check-auto-fix/:topicId
- * Auto-fix uncertain/wrong claims identified in the fact-check report.
- * Merges corrections back into the topic detail.
- * Body: { findings: [...] } — the uncertain findings from the fact-check
- */
-router.post('/plans/:planId/fact-check-auto-fix/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容' });
-
-  const { findings } = req.body || {};
-  if (!findings || !Array.isArray(findings) || findings.length === 0) {
-    return res.status(400).json({ error: '请提供待修正的存疑陈述列表' });
-  }
-
-  try {
-    const provider = getProvider(req);
-    const fixes = await autoFixUncertainClaims(provider, findings, getModel(req));
-    const { content: corrected, fixedCount } = applyFixesToContent(topic.detail, fixes);
-
-    if (corrected !== topic.detail && fixedCount > 0) {
-      await store.updateTopic(req.params.planId, req.params.topicId, { detail: corrected });
-      res.json({ corrected: true, fixedCount, detail: corrected, fixes });
-    } else {
-      res.json({ corrected: false, fixedCount: 0, message: '无需修改或修正未能匹配到原文', fixes });
-    }
-  } catch (err) {
-    console.error('[fact-check-auto-fix]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/adaptive-analysis
- * Run adaptive analysis: error state machine + user profile injection + intervention recommendations.
- * Returns structured recommendations for what the user should focus on next.
- */
-router.post('/plans/:planId/adaptive-analysis', (req, res) => {
-  try {
-    const plan = store.getPlan(req.params.planId);
-    if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-    const result = analyzePlanAdaptive(plan);
-    res.json(result);
-  } catch (err) {
-    console.error('[adaptive-analysis]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/adaptive-context
- * Get the adaptive context string that would be injected into prompts.
- * Useful for previewing what personalization looks like before generating.
- */
-router.post('/adaptive-context', (req, res) => {
-  try {
-    const profile = getUserProfile();
-    const injector = new AdaptivePromptInjector(profile);
-    const context = injector.buildAdaptiveContext();
-    res.json({
-      hasProfile: injector.hasMeaningfulProfile,
-      context,
-      compactHint: injector.compactHint,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/cache-stats
- * Get detailed per-provider cache statistics (requires API config in body/headers).
- * Returns response cache hit rates, disk cache size, prefix stability.
- */
-router.post('/cache-stats', (req, res) => {
-  try {
-    const provider = getProvider(req);
-    const stats = provider.getCacheStats();
-    res.json({ stats });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/learn/plans/:planId/feynman-analyze/:topicId
- * Analyze a Feynman learning session transcript.
- */
-router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '\u8ba1\u5212\u4e0d\u5b58\u5728' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '\u77e5\u8bc6\u70b9\u4e0d\u5b58\u5728' });
-
-  const session = topic.interactiveSession;
-  if (!session || !session.transcript || session.transcript.length === 0) {
-    return res.status(400).json({ error: '\u6ca1\u6709\u8d39\u66fc\u5b66\u4e60\u5bf9\u8bdd\u8bb0\u5f55' });
-  }
-
-  try {
-    const provider = getProvider(req);
-    const insights = await analyzeFeynmanSession(provider, session.transcript, topic.title);
-    topic.feynmanInsights = insights;
-    await store.updateTopic(req.params.planId, req.params.topicId, { feynmanInsights: insights });
-    res.json(insights);
-  } catch (err) {
-    console.error('[feynman-analyze]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════
-//  EXPORT ROUTES (Deep format binding)
-// ═══════════════════════════════════════════════════════
-
-/**
- * GET /api/learn/plans/:planId/export/anki/:topicId
- * Export a topic's content as Anki-compatible CSV (flashcards).
- * Query: ?includeHistory=true (include Q&A as cards)
- */
-router.get('/plans/:planId/export/anki/:topicId', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  if (!topic) return res.status(404).json({ error: '知识点不存在' });
-  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容，无法导出' });
-
-  const csv = generateAnkiCSV(plan, req.params.topicId);
-  if (!csv) return res.status(500).json({ error: '生成 Anki CSV 失败' });
-
-  const filename = `${topic.title.replace(/[/\\?%*:|"<>]/g, '_')}.anki.csv`;
-  res.set('Content-Type', 'text/csv; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.send(csv);
-});
-
-/**
- * GET /api/learn/plans/:planId/export/opml/:topicId
- * Export a topic as OPML outline (importable by 幕布/XMind/Workflowy).
- */
-router.get('/plans/:planId/export/opml/:topicId', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const opml = generateOPML(plan, req.params.topicId);
-  if (!opml) return res.status(400).json({ error: '无法生成 OPML 大纲' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  const filename = `${(topic?.title || 'outline').replace(/[/\\?%*:|"<>]/g, '_')}.opml`;
-  res.set('Content-Type', 'application/xml; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.send(opml);
-});
-
-/**
- * GET /api/learn/plans/:planId/export/notion
- * Export the entire plan as Notion-database-importable CSV.
- */
-router.get('/plans/:planId/export/notion', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const csv = generateNotionCSV(plan);
-  const filename = `${plan.name.replace(/[/\\?%*:|"<>]/g, '_')}.notion.csv`;
-  res.set('Content-Type', 'text/csv; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.send(csv);
-});
-
-/**
- * GET /api/learn/plans/:planId/export/json/:topicId
- * Export a topic as structured JSON (comprehensive: detail + exercises + Q&A + weak points + fact-check).
- */
-router.get('/plans/:planId/export/json/:topicId', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const data = generateTopicJSON(plan, req.params.topicId);
-  if (!data) return res.status(404).json({ error: '知识点不存在' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  res.json(data);
-});
-
-/**
- * GET /api/learn/plans/:planId/export/notes/:topicId
- * Export a topic as self-contained study notes (Markdown with YAML frontmatter + collapsed answers).
- */
-router.get('/plans/:planId/export/notes/:topicId', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const notes = generateStudyNotes(plan, req.params.topicId);
-  if (!notes) return res.status(400).json({ error: '无法生成学习笔记' });
-
-  const topic = plan.topics.find(t => t.id === req.params.topicId);
-  const filename = `${(topic?.title || 'notes').replace(/[/\\?%*:|"<>]/g, '_')}.md`;
-  res.set('Content-Type', 'text/markdown; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-  res.send(notes);
-});
-
-/**
- * GET /api/learn/plans/:planId/export/bundle
- * Export the entire plan as a JSON data bundle (all topics metadata, no AI call).
- */
-router.get('/plans/:planId/export/bundle', (req, res) => {
-  const plan = store.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: '计划不存在' });
-
-  const bundle = exportPlanBundle(plan);
-  res.json(bundle);
-});
-
-// ═══════════════════════════════════════════════════════
-//  MULTI-AGENT DISPATCHER ROUTE
-// ═══════════════════════════════════════════════════════
-
-/**
- * POST /api/learn/agents/list
- * List all known agent types with their profiles.
- */
-router.post('/agents/list', (req, res) => {
-  res.json({ agents: AgentDispatcher.listAgents() });
-});
-
-/**
- * POST /api/learn/agents/usage
- * Get per-agent usage statistics (calls, tokens, errors).
- */
-router.post('/agents/usage', (req, res) => {
-  const dispatcher = getDispatcher(req);
-  res.json({ usage: dispatcher.usageStats });
 });
 
 export default router;

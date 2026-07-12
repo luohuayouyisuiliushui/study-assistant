@@ -13,7 +13,6 @@ function getApiSettings() {
 async function request(url, options = {}, includeApiKey = false) {
   const headers = { 'Content-Type': 'application/json' };
 
-  // Merge body with API settings for AI calls
   let body = options.body;
   if (includeApiKey) {
     const settings = getApiSettings();
@@ -132,14 +131,19 @@ const api = {
       body: JSON.stringify({ mode, feedback }),
     }, true);
   },
+  async clearInteractiveSession(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/interactive-session/${topicId}`, {
+      method: 'DELETE',
+    });
+  },
 
   /** SSE streaming: start interactive mode. Calls onEvent for each SSE event (chunk, pause, done, error). */
-  async startInteractiveSSE(planId, topicId, mode, onEvent) {
+  async startInteractiveSSE(planId, topicId, mode, onEvent, signal) {
     const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
     const headers = { 'Content-Type': 'application/json' };
     const body = JSON.stringify({ mode, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-start-sse/${topicId}`, {
-      method: 'POST', headers, body,
+      method: 'POST', headers, body, signal,
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({ error: '启动失败' }));
@@ -163,12 +167,12 @@ const api = {
   },
 
   /** SSE streaming: continue interactive mode. Calls onEvent for each SSE event. */
-  async continueInteractiveSSE(planId, topicId, mode, feedback, onEvent) {
+  async continueInteractiveSSE(planId, topicId, mode, feedback, onEvent, signal) {
     const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
     const headers = { 'Content-Type': 'application/json' };
     const body = JSON.stringify({ mode, feedback, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-continue-sse/${topicId}`, {
-      method: 'POST', headers, body,
+      method: 'POST', headers, body, signal,
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({ error: '继续失败' }));
@@ -257,6 +261,12 @@ const api = {
   async generateReview(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/review/${topicId}`,
       { method: 'POST' }, true);
+  },
+  async submitFeedback(planId, topicId, reason, mode) {
+    return request(`${API_BASE}/learn/plans/${planId}/topic/${topicId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, mode }),
+    }, true);
   },
   async submitExercises(planId, topicId, answers) {
     return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {

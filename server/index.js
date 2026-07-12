@@ -12,6 +12,9 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import learnRouter from './routes/learn.js';
+import exportRouter from './routes/export.js';
+import assessmentRouter from './routes/assessment.js';
+import contentRouter from './routes/content.js';
 import userProfileRouter from './routes/user-profile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,10 +26,25 @@ const IMAGES_DIR = path.join(__dirname, 'data', 'images');
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
 // Middleware
-app.use(cors());
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api')) {
+      console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`);
+    }
+  });
+  next();
+});
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // API routes
+app.use('/api/learn', exportRouter);
+app.use('/api/learn', assessmentRouter);
+app.use('/api/learn', contentRouter);
 app.use('/api/learn', learnRouter);
 app.use('/api/user-profile', userProfileRouter);
 
@@ -35,12 +53,19 @@ app.use('/images', express.static(IMAGES_DIR));
 
 // Serve built React app in production
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
-app.use(express.static(clientDist));
+app.use(express.static(clientDist, { maxAge: 0, etag: false }));
 app.get('/{*splat}', (req, res) => {
   // Only serve index.html for non-API routes
   if (!req.path.startsWith('/api')) {
     res.sendFile(path.join(clientDist, 'index.html'));
   }
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(`[unhandled] ${req.method} ${req.path}:`, err.stack || err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err.message || '服务器内部错误' });
 });
 
 app.listen(PORT, (err) => {
