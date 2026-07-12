@@ -9,6 +9,7 @@ import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
 import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
+import QAPanel from './QAPanel.jsx';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -72,13 +73,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [searchParams, setSearchParams] = useSearchParams();
   const urlMode = searchParams.get('mode');
   const urlReview = searchParams.get('review') === '1';
-  const [qaInput, setQaInput] = useState('');
   const [qaList, setQaList] = useState([]);
   const [qaLoading, setQaLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
   const [localDetail, setLocalDetail] = useState(topic?.detail || '');
-  const qaInputRef = useRef(null);
   const chatPanelRef = useRef(null);
   const genTriggered = useRef(false);
   const startTimeRef = useRef(Date.now());
@@ -372,8 +371,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   useEffect(() => {
-    if (!generating && localDetail && !error) qaInputRef.current?.focus();
-  }, [generating, localDetail, error]);
+    }, [generating, localDetail, error]);
 
   useEffect(() => {
     if (!generating || !plan) return;
@@ -399,10 +397,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   if (!topic) return null;
 
-  const handleAsk = async () => {
-    if (!qaInput.trim() || qaLoading) return;
-    const question = qaInput.trim();
-    setQaInput('');
+  const handleAsk = async (question) => {
+    if (!question || qaLoading) return;
     setQaLoading(true);
     setQaList(prev => [...prev, { question, answer: '...' }]);
     try {
@@ -411,7 +407,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       requestAnimationFrame(() => { if (chatPanelRef.current) chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight; });
       const fresh = await api.getPlan(plan.id);
       onRefresh(fresh.plan);
-      setTimeout(() => qaInputRef.current?.focus(), 100);
+      setTimeout(() => 0, 100);
     } catch (err) {
       setQaList(prev => { const list = [...prev]; list[list.length - 1] = { question, answer: `❌ 请求失败: ${err.message}` }; return list; });
     } finally { setQaLoading(false); }
@@ -701,9 +697,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     recognition.onresult = (event) => {
       for (let i = event.resultIndex; i < event.results.length; i++) { if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript; }
       const latestTranscript = Array.from(event.results).map(r => r[0].transcript).join('');
-      setQaInput(latestTranscript);
-    };
-    recognition.onend = () => { setIsRecording(false); if (finalTranscript.trim()) { setQaInput(finalTranscript.trim()); setTimeout(() => handleAsk(), 50); } };
+       };
     recognition.onerror = (event) => { console.error('Speech recognition error:', event.error); setIsRecording(false); if (event.error === 'not-allowed') alert('语音输入需要麦克风权限，请在浏览器设置中允许'); };
     recognitionRef.current = recognition; recognition.start(); setIsRecording(true);
   };
@@ -780,41 +774,16 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             )}
             {generating && <div className='flex items-center gap-1.5 text-xs text-muted-foreground'><RotateCcw className='h-3 w-3 animate-spin' />继续生成中...</div>}
 
-            <div className='rounded-lg bg-muted/20'>
-              <div className='flex items-center justify-between px-4 py-3'>
-                <h2 className='text-sm font-medium'>扩展讨论</h2>
-                {qaList.length > 0 && <span className='text-xs text-muted-foreground'>{qaList.length} 轮</span>}
-              </div>
-              {qaList.length >= 2 && (
-                <div className='flex gap-1.5 px-4 py-2 overflow-x-auto'>
-                  {qaList.map((qa, i) => (
-                    <div key={i} className='relative'>
-                      <button className='text-xs w-6 h-6 rounded-full bg-muted hover:bg-accent transition-colors' onClick={() => scrollToRound(i)} onMouseEnter={() => setHoveredRound(i)} onMouseLeave={() => setHoveredRound(null)} title={qa.question}>
-                        {i + 1}
-                      </button>
-                      {hoveredRound === i && (
-                        <div className='absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md border bg-popover text-xs shadow-md z-10'>
-                          <div className='font-medium mb-0.5'>追问 {i + 1}</div>
-                          <div className='text-muted-foreground truncate'>{qa.question}</div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className='max-h-80 overflow-y-auto p-4 mx-auto max-w-4xl' ref={chatPanelRef}>
-                <QaMessages qaList={qaList} />
-              </div>
-              <div className='p-4'>
-                <form onSubmit={e => { e.preventDefault(); }} className='flex gap-2'>
-                  <textarea ref={qaInputRef} value={qaInput} onChange={e => setQaInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAsk(); } }} placeholder='输入你的追问...（Shift+Enter 换行，Enter 发送）' disabled={qaLoading} rows={1} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none' />
-                  <Button type='button' onClick={handleAsk} disabled={!qaInput.trim() || qaLoading} size='icon'>
-                    {qaLoading ? <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' /> : <SendHorizonal className='h-4 w-4' />}
-                  </Button>
-                </form>
-              </div>
-            </div>
+            <QAPanel
+              qaList={qaList}
+              onAsk={handleAsk}
+              loading={qaLoading}
+              scrollToRound={scrollToRound}
+              setHoveredRound={setHoveredRound}
+              hoveredRound={hoveredRound}
+            />
 
+            
             <ExercisePanel
           exercises={exercises}
           answers={exerciseAnswers}
