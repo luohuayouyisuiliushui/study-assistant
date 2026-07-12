@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { ArrowLeft, Download, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Search, Wrench, FileText, BarChart3, BookOpen, Play, Mic, X, Lightbulb, Target, Zap, Swords, Layers, Brain, CheckCircle, AlertCircle, List, ThumbsUp, ThumbsDown, Meh, MoreHorizontal } from 'lucide-react';
@@ -138,6 +138,19 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [feynmanInsightsOpen, setFeynmanInsightsOpen] = useState(true);
   const [feynmanAnalyzing, setFeynmanAnalyzing] = useState(false);
   const [feynmanHistoryOpen, setFeynmanHistoryOpen] = useState(false);
+
+  // AI request abort controller — cancels all pending AI calls on unmount / mode switch
+  const abortRef = useRef(null);
+  const getAbortSignal = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    return abortRef.current.signal;
+  }, []);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Memoize expensive computed values
+  const strippedDetailMemo = useMemo(() => stripExerciseSection(localDetail), [localDetail]);
+  const parsedExercisesMemo = useMemo(() => parseExercisesFromMarkdown(localDetail), [localDetail]);
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -313,7 +326,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       }
       return;
     }
-    const parsed = parseExercisesFromMarkdown(localDetail);
+    const parsed = parsedExercisesMemo;
     if (parsed.length > 0) setExercises(parsed);
   }, [localDetail, generating, topic?.exercises]);
 
@@ -606,6 +619,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     setInteractiveMode(mode); setInteractiveSections([]); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(true);
     try {
       let fullContent = ''; let sessionData = null;
+      const signal = getAbortSignal();
       await api.startInteractiveSSE(plan.id, topic.id, mode, (event) => {
         if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
         else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; }
@@ -631,6 +645,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     interactiveBusyRef.current = true; setInteractiveLoading(true); setInteractiveInput(''); setStreamingContent('');
     try {
       let fullContent = '';
+      const signal = getAbortSignal();
       await api.continueInteractiveSSE(plan.id, topic.id, interactiveMode, feedback, (event) => {
         if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
         else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); }
@@ -1070,7 +1085,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
             <div className='rounded-lg bg-muted/20 px-8 py-6'>
               <div className='reading-content text-sm leading-7'>
-                <ContentArea content={stripExerciseSection(localDetail)} />
+                <ContentArea content={strippedDetailMemo} />
               </div>
             </div>
             {!generating && localDetail && (
