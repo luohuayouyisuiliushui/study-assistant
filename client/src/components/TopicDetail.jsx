@@ -6,6 +6,7 @@ import { Button } from '#/components/ui/button';
 import api from '../api';
 import RegenerateDialog from './RegenerateDialog';
 import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
+import AIStatusIndicator from './AIStatus.jsx';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -790,7 +791,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         <div className='fixed top-0 left-0 right-0 z-50 bg-background border-b border-border/50 shadow-md'>
           <div className='w-full max-w-4xl mx-auto px-10 py-2 flex items-center flex-wrap gap-2'>
             <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
-            <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
+        <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
+        <AIStatusIndicator />
             {localDetail && !error && !generating && topic.done === false && (
               <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
                 {revealLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <CheckCheck className='h-3.5 w-3.5 mr-1' />}
