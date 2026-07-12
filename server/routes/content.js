@@ -351,15 +351,18 @@ router.post('/plans/:planId/decompose/:topicId', async (req, res) => {
  * Body: { text: '...', imageApiKey: '...' }
  * Returns: audio/mpeg binary
  */
-router.post('/tts', async (req, res) => {
-  const { text } = req.body;
-  const apiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
+router.post('/plans/:planId/tts/:topicId', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const { text } = req.body || {};
+  const apiKey = req.headers['x-image-api-key'] || '';
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: '请输入文本' });
   }
   if (!apiKey) {
-    return res.status(400).json({ error: '请先配置硅基流动 API Key（设置中的图片API Key）' });
+    return res.status(400).json({ error: '请通过请求头 x-image-api-key 传入 API Key' });
   }
 
   try {
