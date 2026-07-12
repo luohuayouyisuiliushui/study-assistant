@@ -336,5 +336,14 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
   }
 });
 
+router.post('/agents/list', (req, res) => {
+  res.json({ agents: AgentDispatcher.listAgents() });
+});
+
+router.post('/agents/usage', (req, res) => {
+  const dispatcher = getDispatcher(req);
+  res.json({ usage: dispatcher.usageStats });
+});
+
 // ═══════════════════════════════════════════════════════
 export default router;

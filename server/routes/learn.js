@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage, answerFollowUp, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeFeynmanSession, generateExamStream, generateExam, gradeExam, generateExamPractice, analyzeCoreTopics, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
+import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage, answerFollowUp, answerAnalysisFollowUp, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeCoreTopics } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
-import { analyzePlanAdaptive, ErrorStateMachine, AdaptivePromptInjector, InterventionRecommender, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { AdaptivePromptInjector, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import AgentDispatcher from '../engine/agent-dispatcher.js';
 
