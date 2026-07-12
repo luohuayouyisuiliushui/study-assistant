@@ -1,0 +1,111 @@
+# 前后端技术栈
+
+## 前端
+
+| 层 | 技术 | 版本 |
+|---|---|---|
+| 框架 | React | 19.2 |
+| 构建 | Vite + @vitejs/plugin-react | 8.1 / 6.0 |
+| 样式 | Tailwind CSS + @tailwindcss/vite | 4.3 |
+| 组件库 | shadcn/ui (copy-paste, 12 个组件) | — |
+| 路由 | react-router-dom | 7.18 |
+| Markdown | react-markdown + remark-gfm + rehype-raw | 10.1 / 4.0 / 7.0 |
+| 代码高亮 | rehype-highlight | 7.0 |
+| 图表 | Mermaid + Markmap + Recharts | 11.16 / 0.18 / 3.9 |
+| 图标 | Lucide React | 1.24 |
+| SEO | react-helmet-async | 3.0 |
+| 测试 | Vitest + Testing Library + jsdom | 4.1 / 16.3 / 29.1 |
+| Lint | oxlint | 1.73 |
+| 包管理 | npm (ESM, import alias # → src/) | — |
+
+状态管理：无 Redux，状态全靠 React useState。组件在 `src/components/` 下，页面在 `src/pages/` 下。
+
+## 后端
+
+| 层 | 技术 | 版本 |
+|---|---|---|
+| 运行时 | Node.js (ESM) | — |
+| 框架 | Express | 5.2 |
+| AI SDK | OpenAI SDK (兼容 OpenAI / DeepSeek / SiliconFlow 等) | 6.45 |
+| 跨域 | cors | 2.8 |
+| 环境变量 | dotenv | 17.4 |
+| ID 生成 | uuid | 14.0 |
+| 存储 | JSON 文件系统 (原子写入 + 双层备份 .bak / .backups-v2) | — |
+| 测试 | Node.js 内置 test runner (--test) | — |
+| Lint | oxlint (server/.oxlintrc.json) | 1.73 |
+
+无数据库，数据存在 `server/data/` 下的 JSON 文件中。
+
+### Server 模块结构
+
+```
+server/
+├── index.js                 # 入口 (Express app 启动)
+├── routes/
+│   ├── learn.js             # 主路由 (40+ endpoints)
+│   ├── export.js            # 导出路由 (6 endpoints)
+│   ├── user-profile.js      # 用户画像路由
+│   └── middleware.js        # 共享中间件 (Provider / AgentDispatcher)
+├── engine/
+│   ├── learn-engine.js      # 核心引擎 (内容生成 / 交互教学 / 复习)
+│   ├── exam-engine.js       # 试卷引擎 (生成 / 评分 / 针对性练习)
+│   ├── learn-prompts.js     # AI Prompt 模板仓库
+│   ├── provider.js          # OpenAI 兼容 API 封装 (缓存感知)
+│   ├── adaptive-engine.js   # 自适应学习引擎 (数据飞轮闭环)
+│   ├── user-profile.js      # 用户画像引擎
+│   ├── fact-checker.js      # 事实核查引擎
+│   ├── export-engine.js     # 多格式导出引擎 (Anki/OPML/Notion/JSON/MD)
+│   ├── agent-dispatcher.js  # 多 Agent 调度器
+│   ├── cache-diagnostics.js # 缓存命中率诊断
+│   ├── learn-store.js       # 数据层 barrel 导出
+│   └── store/
+│       ├── storage.js       # 共享持久化层 (原子写入 / JSON 读写 / 索引)
+│       └── crud.js          # CRUD 操作 (Plan/Topic/Exam/Trash)
+└── scripts/
+    ├── clean-test-plans.js  # 清理测试数据
+    ├── clean-cache.js       # 清理缓存
+    └── clean-backups.js     # 清理备份
+```
+
+### Client 模块结构
+
+```
+client/src/
+├── main.jsx                 # 入口
+├── App.jsx                  # 路由 + 全局状态
+├── api.js                   # API 客户端
+├── components/
+│   ├── PlanList.jsx         # 学习计划列表
+│   ├── PlanView.jsx         # 学习计划详情
+│   ├── TopicDetail.jsx      # 知识点详情 (主组件, 含 6 种交互模式)
+│   ├── TopicDetailShared.jsx# 共享子组件 (ContentArea / QaMessages)
+│   ├── SettingsModal.jsx    # 设置面板
+│   ├── ExamPaperModal.jsx   # 试卷弹窗
+│   ├── KnowledgeGraphModal.jsx  # 知识图谱弹窗
+│   ├── MindMapModal.jsx     # 思维导图弹窗
+│   ├── MermaidDiagram.jsx   # Mermaid 图表渲染
+│   ├── RegenerateDialog.jsx # 重新生成对话框
+│   ├── ThemeSwitcher.jsx    # 主题切换
+│   └── ui/                  # shadcn/ui 组件 (12 个)
+├── pages/
+│   └── UserProfile.jsx      # 用户画像页面
+├── lib/
+│   ├── plan-context.jsx     # Plan 上下文
+│   ├── theme-context.jsx    # 主题上下文
+│   └── utils.js             # 工具函数
+├── utils/
+│   └── encoding.js          # 编码处理
+└── test/                    # 测试文件
+```
+
+## 交互教学模式 (7 种)
+
+| 模式 | 路由 | 说明 |
+|---|---|---|
+| Stepwise | `/interactive-start mode=stepwise` | AI 逐步讲解，每步暂停等待确认 |
+| Realtime | `/interactive-start mode=realtime` | AI 实时响应自由对话式教学 |
+| Scaffold | `/interactive-start mode=scaffold` | 支架式教学，逐步撤除支持 |
+| Feynman | `/interactive-start mode=feynman` | 学生讲解 → AI 分析薄弱点/误解 |
+| Stepwise Challenge | `/interactive-start mode=stepwise-challenge` | 逐步挑战模式，嵌入错误 |
+| Realtime Challenge | `/interactive-start mode=realtime-challenge` | 实时挑战模式 |
+| Challenge | `/interactive-start mode=challenge` | 通用挑战模式，训练批判性思维 |
