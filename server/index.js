@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import learnRouter from './routes/learn.js';
 import exportRouter from './routes/export.js';
 import assessmentRouter from './routes/assessment.js';
+import contentRouter from './routes/content.js';
 import userProfileRouter from './routes/user-profile.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,7 @@ app.use(express.json({ limit: '10mb' }));
 // API routes
 app.use('/api/learn', exportRouter);
 app.use('/api/learn', assessmentRouter);
+app.use('/api/learn', contentRouter);
 app.use('/api/learn', learnRouter);
 app.use('/api/user-profile', userProfileRouter);
 
