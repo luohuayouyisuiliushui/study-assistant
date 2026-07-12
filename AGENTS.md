@@ -42,7 +42,7 @@ type: `feat` / `fix` / `refactor` / `docs` / `chore`
 ## 项目架构
 
 ```
-study-assistant (monorepo, v1.6.2)
+study-assistant (monorepo, v1.7.0)
 ├── server/   Express 5 + OpenAI SDK  |  端口 3001
 ├── client/   React 19 + Vite 8      |  端口 5173 (dev)
 ```
@@ -54,9 +54,15 @@ study-assistant (monorepo, v1.6.2)
 server/engine/store/storage.js    ← 持久化基础设施 (writeAtomic, readJSON)
 server/engine/store/crud.js       ← CRUD 操作 (从 storage.js 导入)
 server/engine/learn-store.js      ← barrel 重导出 (所有上层通过它导入)
-server/engine/learn-engine.js     ← 核心引擎 (内容生成 + 交互教学)
+server/engine/learn-engine.js     ← 核心引擎 (内容生成 + 图像 + TTS)
 server/engine/exam-engine.js      ← 试卷引擎 (生成/评分/练习)
-server/routes/learn.js            ← 主路由 (40+ 端点)
+server/engine/interactive-teacher.js  ← 交互教学引擎 (7 种模式 + 错误检测)
+server/engine/learning-analyzer.js    ← 学习分析引擎 (分析/复习/测验/费曼)
+server/routes/learn.js            ← 主路由 (计划/知识点 CRUD + 分析)
+server/routes/content.js          ← 内容教学路由 (生成/交互/TTS/追问)
+server/routes/assessment.js       ← 评估路由 (考试/事实核查/自适应)
+server/routes/export.js           ← 导出路由 (Anki/OPML/Notion/JSON/MD)
+server/routes/middleware.js       ← 共享中间件 (getProvider, getDispatcher)
 ```
 
 **前端 shadcn/ui 是 copy-paste** — `client/src/components/ui/` 下的组件是手写的，不是 npm 包。不要用 `npx shadcn-ui add` 添加组件，直接复制 `*.jsx` 文件。
@@ -76,12 +82,16 @@ npm run pretest      # 清理测试数据 (必须先跑)
 npm test             # 全部测试 (server: node --test, client: vitest)
 
 # 单测
-node --test server/__tests__/crud-logic.test.js
+node --test server/__tests__/storage-logic.test.js
 npx vitest run client/src/test/PlanView.test.jsx
 
 # Lint
 npx oxlint                        # client (已配置 react + oxc 插件)
 cd server && npx oxlint           # server (已配置 no-unused-vars, no-undef)
+
+# 数据完整性
+cd server && npm run check:data       # 检查
+cd server && npm run check:data:fix   # 检查 + 自动修复
 ```
 
 **重要：** server 测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则涉及 AI 调用的测试会挂起超时。复制 `server/.env.example` 为 `server/.env` 并填入 Key。
@@ -118,3 +128,18 @@ AI 生成的 Detail 中 `## 与相关知识点的联系` 段落包含知识点�
 - 在 `server/index.js` 中用 `app.use('/api/learn', router)` 挂载
 - 共享中间件（getProvider, getDispatcher）在 `server/routes/middleware.js`
 - 新建引擎模块时，从 `learn-engine.js` 重导出以保持向后兼容
+
+### 安全约定
+
+- CORS 仅允许 localhost 来源（`server/index.js`）
+- Express 全局异常处理器统一返回 JSON 错误
+- API Key 优先级：`x-api-key` 请求头 > `req.body.apiKey` > 环境变量
+- 路由参数（数组、整数）必须校验类型和范围
+
+### 测试约定
+
+- 新增模块必须加测试：`server/__tests__/<module-name>.test.js` 或 `client/src/test/<Component>.test.jsx`
+- Server 纯逻辑测试用 `node --test`，不需要 API Key
+- Server AI 测试需 `OPENAI_API_KEY`，跳过用 `--test-skip-pattern`
+- Client 测试用 `vitest + @testing-library/react`，需要 Router 包裹时用 `MemoryRouter`
+- `setup.js` 提供 IntersectionObserver、matchMedia 等 jsdom mock
