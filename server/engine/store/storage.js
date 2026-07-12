@@ -136,6 +136,17 @@ function enqueueWrite(planId, fn) {
   return next;
 }
 
+// ─── Index write mutex (prevents TOCTOU race on plans.json) ───
+
+let _indexMutex = Promise.resolve();
+
+function _locked(fn) {
+  const prev = _indexMutex;
+  let release;
+  _indexMutex = new Promise(resolve => { release = resolve; });
+  return prev.then(() => fn()).finally(() => release());
+}
+
 // ─── JSON safe read (with encoding resilience + backup recovery) ───
 
 function readJSON(filePath) {
@@ -207,8 +218,10 @@ function rebuildIndex() {
       } catch {}
     }
     if (index.length > 0) {
-      writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
-      console.log(`[learn-store] 🔄 Rebuilt index from ${files.length} plan files → ${index.length} entries`);
+      _locked(() => {
+        writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
+        console.log(`[learn-store] 🔄 Rebuilt index from ${files.length} plan files → ${index.length} entries`);
+      });
     }
     return index;
   } catch (err) {
@@ -231,20 +244,24 @@ function readIndex() {
 }
 
 function writeIndex(index) {
-  writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
+  return _locked(() => {
+    writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
+  });
 }
 
 function updateIndex(planId, updates) {
-  let index = readIndex();
-  const seen = new Set();
-  index = index.filter(e => {
-    if (seen.has(e.id)) return false;
-    seen.add(e.id);
-    return true;
+  return _locked(() => {
+    let index = readIndex();
+    const seen = new Set();
+    index = index.filter(e => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+    const entry = index.find(e => e.id === planId);
+    if (entry) Object.assign(entry, updates);
+    writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
   });
-  const entry = index.find(e => e.id === planId);
-  if (entry) Object.assign(entry, updates);
-  writeIndex(index);
 }
 
 // ─── Paths ───
@@ -261,6 +278,25 @@ async function drainWriteQueue(planId) {
     try { await queue; } catch { /* ignore — deleting anyway */ }
   }
   writeQueues.delete(planId);
+}
+
+// ─── In-memory plan cache (TTL 5s, reduces disk reads for hot data) ───
+
+const _planCache = new Map();
+
+function getCachedPlan(planId, loader) {
+  const entry = _planCache.get(planId);
+  const now = Date.now();
+  if (entry && (now - entry.ts) < 5000) return entry.data;
+  const data = loader();
+  if (data !== null) {
+    _planCache.set(planId, { data, ts: now });
+  }
+  return data;
+}
+
+function invalidatePlanCache(planId) {
+  _planCache.delete(planId);
 }
 
 export {
@@ -280,4 +316,6 @@ export {
   writeIndex,
   updateIndex,
   planPath,
+  getCachedPlan,
+  invalidatePlanCache,
 };

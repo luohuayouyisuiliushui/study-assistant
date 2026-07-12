@@ -11,6 +11,7 @@ import {
   DATA, PLANS_INDEX, TRASH_DIR, TRASH_INDEX, TRASH_TTL_DAYS, BACKUP_DIR,
   writeAtomic, removePlanBackups, enqueueWrite, drainWriteQueue,
   readJSON, readIndex, rebuildIndex, writeIndex, updateIndex, planPath,
+  getCachedPlan, invalidatePlanCache,
 } from './storage.js';
 
 // ─── Public API ───
@@ -20,10 +21,10 @@ export function listPlans() {
 }
 
 export function getPlan(planId) {
-  return readJSON(planPath(planId));
+  return getCachedPlan(planId, () => readJSON(planPath(planId)));
 }
 
-export function createPlan(name) {
+export async function createPlan(name) {
   const id = uuidv4();
   const plan = {
     id,
@@ -34,11 +35,10 @@ export function createPlan(name) {
     phases: [],
     history: [],
   };
-  // Write plan file first, then index (if crash between, orphan file is harmless)
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();
   index.push({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: 0 });
-  writeIndex(index);
+  await writeIndex(index);
   return plan;
 }
 
@@ -1357,7 +1357,7 @@ export function buildLearningProfile(plan) {
  * @param {object} examData - { id, title, config, paper, questions }
  * @returns {object} Updated plan
  */
-export function addExamPaper(planId, examData) {
+export async function addExamPaper(planId, examData) {
   const plan = getPlan(planId);
   if (!plan) throw new Error('计划不存在');
 
@@ -1375,7 +1375,8 @@ export function addExamPaper(planId, examData) {
   plan.updatedAt = Date.now();
 
   writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  updateIndex(planId, { updatedAt: plan.updatedAt });
+  invalidatePlanCache(planId);
+  await updateIndex(planId, { updatedAt: plan.updatedAt });
   writeFlag(planId);
   return plan;
 }
@@ -1397,7 +1398,7 @@ export function getExamPapers(planId) {
  * @param {string} examId
  * @param {Array} results - Grading results array
  */
-export function updateExamResults(planId, examId, results) {
+export async function updateExamResults(planId, examId, results) {
   const plan = getPlan(planId);
   if (!plan) throw new Error('计划不存在');
   if (!plan.examPapers) throw new Error('该计划没有试卷');
@@ -1410,7 +1411,8 @@ export function updateExamResults(planId, examId, results) {
   plan.updatedAt = Date.now();
 
   writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  updateIndex(planId, { updatedAt: plan.updatedAt });
+  invalidatePlanCache(planId);
+  await updateIndex(planId, { updatedAt: plan.updatedAt });
   writeFlag(planId);
   return plan;
 }
@@ -1420,7 +1422,7 @@ export function updateExamResults(planId, examId, results) {
  * @param {string} planId
  * @param {string} examId
  */
-export function deleteExamPaper(planId, examId) {
+export async function deleteExamPaper(planId, examId) {
   const plan = getPlan(planId);
   if (!plan) throw new Error('计划不存在');
   if (!plan.examPapers) return;
@@ -1429,7 +1431,8 @@ export function deleteExamPaper(planId, examId) {
   plan.updatedAt = Date.now();
 
   writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  updateIndex(planId, { updatedAt: plan.updatedAt });
+  invalidatePlanCache(planId);
+  await updateIndex(planId, { updatedAt: plan.updatedAt });
 }
 
 /**

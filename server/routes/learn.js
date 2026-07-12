@@ -64,12 +64,12 @@ router.get('/plans', (req, res) => {
   res.json({ plans: store.listPlans() });
 });
 
-router.post('/plans', (req, res) => {
+router.post('/plans', async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '请输入学习计划名称' });
   }
-  const plan = store.createPlan(name.trim());
+  const plan = await store.createPlan(name.trim());
   res.json({ plan });
 });
 
