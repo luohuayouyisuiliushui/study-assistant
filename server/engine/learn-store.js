@@ -1,8 +1,8 @@
 /**
- * Data-layer — barrel re-export (v1.5.0 modular split).
+ * Data-layer — barrel re-export.
  *
- * Originally a 51 KB monolith. Internal helpers preserved in store/core.js
- * for reference. All functionality lives in store/crud.js.
+ * Persistence primitives live in store/storage.js.
+ * CRUD operations live in store/crud.js.
  */
 
 export {

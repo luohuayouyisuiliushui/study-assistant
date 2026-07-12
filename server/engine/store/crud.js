@@ -1,289 +1,17 @@
 /**
- * Data model & persistence for the learning assistant.
+ * CRUD operations for the learning assistant.
  *
- * Structure:
- *   data/learn/
- *     plans.json              — index of all plans
- *     plans/{planId}.json     — plan with topics + learning history
- *
- * Atomic writes: all file writes go through writeAtomic() which uses
- * temp-file + rename to prevent corruption on crash.
- *
- * Per-plan serialization: writes to the same plan are queued to prevent
- * read-modify-write races.
+ * Persistence primitives (writeAtomic, readJSON, index management) are in storage.js.
  */
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// crud.js lives in store/ subdirectory, need two levels up to reach server/
-const DATA = path.join(__dirname, '..', '..', 'data', 'learn');
-const PLANS_INDEX = path.join(DATA, 'plans.json');
-const TRASH_DIR = path.join(DATA, 'trash');
-const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
-const TRASH_TTL_DAYS = 30;
-const BACKUP_DIR = path.join(DATA, '.backups-v2');
-
-function ensureDir() {
-  fs.mkdirSync(path.join(DATA, 'plans'), { recursive: true });
-  fs.mkdirSync(TRASH_DIR, { recursive: true });
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-}
-ensureDir();
-
-// ── Startup cleanup: remove orphaned .tmp.* files from crashed processes ──
-function cleanupOrphanedTempFiles() {
-  const dirsToScan = [
-    path.join(DATA, 'plans'),
-    DATA, // also scan the learn/ root for user-profile.json.tmp.* etc.
-  ];
-  const now = Date.now();
-  const MIN_AGE_MS = 10_000; // Only remove files older than 10s (avoid race with concurrent process)
-
-  for (const dir of dirsToScan) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      const entries = fs.readdirSync(dir);
-      for (const entry of entries) {
-        if (!entry.includes('.tmp.')) continue;
-        const fullPath = path.join(dir, entry);
-        try {
-          const stat = fs.statSync(fullPath);
-          if (now - stat.mtimeMs >= MIN_AGE_MS) {
-            fs.unlinkSync(fullPath);
-            console.log(`[learn-store] 🧹 Cleaned orphaned temp file: ${fullPath}`);
-          }
-        } catch (cleanErr) {
-          // File may have been removed by another process or is locked
-          if (cleanErr.code !== 'ENOENT') {
-            console.warn(`[learn-store] Could not clean temp file ${fullPath}: ${cleanErr.message}`);
-          }
-        }
-      }
-    } catch (scanErr) {
-      // Directory may not exist or be inaccessible
-      if (scanErr.code !== 'ENOENT') {
-        console.warn(`[learn-store] Temp cleanup scan failed for ${dir}: ${scanErr.message}`);
-      }
-    }
-  }
-}
-cleanupOrphanedTempFiles();
-
-// ─── Atomic write ───
-
-function writeAtomic(filePath, data, { backup } = {}) {
-  const tmp = filePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmp, data, 'utf-8');
-  try {
-    fs.renameSync(tmp, filePath);
-  } catch (renameErr) {
-    // Windows EPERM / 跨设备链接失败 → 降级为复制+删除
-    try {
-      fs.copyFileSync(tmp, filePath);
-      fs.unlinkSync(tmp);  // 复制成功后删除临时文件
-    } catch (copyErr) {
-      // 若复制也失败，保留 tmp 文件并抛出错误，由上层重试
-      console.error(`Atomic write fallback failed for ${filePath}:`, copyErr);
-      throw new Error(`CRITICAL: Data write failed, temp file preserved at ${tmp}`);
-    }
-  }
-  if (backup) {
-    // 1. 同目录 .bak（快速恢复）
-    const bakPath = filePath + '.bak';
-    try {
-      if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
-      fs.copyFileSync(filePath, bakPath);
-    } catch (bakErr) {
-      console.warn(`[learn-store] .bak backup failed: ${bakPath}`, bakErr.message);
-    }
-    // 2. 独立备份目录 .backups-v2/（防止主目录误清）
-    try {
-      const planId = path.basename(filePath, '.json');
-      if (planId && planId.length > 0) {
-        const backupFile = path.join(BACKUP_DIR, planId + '.json');
-        if (fs.existsSync(backupFile)) fs.unlinkSync(backupFile);
-        fs.copyFileSync(filePath, backupFile);
-      }
-    } catch (v2Err) {
-      console.warn(`[learn-store] .backups-v2 backup failed: ${filePath}`, v2Err.message);
-    }
-  }
-}
-
-// ─── Backup cleanup helper ───
-
-/**
- * Remove a plan's backup files from both .bak and .backups-v2/ directories.
- * Called when permanently deleting or trashing a plan to prevent orphaned backups.
- */
-function removePlanBackups(planId) {
-  // 1. Remove .bak file from plans/ directory
-  try {
-    const bakPath = planPath(planId) + '.bak';
-    if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
-  } catch {}
-
-  // 2. Remove backup from .backups-v2/ directory
-  try {
-    const v2Backup = path.join(BACKUP_DIR, planId + '.json');
-    if (fs.existsSync(v2Backup)) fs.unlinkSync(v2Backup);
-  } catch {}
-}
-
-// ─── Per-plan write queue (serializes concurrent writes to same plan) ───
-
-const writeQueues = new Map(); // planId → Promise chain
-
-function enqueueWrite(planId, fn) {
-  // 僵尸防护：plan 文件已删除但 Map 条目还在，拒绝写入让 Promise 自然结束
-  if (!fs.existsSync(planPath(planId))) {
-    return Promise.reject(new Error(`Plan not found: ${planId}`));
-  }
-  if (!writeQueues.has(planId)) {
-    writeQueues.set(planId, Promise.resolve());
-  }
-  const prev = writeQueues.get(planId);
-  const next = prev.then(fn, fn);
-  writeQueues.set(planId, next);
-  // settle 后替换为新 Promise.resolve()，防止链无限增长
-  next.then(
-    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
-    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
-  );
-  return next;
-}
-
-// ─── JSON safe read (with encoding resilience) ───
-
-/**
- * Read a JSON file safely with fallback for GBK/ANSI-encoded files.
- * Node.js 'utf-8' strips BOM normally, but if a file was manually
- * saved in Windows ANSI (GBK), we try GBK as a fallback.
- */
-function readJSON(filePath) {
-  try {
-    if (!fs.existsSync(filePath)) return null;
-    let raw = fs.readFileSync(filePath, 'utf-8');
-    try {
-      return JSON.parse(raw);
-    } catch (parseErr) {
-      // If utf-8 parse fails, try raw bytes as GBK (Windows ANSI fallback)
-      console.warn(`[learn-store] UTF-8 parse failed for ${filePath}, trying GBK: ${parseErr.message}`);
-      try {
-        const rawBuf = fs.readFileSync(filePath);
-        return JSON.parse(new TextDecoder('gbk').decode(rawBuf));
-      } catch (gbkErr) {
-        console.warn(`[learn-store] GBK fallback also failed for ${filePath}: ${gbkErr.message}`);
-        throw parseErr; // re-throw original so outer catch can attempt backup recovery
-      }
-    }
-  } catch (err) {
-    console.warn(`[learn-store] JSON parse error: ${filePath}`, err.message);
-    // 尝试从 .bak 恢复
-    const bakPath = filePath + '.bak';
-    if (fs.existsSync(bakPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(bakPath, 'utf-8'));
-        console.warn(`[learn-store] Recovered from .bak: ${bakPath}`);
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-        return data;
-      } catch (bakErr) {
-        console.warn(`[learn-store] .bak also corrupt: ${bakPath}`, bakErr.message);
-      }
-    }
-    // 尝试从独立备份目录 .backups-v2/ 恢复
-    try {
-      const planId = path.basename(filePath, '.json');
-      const v2File = path.join(BACKUP_DIR, planId + '.json');
-      if (fs.existsSync(v2File)) {
-        const data = JSON.parse(fs.readFileSync(v2File, 'utf-8'));
-        console.warn(`[learn-store] Recovered from .backups-v2: ${v2File}`);
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-        return data;
-      }
-    } catch (v2Err) {
-      console.warn(`[learn-store] .backups-v2 recovery failed: ${filePath}`, v2Err.message);
-    }
-    return null;
-  }
-}
-
-// ─── Index ───
-
-function readIndex() {
-  const idx = readJSON(PLANS_INDEX);
-  if (idx && idx.length > 0) {
-    // 防御性去重：防止历史遗留的重复条目影响运行
-    const seen = new Set();
-    return idx.filter(e => {
-      if (seen.has(e.id)) return false;
-      seen.add(e.id);
-      return true;
-    });
-  }
-  // 索引为空或缺失 → 从 plans/ 重建
-  return rebuildIndex();
-}
-
-function rebuildIndex() {
-  try {
-    const plansDir = path.join(DATA, 'plans');
-    if (!fs.existsSync(plansDir)) return [];
-    const files = fs.readdirSync(plansDir).filter(f => f.endsWith('.json') && !f.endsWith('.bak') && !f.includes('.tmp.'));
-    if (files.length === 0) return [];
-    const index = [];
-    for (const f of files) {
-      try {
-        const plan = readJSON(path.join(plansDir, f));
-        if (plan && plan.id && plan.name) {
-          index.push({
-            id: plan.id,
-            name: plan.name,
-            createdAt: plan.createdAt || Date.now(),
-            updatedAt: plan.updatedAt || Date.now(),
-            topicCount: plan.topics?.length || 0,
-          });
-        }
-      } catch {}
-    }
-    if (index.length > 0) {
-      writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
-      console.log(`[learn-store] 🔄 Rebuilt index from ${files.length} plan files → ${index.length} entries`);
-    }
-    return index;
-  } catch (err) {
-    console.warn('[learn-store] Index rebuild failed:', err.message);
-    return [];
-  }
-}
-
-function writeIndex(index) {
-  writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
-}
-
-function updateIndex(planId, updates) {
-  let index = readIndex();
-  // 按 ID 去重：保留第一个匹配的条目，移除其余重复
-  const seen = new Set();
-  index = index.filter(e => {
-    if (seen.has(e.id)) return false;
-    seen.add(e.id);
-    return true;
-  });
-  const entry = index.find(e => e.id === planId);
-  if (entry) Object.assign(entry, updates);
-  writeIndex(index);
-}
-
-// ─── Paths ───
-
-function planPath(id) {
-  return path.join(DATA, 'plans', `${id}.json`);
-}
+import {
+  DATA, PLANS_INDEX, TRASH_DIR, TRASH_INDEX, TRASH_TTL_DAYS, BACKUP_DIR,
+  writeAtomic, removePlanBackups, enqueueWrite, drainWriteQueue,
+  readJSON, readIndex, rebuildIndex, writeIndex, updateIndex, planPath,
+} from './storage.js';
 
 // ─── Public API ───
 
@@ -325,12 +53,8 @@ export async function deletePlan(planId) {
  * Also cleans up any trash entry for the same plan ID.
  */
 export async function permanentlyDeletePlan(planId) {
-  // 先等待队列清空，再删除（和 trashPlan 保持一致）
-  const queue = writeQueues.get(planId);
-  if (queue) {
-    try { await queue; } catch { /* ignore — we're deleting anyway */ }
-  }
-  writeQueues.delete(planId);
+  // 先等待队列清空，再删除
+  await drainWriteQueue(planId);
 
   // Delete plan file from plans/
   const src = planPath(planId);
@@ -381,13 +105,8 @@ export async function deletePlansByIds(planIds) {
  * the data file is preserved even after the 30-day auto-cleanup.
  */
 export async function trashPlan(planId) {
-  // Drain pending writes before moving to trash — otherwise hasData
-  // check reads a stale file (writes are queued as promise microtasks).
-  const queue = writeQueues.get(planId);
-  if (queue) {
-    try { await queue; } catch { /* ignore queue errors — we're deleting anyway */ }
-  }
-  writeQueues.delete(planId);
+  // Drain pending writes before moving to trash
+  await drainWriteQueue(planId);
   const src = planPath(planId);
   if (!fs.existsSync(src)) {
     // Plan file may already be gone — just remove from index
@@ -641,6 +360,7 @@ function flattenTopics(phases, phasesById) {
         weakPoints: [],
         reviewGenerated: null,
         reviewUpdatedAt: null,
+        generationFeedback: [],
         prerequisites: [],
         relatedTopics: [],
       };
@@ -1297,6 +1017,7 @@ export function addTopics(planId, titles, options = {}) {
           weakPoints: [],
           reviewGenerated: null,
           reviewUpdatedAt: null,
+          generationFeedback: [],
           level: options.level || 1,
           parentId: options.parentId || null,
           prerequisites: [],

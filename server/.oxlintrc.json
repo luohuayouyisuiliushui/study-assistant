@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "plugins": ["oxc"],
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-undef": "error",
+    "no-shadow-restricted-names": "error",
+    "no-const-assign": "error",
+    "no-dupe-keys": "error"
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  }
+}
