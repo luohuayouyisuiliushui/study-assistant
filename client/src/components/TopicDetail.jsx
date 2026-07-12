@@ -1,12 +1,11 @@
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
 import { ArrowLeft, Download, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Search, Wrench, FileText, BarChart3, BookOpen, Play, Mic, X, Lightbulb, Target, Zap, Swords, Layers, Brain, CheckCircle, AlertCircle, List, ThumbsUp, ThumbsDown, Meh, MoreHorizontal } from 'lucide-react';
 import { Button } from '#/components/ui/button';
-import MermaidDiagram from './MermaidDiagram';
 import api from '../api';
+import RegenerateDialog from './RegenerateDialog';
+import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -18,46 +17,6 @@ const ERROR_TYPE_LABELS = {
   'symbol-slip': '符号/计算错误',
   procedural: '步骤缺失/顺序错误',
 };
-
-const markdownComponents = {
-  code({ className, children, ...props }) {
-    const isInline = !props?.node?.properties?.className && !className;
-    const code = String(children).replace(/\n$/, '');
-    if (className && className.includes('language-mermaid') && !isInline) {
-      return <MermaidDiagram code={code} />;
-    }
-    if (isInline) return <code {...props}>{children}</code>;
-    return <pre {...props}><code className={className}>{children}</code></pre>;
-  },
-};
-
-const ContentArea = memo(function ContentArea({ content }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{content}</ReactMarkdown>;
-});
-
-const QaMessages = memo(function QaMessages({ qaList }) {
-  return qaList.length === 0 ? (
-    <div className='text-center text-sm text-muted-foreground py-8'>暂无追问，在下方输入问题开始讨论</div>
-  ) : (
-    qaList.map((qa, i) => (
-      <div key={i} className='mb-4' data-round={i}>
-        <div className='flex justify-end mb-2'>
-          <div className='max-w-[75%] rounded-lg bg-primary/10 px-3 py-2 text-sm'>{qa.question}</div>
-        </div>
-        <div className='flex gap-2'>
-          <span className='text-lg shrink-0 mt-1'>🤖</span>
-          <div className='max-w-[75%] rounded-lg bg-muted px-3 py-2 text-sm'>
-            {qa.answer === '...' ? (
-              <span className='text-muted-foreground animate-pulse'>思考中...</span>
-            ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
-            )}
-          </div>
-        </div>
-      </div>
-    ))
-  );
-});
 
 function stripExerciseSection(detail) {
   if (!detail) return '';
@@ -107,6 +66,9 @@ function parseExercisesFromMarkdown(detail) {
 }
 
 export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlMode = searchParams.get('mode');
+  const urlReview = searchParams.get('review') === '1';
   const [qaInput, setQaInput] = useState('');
   const [qaList, setQaList] = useState([]);
   const [qaLoading, setQaLoading] = useState(false);
@@ -120,6 +82,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const hiddenDurationRef = useRef(0);
   const hiddenStartRef = useRef(null);
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
+  const headerSentinelRef = useRef(null);
+  const [headerStuck, setHeaderStuck] = useState(false);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
   const [revealErrors, setRevealErrors] = useState(null);
@@ -138,6 +102,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState(null);
+  const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
 
   const [interactiveMode, setInteractiveMode] = useState(null);
   const [interactiveSections, setInteractiveSections] = useState([]);
@@ -156,9 +121,10 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const fixedMenuRef = useRef(null);
 
   useEffect(() => {
-    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false); };
+    const handler = (e) => { if (!menuRef.current?.contains(e.target) && !fixedMenuRef.current?.contains(e.target)) setMenuOpen(false); };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
@@ -169,6 +135,9 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const [adaptiveData, setAdaptiveData] = useState(null);
   const [adaptiveLoading, setAdaptiveLoading] = useState(false);
+  const [feynmanInsightsOpen, setFeynmanInsightsOpen] = useState(true);
+  const [feynmanAnalyzing, setFeynmanAnalyzing] = useState(false);
+  const [feynmanHistoryOpen, setFeynmanHistoryOpen] = useState(false);
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -179,6 +148,58 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     return () => {
       if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch {} }
     };
+  }, []);
+
+  // Load previous session history for display (don't auto-enter interactive mode)
+  const [prevSessionData, setPrevSessionData] = useState(null);
+  useEffect(() => {
+    const session = topic?.interactiveSession;
+    if (!session || !session.transcript || session.transcript.length === 0) { setPrevSessionData(null); return; }
+    setPrevSessionData({ mode: session.mode, sections: session.transcript.map(e => ({ content: e.content || '' })), finished: !!session.finished });
+  }, [topic?.id]);
+
+  // Sync URL params with interactive mode and review mode
+  useEffect(() => {
+    if (urlMode && !interactiveMode) {
+      // URL has mode but state doesn't — restore from URL (e.g., page refresh)
+      setInteractiveMode(urlMode);
+      setInteractiveFinished(false);
+    } else if (!urlMode && interactiveMode) {
+      // State has mode but URL doesn't — user pressed back, exit mode
+      setInteractiveMode(null);
+      setInteractiveSections([]);
+      setInteractiveFinished(false);
+      setInteractiveInput('');
+      setInteractiveStateMachine(null);
+    }
+  }, [urlMode]);
+
+  useEffect(() => {
+    if (urlReview && !reviewMode) {
+      setReviewMode(true);
+      // If no review content yet, generate it
+      if (!reviewContent && !reviewLoading) {
+        setReviewLoading(true);
+        api.generateReview(plan.id, topic.id).then(d => {
+          setReviewContent(d.review);
+          api.getPlan(plan.id).then(fresh => onRefresh(fresh.plan));
+        }).catch(() => {}).finally(() => setReviewLoading(false));
+      }
+    } else if (!urlReview && reviewMode) {
+      setReviewMode(false);
+    }
+  }, [urlReview]);
+
+  // Sticky header: detect when sentinel scrolls out of view
+  useEffect(() => {
+    const sentinel = headerSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setHeaderStuck(!entry.isIntersecting),
+      { threshold: 0, rootMargin: '-1px 0px 0px 0px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -192,7 +213,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     let activeStart = Date.now();
     let isActive = true;
     let inactivityTimeout = null;
-    const INACTIVITY_THRESHOLD = 60000;
+    const INACTIVITY_THRESHOLD = 30000;
 
     const markActive = () => {
       if (!isActive) {
@@ -225,6 +246,12 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     };
     document.addEventListener('visibilitychange', onVisibility);
 
+    // Detect window blur (user switches to another window on any screen)
+    const onBlur = () => { if (isActive) { isActive = false; activeStart = Date.now(); } };
+    const onFocus = () => { if (!document.hidden) markActive(); };
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+
     const effectiveElapsed = () => {
       const totalMs = Date.now() - startTimeRef.current;
       let hiddenExtra = hiddenDurationRef.current;
@@ -246,6 +273,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       clearTimeout(inactivityTimeout);
       activityEvents.forEach(e => document.removeEventListener(e, markActive));
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
       if (hiddenStartRef.current) hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
       const elapsed = effectiveElapsed();
       const unreported = elapsed - lastReportedRef.current;
@@ -453,6 +482,17 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     api.generateDetail(plan.id, topic.id).catch(() => {});
   };
 
+  const handleRegenerate = async (reason) => {
+    setRegenerateDialogOpen(false);
+    const currentMode = interactiveMode || 'detail';
+    await api.submitFeedback(plan.id, topic.id, reason, currentMode).catch(() => {});
+    if (interactiveMode) {
+      handleRestartInteractive();
+    } else {
+      handleRetry();
+    }
+  };
+
   const handleDifficulty = async (level) => {
     if (difficultySaving) return;
     setDifficulty(level); setDifficultySaving(true);
@@ -491,8 +531,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   const handleToggleReview = async () => {
-    if (reviewContent) { setReviewMode(!reviewMode); return; }
-    setReviewLoading(true); setReviewMode(true);
+    if (reviewContent) { const next = !reviewMode; setReviewMode(next); if (next) { setSearchParams({ review: '1' }, { replace: false }); } else { setSearchParams({}, { replace: false }); } return; }
+    setReviewLoading(true); setReviewMode(true); setSearchParams({ review: '1' }, { replace: false });
     try {
       const d = await api.generateReview(plan.id, topic.id);
       setReviewContent(d.review);
@@ -546,6 +586,22 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const handleStartInteractive = async (mode) => {
     if (interactiveBusyRef.current) return;
+    setSearchParams({ mode }, { replace: false });
+
+    // Check if there's an existing session to resume
+    const existingSession = topic?.interactiveSession;
+    if (existingSession && existingSession.mode === mode && existingSession.transcript && existingSession.transcript.length > 0 && !existingSession.finished) {
+      // Resume existing session
+      interactiveBusyRef.current = true;
+      setInteractiveMode(mode); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(false);
+      const sections = existingSession.transcript.map(entry => ({ content: entry.content || '' }));
+      setInteractiveSections(sections);
+      if (existingSession.stateMachine) setInteractiveStateMachine(existingSession.stateMachine);
+      interactiveBusyRef.current = false;
+      return;
+    }
+
+    // Start new session
     interactiveBusyRef.current = true;
     setInteractiveMode(mode); setInteractiveSections([]); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(true);
     try {
@@ -587,8 +643,34 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const handleExitInteractive = () => {
     const wasFeynman = interactiveMode === 'feynman';
     const currentPlanId = plan?.id; const currentTopicId = topic?.id;
+    // Check if user actually explained something (more than just the AI's initial greeting)
+    const hasUserContent = interactiveSections.length > 1 || (interactiveSections.length === 1 && interactiveSections[0]?.content?.length > 200);
     setInteractiveMode(null); setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
-    if (wasFeynman && currentPlanId && currentTopicId) { api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => { if (insights && insights.summary) console.log('[Feynman] 分析完成:', insights.summary); }).catch(() => {}); }
+    setSearchParams({}, { replace: false });
+    if (wasFeynman && currentPlanId && currentTopicId && hasUserContent) {
+      setFeynmanAnalyzing(true);
+      api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => {
+        // Only update if the new analysis has real content (not an empty "no content" result)
+        if (insights && insights.summary && insights.strengths?.length > 0) {
+          setTopic(prev => prev ? { ...prev, feynmanInsights: insights } : prev);
+          setTimeout(() => {
+            const el = document.getElementById('feynman-insights-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 100);
+        }
+      }).catch(() => {}).finally(() => setFeynmanAnalyzing(false));
+    }
+  };
+
+  const handleRestartInteractive = async () => {
+    const currentPlanId = plan?.id; const currentTopicId = topic?.id;
+    const mode = interactiveMode;
+    if (!currentPlanId || !currentTopicId || !mode) return;
+    try { await api.clearInteractiveSession(currentPlanId, currentTopicId); } catch {}
+    // Clear old feynman insights if restarting feynman mode
+    if (mode === 'feynman') setTopic(prev => prev ? { ...prev, feynmanInsights: null } : prev);
+    setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
+    handleStartInteractive(mode);
   };
 
   const handleVoiceInput = () => {
@@ -611,7 +693,10 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   return (
     <div className='w-full max-w-4xl px-10 py-8 space-y-6'>
       <Helmet><title>study-assistant - {topic.title}</title></Helmet>
-      <div className='flex items-center flex-wrap gap-2'>
+
+      {/* Sentinel: original header position for IntersectionObserver */}
+      <div ref={headerSentinelRef} className={headerStuck ? 'h-0 overflow-hidden' : ''}>
+        <div className='flex items-center flex-wrap gap-2'>
         <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
         <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
         {generating && <span className='inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full'><RotateCcw className='h-3 w-3 animate-spin' />生成中...</span>}
@@ -682,8 +767,81 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             </div>
           )}
         </div>
+        </div>
       </div>
 
+      {/* Fixed toolbar clone - visible when original header scrolls out of view */}
+      {headerStuck && (
+        <div className='fixed top-0 left-0 right-0 z-50 bg-background border-b border-border/50 shadow-md'>
+          <div className='w-full max-w-4xl mx-auto px-10 py-2 flex items-center flex-wrap gap-2'>
+            <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
+            <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
+            {localDetail && !error && !generating && topic.done === false && (
+              <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
+                {revealLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <CheckCheck className='h-3.5 w-3.5 mr-1' />}
+                {revealLoading ? '检查中...' : '学完了'}
+              </Button>
+            )}
+            {localDetail && !error && !generating && topic.done && (
+              <Button size='sm' className='bg-indigo-500 hover:opacity-90 text-white' onClick={handleToggleReview} title='复习模式'>
+                {reviewLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <RotateCcw className='h-3.5 w-3.5 mr-1' />}
+                {reviewMode ? '返回讲解' : '复习'}
+              </Button>
+            )}
+            {interactiveMode && (
+              <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white' onClick={handleExitInteractive}>
+                <X className='h-3.5 w-3.5 mr-1' />退出互动
+              </Button>
+            )}
+            <div className='relative' ref={fixedMenuRef}>
+              <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+                <MoreHorizontal className='h-4 w-4' />
+              </Button>
+              {menuOpen && (
+                <div className='absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-popover p-1 shadow-md'>
+                  {localDetail && !error && !generating && (
+                    <>
+                      <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mb-1'>导出</div>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExport(); setMenuOpen(false); }}>Markdown (.md)</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportHtml(); setMenuOpen(false); }}>HTML (.html)</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('anki'); setMenuOpen(false); }}>Anki CSV (.csv)</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('opml'); setMenuOpen(false); }}>OPML 大纲 (.opml)</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('json'); setMenuOpen(false); }}>结构化 JSON</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('notes'); setMenuOpen(false); }}>学习笔记 (.md)</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleExportFormat('bundle'); setMenuOpen(false); }}>计划数据包 (JSON)</button>
+                    </>
+                  )}
+                  {!generating && localDetail && !error && !interactiveMode && (
+                    <>
+                      <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mt-2 mb-1'>教学模式</div>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('stepwise'); setMenuOpen(false); }}>分段讲解</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('realtime'); setMenuOpen(false); }}>实时互动</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('feynman'); setMenuOpen(false); }}>费曼学习法</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('challenge'); setMenuOpen(false); }}>挑战模式</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('stepwise-challenge'); setMenuOpen(false); }}>分段挑战</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('realtime-challenge'); setMenuOpen(false); }}>实时挑战</button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleStartInteractive('scaffold'); setMenuOpen(false); }}>支架教学</button>
+                    </>
+                  )}
+                  {!generating && (localDetail && !error) && (
+                    <>
+                      <div className='px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-b border-border mt-2 mb-1'>分析工具</div>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleFactCheck(); setMenuOpen(false); }} disabled={factCheckLoading}>
+                        <Search className='h-3.5 w-3.5' />事实核查
+                      </button>
+                      <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleAdaptiveAnalysis(); setMenuOpen(false); }} disabled={adaptiveLoading}>
+                        <BarChart3 className='h-3.5 w-3.5' />自适应分析
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className='mt-6 space-y-6'>
       <div className='space-y-4'>
         {!generating && (prerequisites.length > 0 || childrenTopics.length > 0 || nextTopics.length > 0 || relatedTopics.length > 0) && (
           <div className='flex flex-wrap gap-2 text-xs text-muted-foreground'>
@@ -777,6 +935,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           </div>
         )}
 
+        {!error && !generating && localDetail && localDetail.length < 200 && topic.done === false && (
+          <div className='flex flex-col items-center gap-3 py-8'>
+            <p className='text-sm text-muted-foreground'>讲解内容似乎不完整</p>
+            <Button variant='outline' size='sm' onClick={handleRetry}>重新生成</Button>
+          </div>
+        )}
+
         {interactiveMode && (
           <div className='space-y-5'>
             <div className='flex items-center gap-2 text-sm'>
@@ -785,6 +950,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </span>
               {interactiveLoading && <span className='text-xs text-muted-foreground animate-pulse'>导师正在思考...</span>}
               {interactiveFinished && <span className='text-xs text-green-600'>讲解完成</span>}
+              {!interactiveLoading && interactiveSections.length > 0 && (
+                <Button variant='ghost' size='sm' className='text-xs h-6 px-2' onClick={() => setRegenerateDialogOpen(true)} title='反馈问题并重新开始'>
+                  <RotateCcw className='h-3 w-3 mr-1' />重新开始
+                </Button>
+              )}
             </div>
 
             {(interactiveMode === 'stepwise' || interactiveMode === 'stepwise-challenge') && interactiveStateMachine && (
@@ -881,7 +1051,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           </div>
         )}
 
-        {localDetail && !error && !interactiveMode && (
+        {localDetail && !error && !interactiveMode && !reviewMode && (
           <div className='flex flex-col' style={{ gap: '144px' }}>
             {topic.imageUrl ? (
             <div className='rounded-lg bg-muted/20 overflow-hidden'>
@@ -903,6 +1073,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                 <ContentArea content={stripExerciseSection(localDetail)} />
               </div>
             </div>
+            {!generating && localDetail && (
+              <div className='flex justify-end'>
+                <Button variant='ghost' size='sm' className='text-xs text-muted-foreground hover:text-foreground' onClick={() => setRegenerateDialogOpen(true)}>
+                  <RotateCcw className='h-3 w-3 mr-1' />重新生成
+                </Button>
+              </div>
+            )}
             {generating && <div className='flex items-center gap-1.5 text-xs text-muted-foreground'><RotateCcw className='h-3 w-3 animate-spin' />继续生成中...</div>}
 
             <div className='rounded-lg bg-muted/20'>
@@ -927,7 +1104,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                   ))}
                 </div>
               )}
-              <div className='max-h-80 overflow-y-auto p-4' ref={chatPanelRef}>
+              <div className='max-h-80 overflow-y-auto p-4 mx-auto max-w-4xl' ref={chatPanelRef}>
                 <QaMessages qaList={qaList} />
               </div>
               <div className='p-4'>
@@ -939,18 +1116,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                 </form>
               </div>
             </div>
-
-            {!generating && reviewMode && reviewContent && !reviewLoading && (
-              <div className='pt-4'>
-                <ContentArea content={reviewContent} />
-              </div>
-            )}
-            {reviewLoading && (
-              <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-                <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
-                <span>AI 正在生成复习内容，针对你的薄弱点进行巩固...</span>
-              </div>
-            )}
 
             {!generating && !reviewMode && exercises.length > 0 && !submittedExercises && (
               <div className='pt-4 space-y-6'>
@@ -1000,29 +1165,98 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </div>
             )}
 
-            {topic?.feynmanInsights && topic.feynmanInsights.summary && (
-              <div className='pt-4 space-y-3'>
-                <h3 className='text-sm font-medium'>费曼教学评估</h3>
-                <p className='text-sm'>{topic.feynmanInsights.teachingQuality === 'excellent' ? '优秀，可以直接用' : topic.feynmanInsights.teachingQuality === 'good' ? '良好，稍有不足' : topic.feynmanInsights.teachingQuality === 'fair' ? '一般，有不少模糊处' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '需要大改' : '未评估'}</p>
-                <p className='text-sm text-muted-foreground'>{topic.feynmanInsights.summary}</p>
-                {topic.feynmanInsights.strengths?.length > 0 && (
-                  <div><h4 className='text-xs font-medium text-green-600 mb-1'>讲得好的地方</h4><ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul></div>
+            {feynmanAnalyzing && (!topic?.feynmanInsights || !topic.feynmanInsights.summary) && (
+              <div id='feynman-insights-section' className='pt-4 flex items-center gap-2 text-sm text-muted-foreground'>
+                <div className='animate-spin rounded-full h-4 w-4 border-2 border-purple-500 border-t-transparent' />
+                <span>AI 正在分析你的费曼讲解...</span>
+              </div>
+            )}
+
+            {topic?.feynmanInsights && topic.feynmanInsights.summary && topic.feynmanInsights.strengths?.length > 0 ? (
+              <div id='feynman-insights-section' className='pt-4'>
+                <button onClick={() => setFeynmanInsightsOpen(!feynmanInsightsOpen)} className='flex items-center gap-2 w-full text-left'>
+                  <Brain className='h-4 w-4 text-purple-500' />
+                  <h3 className='text-sm font-medium'>费曼教学评估报告</h3>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    topic.feynmanInsights.teachingQuality === 'excellent' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' :
+                    topic.feynmanInsights.teachingQuality === 'good' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' :
+                    topic.feynmanInsights.teachingQuality === 'fair' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
+                    'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                  }`}>
+                    {topic.feynmanInsights.teachingQuality === 'excellent' ? '优秀' : topic.feynmanInsights.teachingQuality === 'good' ? '良好' : topic.feynmanInsights.teachingQuality === 'fair' ? '一般' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '需改进' : '未评估'}
+                  </span>
+                  {feynmanInsightsOpen ? <ChevronDown className='h-4 w-4 text-muted-foreground' /> : <ChevronRight className='h-4 w-4 text-muted-foreground' />}
+                </button>
+                {feynmanInsightsOpen && (
+                  <div className='mt-3 space-y-4 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20 p-4'>
+                    <p className='text-sm text-muted-foreground'>{topic.feynmanInsights.summary}</p>
+                    {topic.feynmanInsights.strengths?.length > 0 && (
+                      <div className='space-y-1'>
+                        <h4 className='text-xs font-medium text-green-600 flex items-center gap-1'><CheckCircle className='h-3 w-3' />讲得好的地方</h4>
+                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                      </div>
+                    )}
+                    {topic.feynmanInsights.gaps?.length > 0 && (
+                      <div className='space-y-1'>
+                        <h4 className='text-xs font-medium text-orange-600 flex items-center gap-1'><AlertTriangle className='h-3 w-3' />教材遗漏的重要内容</h4>
+                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                      </div>
+                    )}
+                    {topic.feynmanInsights.lingeringQuestions?.length > 0 && (
+                      <div className='space-y-2'>
+                        <h4 className='text-xs font-medium flex items-center gap-1'><Lightbulb className='h-3 w-3' />学生听完后还会问的问题</h4>
+                        <p className='text-xs text-muted-foreground'>试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
+                        <div className='space-y-2'>{topic.feynmanInsights.lingeringQuestions.map((q, i) => (
+                          <div key={i} className='rounded-md bg-background/80 border p-3 text-sm space-y-1'>
+                            <div>❓ {q.question}</div>
+                            {q.whyThisMatters && <div className='text-xs text-muted-foreground'>为什么重要：{q.whyThisMatters}</div>}
+                            {q.relatedTopic && <div className='text-xs text-muted-foreground'>关联：{q.relatedTopic}</div>}
+                          </div>
+                        ))}</div>
+                      </div>
+                    )}
+                    {topic.feynmanInsights.sparklingExplanations?.length > 0 && (
+                      <div className='space-y-2'>
+                        <h4 className='text-xs font-medium flex items-center gap-1'><Sparkles className='h-3 w-3' />可以直接当作教材的精彩讲解</h4>
+                        {topic.feynmanInsights.sparklingExplanations.map((note, i) => (
+                          <blockquote key={i} className='border-l-2 border-purple-400 pl-3 text-sm text-muted-foreground italic bg-background/60 rounded-r p-2'>{note.content}</blockquote>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
-                {topic.feynmanInsights.gaps?.length > 0 && (
-                  <div><h4 className='text-xs font-medium text-orange-600 mb-1'>教材遗漏的重要内容</h4><ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul></div>
-                )}
-                {topic.feynmanInsights.lingeringQuestions?.length > 0 && (
-                  <div><h4 className='text-xs font-medium mb-1'>学生听完后还会问的问题</h4><p className='text-xs text-muted-foreground mb-2'>试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
-                  <div className='space-y-2'>{topic.feynmanInsights.lingeringQuestions.map((q, i) => (
-                    <div key={i} className='rounded-md bg-muted/20 p-3 text-sm space-y-1'>
-                      <div>❓ {q.question}</div>
-                      {q.whyThisMatters && <div className='text-xs text-muted-foreground'>为什么重要：{q.whyThisMatters}</div>}
-                      {q.relatedTopic && <div className='text-xs text-muted-foreground'>关联：{q.relatedTopic}</div>}
-                    </div>
-                  ))}</div></div>
-                )}
-                {topic.feynmanInsights.sparklingExplanations?.length > 0 && (
-                  <div><h4 className='text-xs font-medium mb-1'>可以直接当作教材的精彩讲解</h4>{topic.feynmanInsights.sparklingExplanations.map((note, i) => <blockquote key={i} className='border-l-2 border-primary pl-3 text-sm text-muted-foreground italic'>{note.content}</blockquote>)}</div>
+              </div>
+            ) : null}
+
+            {topic?.feynmanHistory && topic.feynmanHistory.length > 0 && (
+              <div className='pt-2'>
+                <button onClick={() => setFeynmanHistoryOpen(!feynmanHistoryOpen)} className='flex items-center gap-2 w-full text-left text-sm text-muted-foreground hover:text-foreground transition-colors'>
+                  <List className='h-3.5 w-3.5' />
+                  <span>历史记录（{topic.feynmanHistory.length} 次）</span>
+                  {feynmanHistoryOpen ? <ChevronDown className='h-3.5 w-3.5 ml-auto' /> : <ChevronRight className='h-3.5 w-3.5 ml-auto' />}
+                </button>
+                {feynmanHistoryOpen && (
+                  <div className='mt-2 space-y-2'>
+                    {topic.feynmanHistory.slice().reverse().map((entry, i) => (
+                      <div key={i} className='rounded-md border p-3 text-sm space-y-1'>
+                        <div className='flex items-center justify-between'>
+                          <span className='text-xs text-muted-foreground'>{new Date(entry.timestamp).toLocaleString('zh-CN')}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            entry.insights?.teachingQuality === 'excellent' ? 'bg-green-100 text-green-700' :
+                            entry.insights?.teachingQuality === 'good' ? 'bg-blue-100 text-blue-700' :
+                            entry.insights?.teachingQuality === 'fair' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {entry.insights?.teachingQuality === 'excellent' ? '优秀' : entry.insights?.teachingQuality === 'good' ? '良好' : entry.insights?.teachingQuality === 'fair' ? '一般' : '需改进'}
+                          </span>
+                        </div>
+                        <p className='text-muted-foreground text-xs'>{entry.insights?.summary}</p>
+                        {entry.insights?.strengths?.length > 0 && (
+                          <p className='text-xs'><span className='text-green-600'>亮点：</span>{entry.insights.strengths[0]}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
@@ -1125,6 +1359,26 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           </div>
         )}
       </div>
+
+      {/* Review mode content — rendered outside the main content block so it's visible when reviewMode=true */}
+      {reviewMode && (
+        <div className='px-8 pt-4'>
+          {reviewLoading && (
+            <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+              <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
+              <span>AI 正在生成复习内容，针对你的薄弱点进行巩固...</span>
+            </div>
+          )}
+          {!generating && reviewContent && !reviewLoading && (
+            <div>
+              <ContentArea content={reviewContent} />
+            </div>
+          )}
+        </div>
+      )}
+      </div>
+
+      <RegenerateDialog open={regenerateDialogOpen} onClose={() => setRegenerateDialogOpen(false)} onSubmit={handleRegenerate} />
     </div>
   );
 }
