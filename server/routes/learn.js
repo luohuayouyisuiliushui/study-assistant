@@ -1,46 +1,12 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage, answerFollowUp, answerAnalysisFollowUp, createProviderFromConfig, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, textToSpeech, streamInteractiveStart, streamInteractiveContinue, analyzeCoreTopics } from '../engine/learn-engine.js';
+import { answerFollowUp, answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
 import { AdaptivePromptInjector, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
-import AgentDispatcher from '../engine/agent-dispatcher.js';
+import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
 
 const router = Router();
-
-// ─── Middleware: get or create Provider instance ───
-
-function getProvider(req) {
-  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
-  const baseURL = req.headers['x-api-base'] || req.body?.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-  const model = req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  return createProviderFromConfig(apiKey, baseURL, model);
-}
-
-function getModel(req) {
-  return req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-}
-
-// ─── Agent Dispatcher (opt-in via x-use-agent-dispatch header or body.useAgentDispatch) ───
-
-function getDispatcher(req) {
-  const apiKey = req.headers['x-api-key'] || req.body?.apiKey || process.env.OPENAI_API_KEY;
-  const baseURL = req.headers['x-api-base'] || req.body?.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-  const model = req.headers['x-api-model'] || req.body?.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  return new AgentDispatcher({ apiKey, baseURL, defaultModel: model });
-}
-
-/**
- * Check if the request wants agent dispatch (opt-in).
- * Enable by setting header: x-use-agent-dispatch: true
- * or body: { useAgentDispatch: true }
- */
-function wantsAgentDispatch(req) {
-  return (
-    req.headers['x-use-agent-dispatch'] === 'true' ||
-    (req.body && req.body.useAgentDispatch === true)
-  );
-}
 
 // ─── Test Connection ───
 
@@ -198,17 +164,18 @@ router.post('/plans/:id/topics', async (req, res) => {
     const plan = await store.addTopics(req.params.id, titles.map(t => t.trim()).filter(Boolean));
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 router.put('/plans/:id/topics/reorder', async (req, res) => {
   const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds)) return res.status(400).json({ error: 'orderedIds 必须是数组' });
   try {
     const plan = await store.reorderTopics(req.params.id, orderedIds);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -217,7 +184,7 @@ router.delete('/plans/:planId/topics/:topicId', async (req, res) => {
     const plan = await store.removeTopic(req.params.planId, req.params.topicId);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -227,7 +194,7 @@ router.put('/plans/:planId/topics/:topicId', async (req, res) => {
     const plan = await store.updateTopic(req.params.planId, req.params.topicId, { done, difficulty });
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -244,7 +211,7 @@ router.post('/plans/:planId/topics/:topicId/time', async (req, res) => {
     const plan = await store.updateTopicTime(req.params.planId, req.params.topicId, seconds);
     res.json({ plan });
   } catch (err) {
-    res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -555,6 +522,7 @@ router.post('/plans/:planId/review/:topicId', async (req, res) => {
     const exercises = store.parseExercisesFromDetail(review);
     res.json({ review, exercises });
   } catch (err) {
+  console.error('[review]', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -612,6 +580,7 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
 
     res.json({ weakPoints: results });
   } catch (err) {
+  console.error('[weak-points]', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -26,7 +26,19 @@ const IMAGES_DIR = path.join(__dirname, 'data', 'images');
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
 // Middleware
-app.use(cors());
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api')) {
+      console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`);
+    }
+  });
+  next();
+});
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // API routes
@@ -47,6 +59,13 @@ app.get('/{*splat}', (req, res) => {
   if (!req.path.startsWith('/api')) {
     res.sendFile(path.join(clientDist, 'index.html'));
   }
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(`[unhandled] ${req.method} ${req.path}:`, err.stack || err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err.message || '服务器内部错误' });
 });
 
 app.listen(PORT, (err) => {

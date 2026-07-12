@@ -165,7 +165,7 @@ router.post('/plans/:planId/exam/:examId/practice', async (req, res) => {
   const plan = store.getPlan(req.params.planId);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
-  const count = req.body?.count || 5;
+  const count = Math.max(1, Math.min(20, parseInt(req.body?.count) || 5));
   try {
     const provider = getProvider(req);
     const questions = await generateExamPractice(provider, plan, req.params.examId, count, getModel(req));

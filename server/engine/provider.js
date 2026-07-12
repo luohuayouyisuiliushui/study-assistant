@@ -36,6 +36,8 @@ import OpenAI from 'openai';
 
 // ─── Constants ───
 
+const DEBUG = process.env.DEBUG_CACHE === 'true' || process.env.NODE_ENV !== 'production';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = path.join(__dirname, '..', 'cache');
 
@@ -962,7 +964,7 @@ export class Provider {
     // We just mark them as needing warm — the first actual call will warm.
     // This avoids making API calls during construction.
     if (this._debugCache) {
-      console.log('[provider] Disk cache ready: ' + _diskCache.stats.entries + ' known prefixes');
+      if (DEBUG) console.log('[provider] Disk cache ready: ' + _diskCache.stats.entries + ' known prefixes');
     }
   }
 
@@ -998,7 +1000,7 @@ export class Provider {
       this.diagnostics.warmedPrefixes++;
 
       if (this._debugCache) {
-        console.log('[provider] ✅ Cache warmed for prefix: ' + shortId(prefixHash));
+        if (DEBUG) console.log('[provider] ✅ Cache warmed for prefix: ' + shortId(prefixHash));
       }
     } catch (err) {
       if (this._debugCache) {
