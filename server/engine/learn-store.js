@@ -6,7 +6,8 @@
  */
 
 export {
-  listPlans, getPlan, createPlan, createPlanWithPhases,
+  listPlans, scanStoredPlans, pruneMissingPlanIndexEntries,
+  getPlan, createPlan, createPlanWithPhases,
   deletePlan, permanentlyDeletePlan, deletePlansByIds,
   trashPlan, listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
   getTopicChildren, getTopicPrerequisites, getTopicDescendants,

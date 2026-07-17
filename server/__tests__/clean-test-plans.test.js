@@ -25,12 +25,14 @@ function fakeStore(plans, {
   indexEntries,
   loadErrors = new Map(),
   deleteErrors = new Map(),
+  storedPlans,
+  scanErrors = [],
 } = {}) {
   const records = new Map(plans.map(plan => [plan.id, plan]));
   const index = indexEntries ?? plans.map(plan => ({ id: plan.id, name: plan.name }));
   const deleteCalls = [];
 
-  return {
+  const storeApi = {
     deleteCalls,
     listPlans() {
       return index.map(entry => ({ ...entry }));
@@ -48,6 +50,26 @@ function fakeStore(plans, {
       }
     },
   };
+
+  if (storedPlans) {
+    storeApi.scanStoredPlans = () => ({ plans: storedPlans, errors: scanErrors });
+    storeApi.pruneMissingPlanIndexEntries = async (ids) => {
+      const idSet = new Set(ids);
+      const removed = [];
+      for (let i = index.length - 1; i >= 0; i--) {
+        const entry = index[i];
+        if (idSet.has(entry?.id) && !records.has(entry.id)) {
+          removed.push(...index.splice(i, 1));
+        }
+      }
+      return {
+        removed,
+        retained: ids.filter(id => !removed.some(entry => entry.id === id)),
+      };
+    };
+  }
+
+  return storeApi;
 }
 
 describe('clean-test-plans classification', () => {
@@ -55,6 +77,9 @@ describe('clean-test-plans classification', () => {
     assert.ok(DEFAULT_LEGACY_PATTERNS.includes('engine-test-'));
     assert.equal(looksLikeLegacyTestName('engine-test-plan'), true);
     assert.equal(looksLikeLegacyTestName('feature_test'), true);
+    assert.equal(looksLikeLegacyTestName('analysis-fu-empty'), true);
+    assert.equal(looksLikeLegacyTestName('quiz-malformed'), true);
+    assert.equal(looksLikeLegacyTestName('画像生成测试'), true);
     assert.equal(looksLikeLegacyTestName('Software Test Fundamentals'), false);
 
     assert.deepEqual(
@@ -190,6 +215,59 @@ describe('cleanTestPlans', () => {
     assert.equal(result.candidateCount, 1);
     assert.equal(result.count, 0);
     assert.deepEqual(storeApi.deleteCalls, []);
+  });
+
+  it('cleans stale index entries and discovers marked orphan plan files', async () => {
+    const storedPlans = [
+      markedPlan('orphan-marker', 'orphan marker fixture'),
+      { id: 'real', name: 'Real course', topics: [{ detail: 'lesson' }], history: [] },
+    ];
+    const storeApi = fakeStore(storedPlans, {
+      storedPlans,
+      indexEntries: [
+        { id: 'stale', name: 'old missing fixture' },
+        { id: 'real', name: 'Real course' },
+      ],
+    });
+
+    const result = await cleanTestPlans({ storeApi });
+
+    assert.equal(result.candidateCount, 2);
+    assert.equal(result.count, 2);
+    assert.ok(result.deleted.some(item => item.id === 'stale' && item.source === 'stale-index'));
+    assert.ok(result.deleted.some(item => item.id === 'orphan-marker' && item.orphaned === true));
+    assert.deepEqual(storeApi.deleteCalls, ['orphan-marker']);
+    assert.deepEqual(storeApi.listPlans().map(item => item.id), ['real']);
+  });
+
+  it('reports stored-plan scan errors without pruning unreadable entries', async () => {
+    const storeApi = fakeStore([], {
+      storedPlans: [],
+      indexEntries: [{ id: 'unreadable', name: 'Unreadable course' }],
+      scanErrors: [{ id: 'unreadable', message: 'Plan file could not be read' }],
+    });
+
+    const result = await cleanTestPlans({ storeApi });
+
+    assert.equal(result.candidateCount, 0);
+    assert.equal(result.count, 0);
+    assert.ok(result.errors.some(item => item.stage === 'scan' && item.id === 'unreadable'));
+    assert.deepEqual(storeApi.listPlans().map(item => item.id), ['unreadable']);
+  });
+
+  it('does not prune the index when the stored-plan directory scan is incomplete', async () => {
+    const storeApi = fakeStore([], {
+      storedPlans: [],
+      indexEntries: [{ id: 'possibly-present', name: 'Possibly present course' }],
+      scanErrors: [{ id: null, message: 'Cannot scan plan directory' }],
+    });
+
+    const result = await cleanTestPlans({ storeApi });
+
+    assert.equal(result.candidateCount, 0);
+    assert.ok(result.errors.some(item => item.stage === 'scan' && item.id === null));
+    assert.ok(result.skipped.some(item => item.id === 'possibly-present'));
+    assert.deepEqual(storeApi.listPlans().map(item => item.id), ['possibly-present']);
   });
 });
 

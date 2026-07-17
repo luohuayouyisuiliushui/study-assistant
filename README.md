@@ -120,12 +120,12 @@ cd server && npm test
 ### 清理测试数据
 
 ```bash
-npm run clean:testdata                 # 仅删除带显式测试标记的计划
+npm run clean:testdata                 # 清理失效索引，并删除带显式测试标记的计划
 npm run clean:testdata:legacy          # 预览旧版名称规则命中的计划，不删除
 npm run clean:testdata:legacy:confirm  # 删除无学习数据的旧版测试计划
 ```
 
-旧版名称清理会保护已有讲解、学习记录、练习/考试数据以及较大的知识点列表。
+清理脚本也会发现未写入索引的测试计划文件。旧版名称清理会保护已有讲解、学习记录、练习/考试数据以及较大的知识点列表。
 
 ### API 端点
 

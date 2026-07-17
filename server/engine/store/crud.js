@@ -21,6 +21,62 @@ export function listPlans() {
   return readIndex().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
+/**
+ * Scan every persisted plan file, including files missing from plans.json.
+ * Cleanup and integrity tooling use this instead of reaching into data paths.
+ */
+export function scanStoredPlans() {
+  const plans = [];
+  const errors = [];
+  const plansDir = path.join(DATA, 'plans');
+
+  let files;
+  try {
+    files = fs.readdirSync(plansDir).filter(file => file.endsWith('.json'));
+  } catch (error) {
+    return { plans, errors: [{ id: null, message: error.message }] };
+  }
+
+  for (const file of files) {
+    const fileId = path.basename(file, '.json');
+    const plan = readJSON(path.join(plansDir, file));
+    if (!plan || typeof plan !== 'object') {
+      errors.push({ id: fileId, message: 'Plan file could not be read' });
+      continue;
+    }
+    if (plan.id !== fileId) {
+      errors.push({ id: fileId, message: `Plan file contains mismatched id: ${plan.id ?? 'missing'}` });
+      continue;
+    }
+    plans.push(plan);
+  }
+
+  return { plans, errors };
+}
+
+/**
+ * Remove index entries only when their corresponding plan file is absent.
+ * Existing (including unreadable) files are never deleted by this operation.
+ */
+export async function pruneMissingPlanIndexEntries(planIds) {
+  const requestedIds = new Set(
+    (Array.isArray(planIds) ? planIds : []).filter(id => typeof id === 'string' && id.length > 0)
+  );
+  const missingIds = new Set([...requestedIds].filter(id => !fs.existsSync(planPath(id))));
+  const index = readIndex();
+  const removed = index.filter(entry => missingIds.has(entry.id));
+
+  if (removed.length > 0) {
+    await writeIndex(index.filter(entry => !missingIds.has(entry.id)));
+    for (const entry of removed) invalidatePlanCache(entry.id);
+  }
+
+  return {
+    removed,
+    retained: [...requestedIds].filter(id => !removed.some(entry => entry.id === id)),
+  };
+}
+
 export function getPlan(planId) {
   return getCachedPlan(planId, () => readJSON(planPath(planId)));
 }

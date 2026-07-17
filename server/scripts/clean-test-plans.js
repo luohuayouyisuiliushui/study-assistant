@@ -15,11 +15,20 @@ export const DEFAULT_LEGACY_PATTERNS = Object.freeze([
   'time-edge-test',
   'empty-topics-test',
   'core20-',
+  'analysis-',
+  'decompose-',
+  'empty-analysis',
   'feynman-',
   'scaffold-',
   'mode-',
+  'quiz-',
+  'reveal-',
   'empty-fb-',
   'gendetail-',
+  '画像测试',
+  '画像摘要测试',
+  '画像生成测试',
+  '画像合并测试',
   'V2 Test',
 ]);
 
@@ -175,6 +184,46 @@ export async function cleanTestPlans({
     return result;
   }
 
+  let storedPlansById = null;
+  const unreadableStoredIds = new Set();
+  if (typeof activeStore.scanStoredPlans === 'function') {
+    try {
+      const scan = await activeStore.scanStoredPlans();
+      if (!scan || !Array.isArray(scan.plans) || !Array.isArray(scan.errors)) {
+        throw new TypeError('scanStoredPlans() returned an invalid result');
+      }
+      storedPlansById = new Map();
+      let scanIsComplete = true;
+      for (const scanError of scan.errors) {
+        if (typeof scanError?.id === 'string') {
+          unreadableStoredIds.add(scanError.id);
+        } else {
+          scanIsComplete = false;
+        }
+        result.errors.push({
+          id: scanError?.id ?? null,
+          stage: 'scan',
+          message: scanError?.message ?? 'Stored plan could not be scanned',
+        });
+      }
+      for (const plan of scan.plans) {
+        if (!plan || typeof plan !== 'object' || typeof plan.id !== 'string' || plan.id.length === 0) {
+          result.errors.push({ stage: 'scan', message: 'Stored plan has an invalid id' });
+          continue;
+        }
+        if (storedPlansById.has(plan.id)) {
+          result.errors.push({ id: plan.id, name: plan.name ?? null, stage: 'scan', message: 'Duplicate stored plan id' });
+          continue;
+        }
+        storedPlansById.set(plan.id, plan);
+      }
+      if (!scanIsComplete) storedPlansById = null;
+    } catch (error) {
+      result.errors.push({ stage: 'scan', message: errorMessage(error) });
+      storedPlansById = null;
+    }
+  }
+
   const seenIds = new Set();
   for (const entry of indexEntries) {
     const id = entry?.id;
@@ -191,15 +240,29 @@ export async function cleanTestPlans({
     seenIds.add(id);
 
     let plan;
-    try {
-      plan = await activeStore.getPlan(id);
-    } catch (error) {
-      result.errors.push({ id, name: indexName ?? null, stage: 'load', message: errorMessage(error) });
-      continue;
+    if (storedPlansById) {
+      if (unreadableStoredIds.has(id)) continue;
+      plan = storedPlansById.get(id) ?? null;
+    } else {
+      try {
+        plan = await activeStore.getPlan(id);
+      } catch (error) {
+        result.errors.push({ id, name: indexName ?? null, stage: 'load', message: errorMessage(error) });
+        continue;
+      }
     }
 
     if (!plan) {
-      result.skipped.push({ id, name: indexName ?? null, reason: 'plan-file-missing' });
+      if (storedPlansById) {
+        result.candidates.push({
+          id,
+          name: indexName ?? null,
+          reason: 'stale-index-entry',
+          source: 'stale-index',
+        });
+      } else {
+        result.skipped.push({ id, name: indexName ?? null, reason: 'plan-file-missing' });
+      }
       continue;
     }
     if (typeof plan !== 'object' || (plan.id != null && plan.id !== id)) {
@@ -225,10 +288,64 @@ export async function cleanTestPlans({
     }
   }
 
+  if (storedPlansById) {
+    for (const [id, plan] of storedPlansById) {
+      if (seenIds.has(id)) continue;
+      const name = plan.name ?? null;
+      const classification = classifyPlanForCleanup(plan, { legacyNames, patterns });
+      const record = { id, name, reason: classification.reason, orphaned: true };
+
+      if (classification.status === 'candidate') {
+        result.candidates.push({ ...record, source: classification.source });
+      } else if (classification.status === 'protected') {
+        result.protected.push({ ...record, signals: classification.signals });
+      } else {
+        result.skipped.push(record);
+      }
+    }
+  }
+
   result.candidateCount = result.candidates.length;
   if (effectiveDryRun) return result;
 
+  const staleCandidates = result.candidates.filter(candidate => candidate.source === 'stale-index');
+  if (staleCandidates.length > 0) {
+    if (typeof activeStore.pruneMissingPlanIndexEntries !== 'function') {
+      for (const candidate of staleCandidates) {
+        result.errors.push({
+          id: candidate.id,
+          name: candidate.name,
+          stage: 'prune-index',
+          message: 'Store does not support stale index cleanup',
+        });
+      }
+    } else {
+      try {
+        const pruneResult = await activeStore.pruneMissingPlanIndexEntries(
+          staleCandidates.map(candidate => candidate.id)
+        );
+        const removedIds = new Set((pruneResult?.removed ?? []).map(entry => entry.id));
+        for (const candidate of staleCandidates) {
+          if (removedIds.has(candidate.id)) {
+            result.deleted.push(candidate);
+          } else {
+            result.errors.push({
+              id: candidate.id,
+              name: candidate.name,
+              stage: 'prune-index',
+              message: 'Index entry was retained because a plan file exists or the entry changed',
+            });
+          }
+        }
+      } catch (error) {
+        result.errors.push({ stage: 'prune-index', message: errorMessage(error) });
+      }
+    }
+  }
+
   for (const candidate of result.candidates) {
+    if (candidate.source === 'stale-index') continue;
+
     try {
       await activeStore.permanentlyDeletePlan(candidate.id);
     } catch (error) {
@@ -300,7 +417,7 @@ Options:
   --confirm       Allow deletion of safe legacy-name candidates
   -h, --help      Show this help
 
-Default cleanup only deletes plans carrying the explicit node:test marker.`);
+Default cleanup removes stale index entries and plans carrying the explicit node:test marker.`);
 }
 
 function printResult(result) {
