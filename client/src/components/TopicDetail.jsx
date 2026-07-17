@@ -10,6 +10,7 @@ import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
 import QAPanel from './QAPanel.jsx';
+import { loadSettings } from '#/lib/settings-storage';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -92,7 +93,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [revealLoading, setRevealLoading] = useState(false);
   const [foundErrorsInput, setFoundErrorsInput] = useState('');
   const lastReportedRef = useRef(0);
-  const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+  const settings = loadSettings();
 
   const [exercises, setExercises] = useState([]);
   const [exerciseAnswers, setExerciseAnswers] = useState({});

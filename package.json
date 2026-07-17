@@ -1,6 +1,6 @@
 {
-  "name": "textbook-maker",
-  "version": "1.8.0",
+  "name": "study-assistant",
+  "version": "1.8.1",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",

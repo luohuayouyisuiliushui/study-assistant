@@ -9,12 +9,10 @@ import SettingsModal from './components/SettingsModal'
 import ThemeSwitcher from './components/ThemeSwitcher'
 import api from './api'
 import { PlanProvider, usePlan } from '#/lib/plan-context.jsx'
+import { loadSettings } from '#/lib/settings-storage'
 
 function loadApiSettings() {
-  try {
-    const raw = localStorage.getItem('textbook-maker-settings')
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
+  return loadSettings()
 }
 
 function PlanViewWrapper({ onGenerate }) {

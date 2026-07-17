@@ -1,13 +1,10 @@
+import { loadSettings } from './lib/settings-storage';
+
 const API_BASE = '/api';
 
 /** Read API settings from localStorage (set by SettingsModal) */
 function getApiSettings() {
-  try {
-    const raw = localStorage.getItem('textbook-maker-settings');
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return loadSettings();
 }
 
 async function request(url, options = {}, includeApiKey = false) {
@@ -139,7 +136,7 @@ const api = {
 
   /** SSE streaming: start interactive mode. Calls onEvent for each SSE event (chunk, pause, done, error). */
   async startInteractiveSSE(planId, topicId, mode, onEvent, signal) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
     const headers = { 'Content-Type': 'application/json' };
     const body = JSON.stringify({ mode, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-start-sse/${topicId}`, {
@@ -168,7 +165,7 @@ const api = {
 
   /** SSE streaming: continue interactive mode. Calls onEvent for each SSE event. */
   async continueInteractiveSSE(planId, topicId, mode, feedback, onEvent, signal) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
     const headers = { 'Content-Type': 'application/json' };
     const body = JSON.stringify({ mode, feedback, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-continue-sse/${topicId}`, {
@@ -350,7 +347,6 @@ const api = {
 
   // ─── v1.6.0 Export Engine ───
   exportAnkiCSV(planId, topicId) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
     return `${API_BASE}/learn/plans/${planId}/export/anki/${topicId}`;
   },
   exportOPML(planId, topicId) {
@@ -393,7 +389,7 @@ const api = {
     }, true);
   },
   async generateExamStream(planId, topicIds, config, onEvent) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
     const headers = { 'Content-Type': 'application/json' };
     const body = JSON.stringify({ topicIds, config, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/exam/generate-stream`, {

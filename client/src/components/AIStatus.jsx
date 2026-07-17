@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { loadSettings } from '#/lib/settings-storage';
 
 const API_BASE = '/api/learn';
 
@@ -17,9 +18,7 @@ export function useAIStatus() {
   const check = async () => {
     setChecking(true);
     try {
-      const settings = (() => {
-        try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; }
-      })();
+      const settings = loadSettings();
       if (!settings.apiKey) { setConnected(false); setError('未配置 API Key'); setModel(''); return; }
 
       const res = await fetch(`${API_BASE}/test-connection`, {

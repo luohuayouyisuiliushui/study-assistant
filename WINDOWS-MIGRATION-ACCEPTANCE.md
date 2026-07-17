@@ -1,6 +1,6 @@
 # Study Assistant Windows 迁移验收记录
 
-记录更新时间：2026-07-17 11:45（Asia/Shanghai）
+记录更新时间：2026-07-17 12:20（Asia/Shanghai）
 
 ## 结论
 
@@ -18,11 +18,12 @@ Windows 迁移主体已完成。项目已在 Windows 11、Windows PowerShell 5.1
   - `start.ps1`：构建并启动生产模式，或用 `-SkipBuild` 复用已有产物。
   - `stop.ps1`：校验 checkout、PID 和启动时间后终止完整 npm/Node.js 进程树。
 - 新增五个根目录 `.cmd` 入口，并让 `windows-doctor.cmd`、`windows-setup.cmd` 成功后停留以便双击用户查看结果。
-- 根 `package.json` 新增 `windows:*` npm 命令；根、服务端、客户端及三个 lockfile 的版本统一为 `1.8.0`。
+- 根 `package.json` 新增 `windows:*` npm 命令；npm 包名统一为 `study-assistant*`，根、服务端、客户端及三个 lockfile 的版本统一为 `1.8.1`。
+- 浏览器设置键迁移为 `study-assistant-settings`；首次读取时自动迁移旧键，既有 API 配置不会丢失。
 - 更新 `README.md` 与 `AGENTS.md` 的 Windows 用法、故障排查和技术说明。
 - 修复 Vite 的 `dayjs` 前缀 alias：仅精确匹配 `dayjs`，避免 Windows 下把 Mermaid 的 `dayjs/plugin/*` 错误解析到 `dayjs.min.js/plugin/*`。
 - 发布分支补齐远程 `main` 已引用但未跟踪的 `client/src/components/RegenerateDialog.jsx`，否则干净检出会在构建时报告模块缺失。
-- 补齐 `TopicDetail` 测试中的 `inferRelations`/`getPlan` API mock，并为 `RegenerateDialog` 增加交互测试，使 client 50 个测试全部通过。
+- 补齐 `TopicDetail` 测试中的 `inferRelations`/`getPlan` API mock，并为 `RegenerateDialog`、设置键迁移增加测试，使 client 54 个测试全部通过。
 - 让回收站定时器 `unref()`，避免一次性 CLI 清理命令完成后被定时器永久挂住。
 - 收紧测试计划清理：必须先匹配测试式名称；有 Detail 或大量 Topic 的计划受到保护，避免误删真实的轻量计划。
 - Windows 进程状态增加 checkout 校验和并发删除重试，避免不同副本互相覆盖状态以及 start/stop 同时清理状态文件时发生竞态。
@@ -35,15 +36,15 @@ Windows 迁移主体已完成。项目已在 Windows 11、Windows PowerShell 5.1
 | 6 个 PowerShell 文件的 5.1 语法解析 | 通过 |
 | `windows-doctor` 完整检查（含端口） | 通过；3001/5173 可用，依赖完整；仅确认 `server/.env` 存在，未读取内容 |
 | `windows-setup.cmd -WhatIf -Build` | 通过；双击入口停留行为已验证 |
-| 六个 package/lock 顶层版本 | 全部为 `1.8.0` |
-| `npm run build` | 通过；Vite 8.1.3 成功转换 4603 个模块 |
+| 六个 package/lock 顶层版本 | 全部为 `1.8.1` |
+| `npm run build` | 通过；Vite 8.1.3 成功转换 4604 个模块 |
 | 开发模式烟测 | 通过；3001 与 5173 同时监听，状态记录为 `development` |
 | 生产模式烟测 | 通过；`GET /` 返回 200 和 React 根节点，`GET /api/learn/plans` 返回 200 JSON |
 | `windows-stop` 开发/生产停止 | 通过；完整 npm/concurrently/Vite/Node 树被终止，无状态文件和端口残留 |
 | 改动文件针对性 oxlint | 通过；`client/vite.config.js` 无问题，服务端改动没有新增 error |
 | client 全量 lint | 退出 0；存在原项目已有 warning |
 | 数据完整性检查 | 退出 0；报告 147 个原快照已有的索引/文件不一致项，未自动修复 |
-| client 全量测试 | 通过；7 个测试文件、50 个测试全部通过 |
+| client 全量测试 | 通过；8 个测试文件、54 个测试全部通过 |
 | 测试计划清理专项测试 | 通过；13/13，覆盖异步删除、dry-run 和真实计划名称防误删 |
 | server 全量 lint | 未通过；未改动模块中已有多处 `no-undef`，例如 `AdaptivePromptInjector`、`saveCoreAnalysis`、`updateTopic` |
 | server 全量测试 | 未通过；主要因测试仍同步使用已经异步化的 `createPlan()`，另有原数据一致性与网络错误文案断言问题 |

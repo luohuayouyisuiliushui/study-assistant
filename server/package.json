@@ -1,6 +1,6 @@
 {
-  "name": "textbook-maker-server",
-  "version": "1.8.0",
+  "name": "study-assistant-server",
+  "version": "1.8.1",
   "private": true,
   "type": "module",
   "scripts": {

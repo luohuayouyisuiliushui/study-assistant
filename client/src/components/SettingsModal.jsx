@@ -6,19 +6,7 @@ import { Label } from '#/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '#/components/ui/dialog';
 import { Settings, Eye, EyeOff, Loader2, CheckCircle2, XCircle, AlertCircle, Sparkles } from 'lucide-react';
 import { Separator } from '#/components/ui/separator';
-
-const STORAGE_KEY = 'textbook-maker-settings';
-
-function loadSettings() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch { return {}; }
-}
-
-function saveSettings(settings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-}
+import { loadSettings, saveSettings } from '#/lib/settings-storage';
 
 export default function SettingsModal({ isOpen, onClose, onSave }) {
   const saved = loadSettings();

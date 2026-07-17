@@ -42,7 +42,7 @@ type: `feat` / `fix` / `refactor` / `docs` / `chore`
 ## 项目架构
 
 ```
-study-assistant (monorepo, v1.8.0)
+study-assistant (monorepo, v1.8.1)
 ├── server/   Express 5 + OpenAI SDK  |  端口 3001
 ├── client/   React 19 + Vite 8      |  端口 5173 (dev)
 ```
