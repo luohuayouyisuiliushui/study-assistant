@@ -1,12 +1,12 @@
-﻿import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { cn } from '#/lib/utils'
 import { X } from 'lucide-react'
 
 function Dialog({ open, onOpenChange, children }) {
-  return open ? <DialogInner open={open} onOpenChange={onOpenChange} children={children} /> : null
+  return open ? <DialogInner onOpenChange={onOpenChange}>{children}</DialogInner> : null
 }
 
-function DialogInner({ open, onOpenChange, children }) {
+function DialogInner({ onOpenChange, children }) {
   const overlayRef = useRef(null)
 
   useEffect(() => {
@@ -21,8 +21,8 @@ function DialogInner({ open, onOpenChange, children }) {
   }, [onOpenChange])
 
   return (
-    <div ref={overlayRef} className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={handleOverlayClick}>
-      <div className='relative z-50 w-full max-w-lg max-h-[85vh] overflow-auto rounded-lg border bg-background p-6 shadow-lg animate-in fade-in zoom-in-95'>
+    <div ref={overlayRef} className='fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm animate-in fade-in' onClick={handleOverlayClick}>
+      <div className='relative z-50 w-full max-w-lg max-h-[88vh] overflow-auto rounded-2xl border border-border/70 bg-background/95 p-6 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95'>
         {children}
       </div>
     </div>
@@ -34,11 +34,11 @@ function DialogContent({ className, children, ...props }) {
 }
 
 function DialogHeader({ className, ...props }) {
-  return <div className={cn('flex flex-col space-y-1.5 text-center sm:text-left mb-4', className)} {...props} />
+  return <div className={cn('flex flex-col space-y-1.5 text-center sm:text-left mb-5', className)} {...props} />
 }
 
 function DialogFooter({ className, ...props }) {
-  return <div className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-4', className)} {...props} />
+  return <div className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-5', className)} {...props} />
 }
 
 function DialogTitle({ className, ...props }) {
@@ -50,7 +50,7 @@ function DialogDescription({ className, ...props }) {
 }
 
 function DialogClose({ className, ...props }) {
-  return <button className={cn('absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2', className)} {...props}><X className='h-4 w-4' /></button>
+  return <button className={cn('absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40', className)} {...props}><X className='h-4 w-4' /></button>
 }
 
 export { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription, DialogClose }

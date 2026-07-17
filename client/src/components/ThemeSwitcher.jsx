@@ -1,6 +1,6 @@
-﻿import { useState, useRef, useEffect } from "react"
+import { useEffect, useRef, useState } from 'react'
 import { useTheme } from '#/lib/theme-context'
-import { Sun, Moon, Monitor, Palette, Check } from 'lucide-react'
+import { Check, ChevronDown, Monitor, Moon, Palette, Sun } from 'lucide-react'
 import { cn } from '#/lib/utils'
 
 const themeColors = {
@@ -12,10 +12,17 @@ const themeColors = {
   mono: { label: 'Mono 石墨', dot: 'bg-gray-500' },
 }
 
+const modeMeta = {
+  light: { label: '亮色', icon: Sun },
+  dark: { label: '暗色', icon: Moon },
+  system: { label: '跟随系统', icon: Monitor },
+}
+
 export default function ThemeSwitcher() {
   const { theme, setTheme, mode, setMode, THEMES, MODES } = useTheme()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
+  const ModeIcon = modeMeta[mode]?.icon || Monitor
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -23,37 +30,50 @@ export default function ThemeSwitcher() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const modeIcon = mode === 'dark' ? Moon : mode === 'light' ? Sun : Monitor
-
   return (
-    <div ref={ref} className='relative flex items-center gap-1'>
-      <button onClick={() => setOpen(!open)} className='inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors' title='选择主题'>
-        <span className={cn('inline-block h-3 w-3 rounded-full', themeColors[theme]?.dot)} />
-        <span className='text-muted-foreground'>{themeColors[theme]?.label}</span>
+    <div ref={ref} className='relative'>
+      <button
+        type='button'
+        onClick={() => setOpen(!open)}
+        className='theme-trigger'
+        title='切换显示主题'
+        aria-expanded={open}
+        aria-haspopup='dialog'
+      >
+        <Palette className='h-3.5 w-3.5 text-muted-foreground' />
+        <span className={cn('theme-trigger__dot', themeColors[theme]?.dot)} />
+        <span className='theme-trigger__label'>{themeColors[theme]?.label}</span>
+        <span className='theme-trigger__mode'><ModeIcon className='h-3.5 w-3.5' /></span>
+        <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
 
-      {[Sun, Moon, Monitor].map((Icon, i) => {
-        const m = MODES[i]
-        const active = mode === m
-        return (
-          <button key={m} onClick={() => setMode(m)} className={cn('rounded-md p-1.5 transition-colors hover:bg-accent', active ? 'text-foreground bg-accent' : 'text-muted-foreground')} title={m === 'system' ? '跟随系统' : m === 'light' ? '亮色' : '暗色'}>
-            <Icon className='h-3.5 w-3.5' />
-          </button>
-        )
-      })}
-
       {open && (
-        <div className='absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border bg-popover p-1 shadow-md'>
-          {THEMES.map((t) => (
-            <button key={t} onClick={() => { setTheme(t); setOpen(false) }} className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent transition-colors'>
-              <span className={cn('inline-block h-3 w-3 rounded-full', themeColors[t]?.dot)} />
-              <span className='flex-1 text-left'>{themeColors[t]?.label}</span>
-              {theme === t && <Check className='h-3.5 w-3.5' />}
-            </button>
-          ))}
+        <div className='theme-popover' role='dialog' aria-label='主题设置'>
+          <span className='theme-popover__label'>显示模式</span>
+          <div className='theme-mode-grid'>
+            {MODES.map((item) => {
+              const Icon = modeMeta[item].icon
+              return (
+                <button key={item} type='button' className={mode === item ? 'is-active' : ''} onClick={() => { setMode(item); setOpen(false) }}>
+                  <Icon className='h-3.5 w-3.5' />
+                  <span>{modeMeta[item].label}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          <span className='theme-popover__label'>主题色</span>
+          <div className='theme-color-grid'>
+            {THEMES.map((item) => (
+              <button key={item} type='button' className={theme === item ? 'is-active' : ''} onClick={() => { setTheme(item); setOpen(false) }}>
+                <span className={cn('inline-block h-3 w-3 rounded-full', themeColors[item]?.dot)} />
+                <span className='flex-1 truncate text-left'>{themeColors[item]?.label}</span>
+                {theme === item && <Check className='h-3.5 w-3.5 shrink-0' />}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
   )
 }
-

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BarChart3, Network, Brain, FileText, Target, Search, RotateCcw, Sparkles, Plus, ChevronRight, ChevronDown, AlertTriangle, X, Download, MessageSquare, BookOpen, MoreHorizontal, Clock, CalendarDays, List, Upload } from 'lucide-react';
+import { BarChart3, Network, Brain, FileText, Target, Search, RotateCcw, Sparkles, Plus, ChevronRight, ChevronDown, X, Download, MessageSquare, BookOpen, MoreHorizontal, Clock, CalendarDays, List, Upload } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
 import KnowledgeGraphModal from './KnowledgeGraphModal';
@@ -298,7 +298,11 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
     return Math.round(sec / 360) / 10 + '小时';
   }
 
-  const renderPhaseTopics = (grouped, topics, hasPhases) => {
+  const progressPercent = plan.topics.length > 0
+    ? Math.round((doneTopics.length / plan.topics.length) * 100)
+    : 0;
+
+  const renderPhaseTopics = (grouped, topics, hasPhases, status = 'pending') => {
     const renderTree = (items, depth) => items.map(t => {
       const children = topics.filter(c => c.parentId === t.id).sort((a, b) => a.order - b.order);
       const hasChildren = children.length > 0;
@@ -306,19 +310,20 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
 
       return (
         <div key={t.id}>
-          <div className='flex items-center gap-2 px-4 py-3 text-sm hover:bg-accent/50 rounded-sm transition-colors group' style={{ paddingLeft: (depth * 24 + 16) + 'px' }}>
+          <div className={`topic-row group ${status === 'progress' ? 'is-progress' : ''}`} style={{ paddingLeft: (depth * 24 + 16) + 'px', paddingRight: '12px' }}>
             {hasChildren ? (
-              <button onClick={() => toggleExpand(t.id)} className='p-0.5 text-muted-foreground hover:text-foreground transition-colors'>
+              <button type='button' onClick={() => toggleExpand(t.id)} className='p-0.5 text-muted-foreground hover:text-foreground transition-colors' aria-label={`${isExpanded ? '收起' : '展开'} ${t.title}`}>
                 {isExpanded ? <ChevronDown className='h-3 w-3' /> : <ChevronRight className='h-3 w-3' />}
               </button>
             ) : <span className='w-4' />}
-            <span className='flex-1 truncate cursor-pointer' onClick={() => onSelectTopic(t.id)}>{t.title}</span>
-            <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity'>
+            <span className='topic-row__dot' />
+            <button type='button' className='flex-1 truncate text-left' onClick={() => onSelectTopic(t.id)}>{t.title}</button>
+            <div className='topic-row__actions'>
               <Button variant='ghost' size='sm' className='h-6 px-2 text-xs' onClick={() => onGenerate(t.id)}>生成讲解</Button>
               <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs' onClick={() => handleDecompose(t.id)} disabled={decomposingId === t.id} title='分解为子知识点'>
                 {decomposingId === t.id ? <RotateCcw className='h-3 w-3 animate-spin' /> : <ChevronRight className='h-3 w-3' />}
               </Button>
-              <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive' onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>
+              <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive' title='删除知识点' aria-label={`删除知识点 ${t.title}`} onClick={() => { if (confirm('确定要删除这个知识点吗？')) onRemoveTopic(t.id); }}>
                 <X className='h-3 w-3' />
               </Button>
             </div>
@@ -333,7 +338,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
         const topLevel = phaseTopics.filter(t => t.parentId === null || t.parentId === undefined).sort((a, b) => a.order - b.order);
         return (
           <div key={phaseName}>
-            <div className='text-xs font-medium text-muted-foreground px-4 py-1.5'>{phaseName}</div>
+            <div className='phase-label'>{phaseName}</div>
             {renderTree(topLevel, 0)}
           </div>
         );
@@ -343,51 +348,60 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
   };
 
   return (
-    <div className='w-full max-w-5xl px-10 py-8 space-y-6'>
+    <div className='plan-workspace'>
       <Helmet><title>study-assistant - {plan.name}</title></Helmet>
-      <div className='flex items-center justify-between flex-wrap gap-2'>
-        <div className='flex items-center gap-2'>
-          <h2 className='text-lg font-semibold'>{plan.name}</h2>
-          <span className='text-xs text-muted-foreground'>{doneTopics.length}/{plan.topics.length} 已完成</span>
-        </div>
-        <div className='flex items-center gap-1'>
-          <Button variant='outline' size='sm' onClick={handleAnalysis} disabled={analysisLoading}>
-            {analysisLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <BarChart3 className='h-3.5 w-3.5 mr-1' />}
-            学习分析
-          </Button>
-          <div className='relative' ref={menuRef}>
-            <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
-              <MoreHorizontal className='h-4 w-4' />
+      <section className='plan-overview'>
+        <div className='plan-overview__top'>
+          <div>
+            <div className='ui-eyebrow'><Sparkles className='h-3.5 w-3.5' />学习计划</div>
+            <h2>{plan.name}</h2>
+            <p className='plan-overview__summary'>
+              {hasPhases ? `${phases.length} 个学习阶段` : '自由学习路径'} · {plan.topics.length} 个知识点 · {doneTopics.length} 个已掌握
+            </p>
+          </div>
+          <div className='plan-overview__actions'>
+            <Button onClick={handleAnalysis} disabled={analysisLoading}>
+              {analysisLoading ? <RotateCcw className='h-4 w-4 mr-1.5 animate-spin' /> : <BarChart3 className='h-4 w-4 mr-1.5' />}
+              学习分析
             </Button>
-            {menuOpen && (
-              <div className='absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-md border bg-popover p-1 shadow-md'>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { setGraphOpen(true); setMenuOpen(false); }}>
-                  <Network className='h-3.5 w-3.5' />知识图谱
-                </button>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { setMindMapOpen(true); setMenuOpen(false); }}>
-                  <Brain className='h-3.5 w-3.5' />思维导图
-                </button>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { setExamOpen(true); setMenuOpen(false); }}>
-                  <FileText className='h-3.5 w-3.5' />组卷
-                </button>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleQuickQuiz(); setMenuOpen(false); }} disabled={quizLoading}>
-                  <FileText className='h-3.5 w-3.5' />快速测验
-                </button>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleCoreAnalysis(); setMenuOpen(false); }} disabled={coreLoading}>
-                  <Target className='h-3.5 w-3.5' />核心20%
-                </button>
-                <button className='flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent transition-colors' onClick={() => { handleWeakAnalysis(); setMenuOpen(false); }} disabled={weakAnalysisLoading}>
-                  <Search className='h-3.5 w-3.5' />薄弱分析
-                </button>
-              </div>
-            )}
+            <div className='relative' ref={menuRef}>
+              <Button variant='outline' size='icon' onClick={() => setMenuOpen(!menuOpen)} title='更多操作' aria-expanded={menuOpen}>
+                <MoreHorizontal className='h-4 w-4' />
+              </Button>
+              {menuOpen && (
+                <div className='floating-menu'>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { setGraphOpen(true); setMenuOpen(false); }}>
+                    <Network className='h-3.5 w-3.5 text-primary' />知识图谱
+                  </button>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { setMindMapOpen(true); setMenuOpen(false); }}>
+                    <Brain className='h-3.5 w-3.5 text-primary' />思维导图
+                  </button>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { setExamOpen(true); setMenuOpen(false); }}>
+                    <FileText className='h-3.5 w-3.5 text-primary' />智能组卷
+                  </button>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { handleQuickQuiz(); setMenuOpen(false); }} disabled={quizLoading}>
+                    <FileText className='h-3.5 w-3.5 text-primary' />快速测验
+                  </button>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { handleCoreAnalysis(); setMenuOpen(false); }} disabled={coreLoading}>
+                    <Target className='h-3.5 w-3.5 text-primary' />核心20%
+                  </button>
+                  <button className='flex items-center gap-2 hover:bg-accent transition-colors' onClick={() => { handleWeakAnalysis(); setMenuOpen(false); }} disabled={weakAnalysisLoading}>
+                    <Search className='h-3.5 w-3.5 text-primary' />薄弱分析
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+        <div className='plan-progress' aria-label={`学习进度 ${progressPercent}%`}>
+          <div className='plan-progress__track'><div className='plan-progress__bar' style={{ width: `${progressPercent}%` }} /></div>
+          <span><span className='sr-only'>{doneTopics.length}/{plan.topics.length} 已完成</span><span aria-hidden='true'>{progressPercent}% · {doneTopics.length}/{plan.topics.length} 已完成</span></span>
+        </div>
+      </section>
 
       {coreOpen && (
-        <div className='rounded-lg bg-muted/30'>
-          <div className='flex items-center justify-between px-4 py-2'>
+        <div className='insight-panel'>
+          <div className='insight-panel__header'>
             <span className='text-sm font-medium flex items-center gap-1.5'><Target className='h-4 w-4 text-primary' />核心 20% 分析</span>
             <div className='flex items-center gap-1'>
               {coreData && (
@@ -398,7 +412,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
               <Button variant='ghost' size='sm' onClick={() => setCoreOpen(false)} title='关闭'><X className='h-3.5 w-3.5' /></Button>
             </div>
           </div>
-          <div className='p-5 space-y-3 max-h-[50vh] overflow-y-auto'>
+          <div className='insight-panel__body space-y-3 max-h-[50vh] overflow-y-auto'>
             {coreLoading ? (
               <div className='flex items-center gap-2 text-sm text-muted-foreground'>
                 <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
@@ -432,7 +446,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
       )}
 
       {analysisOpen && (
-        <div className='rounded-lg bg-muted/30'>
+        <div className='insight-panel'>
           {analysisLoading ? (
             <div className='flex items-center gap-2 px-4 py-8 text-sm text-muted-foreground justify-center'>
               <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
@@ -440,7 +454,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
             </div>
           ) : (
             <div>
-              <div className='flex items-center justify-between px-4 py-2'>
+              <div className='insight-panel__header'>
                 <span className='text-sm font-medium flex items-center gap-1.5'><BarChart3 className='h-4 w-4 text-primary' />学习分析报告</span>
                 <div className='flex items-center gap-1'>
                   {analysisData?.analysis && (
@@ -452,7 +466,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
                   <Button variant='ghost' size='sm' onClick={() => setAnalysisOpen(false)}><X className='h-3.5 w-3.5' /></Button>
                 </div>
               </div>
-              <div className='p-5 space-y-3 max-h-[50vh] overflow-y-auto'>
+              <div className='insight-panel__body space-y-3 max-h-[50vh] overflow-y-auto'>
                 <div className='text-sm text-muted-foreground'>
                   {analysisData?.analysis ? (
                     analysisData.analysis.split('\n').map((line, i) => {
@@ -506,15 +520,15 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
       )}
 
       {quizOpen && (
-        <div className='rounded-lg bg-muted/30'>
-          <div className='flex items-center justify-between px-4 py-2'>
+        <div className='insight-panel'>
+          <div className='insight-panel__header'>
             <span className='text-sm font-medium flex items-center gap-1.5'><FileText className='h-4 w-4 text-primary' />快速测验</span>
             <div className='flex items-center gap-1'>
               {quizData && <Button variant='ghost' size='sm' onClick={() => { setQuizData(null); handleQuickQuiz(); }} title='重新出题'><RotateCcw className='h-3.5 w-3.5' /></Button>}
               <Button variant='ghost' size='sm' onClick={() => setQuizOpen(false)}><X className='h-3.5 w-3.5' /></Button>
             </div>
           </div>
-          <div className='p-5 space-y-3 max-h-[50vh] overflow-y-auto'>
+          <div className='insight-panel__body space-y-3 max-h-[50vh] overflow-y-auto'>
             {quizLoading ? (
               <div className='flex items-center gap-2 text-sm text-muted-foreground'>
                 <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
@@ -568,98 +582,115 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
         </div>
       )}
 
-      <div className='grid grid-cols-2 md:grid-cols-4 gap-5'>
+      <div className='metrics-grid'>
         {[
-          { icon: Clock, value: fmtTime(totalTime), label: '学习时间' },
+          { icon: Clock, value: fmtTime(totalTime), label: '累计学习时间' },
           { icon: CalendarDays, value: todayLearned, label: '今日学习' },
-          { icon: BarChart3, value: diffCounts.easy + diffCounts.medium + diffCounts.hard || '-', label: '已评价' },
-        ].map((s, i) => {
-          const Icon = s.icon;
+          { icon: BarChart3, value: diffCounts.easy + diffCounts.medium + diffCounts.hard || '-', label: '已评价知识点' },
+          { icon: BookOpen, value: needReview.length, label: '待复习', warm: true },
+        ].map((item) => {
+          const Icon = item.icon;
           return (
-          <div key={i} className='rounded-lg bg-muted/20 p-5 text-center'>
-            <Icon className='h-5 w-5 mx-auto text-muted-foreground' />
-            <div className='text-lg font-semibold mt-1'>{s.value}</div>
-            <div className='text-xs text-muted-foreground'>{s.label}</div>
-          </div>
-        );})}
-        {needReview.length > 0 && (
-          <div className='rounded-lg bg-muted/20 p-4 text-center relative group' title={needReview.map(t => t.title + (t.weakPoints?.length ? ' (' + t.weakPoints.join(', ') + ')' : '')).join('、')}>
-            <BookOpen className='h-5 w-5 mx-auto text-orange-500' />
-            <div className='text-lg font-semibold text-orange-500 mt-1'>{needReview.length}</div>
-            <div className='text-xs text-muted-foreground'>待复习</div>
-            <div className='absolute hidden group-hover:block bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md border bg-popover text-xs shadow-md z-10'>
-              {needReview.slice(0, 3).map(t => (
-                <div key={t.id} className='truncate'>{t.title}{t.weakPoints?.length ? ' (' + t.weakPoints.slice(0, 2).join('/') + ')' : ''}</div>
-              ))}
-              {needReview.length > 3 && <div className='text-muted-foreground'>...还有 {needReview.length - 3} 个</div>}
+            <div key={item.label} className={`metric-card ${item.warm ? 'is-warm' : ''}`}>
+              <span className='metric-card__icon'><Icon className='h-5 w-5' /></span>
+              <div>
+                <strong>{item.value}</strong>
+                <small>{item.label}</small>
+              </div>
+              {item.warm && needReview.length > 0 && (
+                <div className='metric-card__tooltip'>
+                  {needReview.slice(0, 4).map(topic => (
+                    <div key={topic.id} className='truncate'>{topic.title}{topic.weakPoints?.length ? ` · ${topic.weakPoints.slice(0, 2).join('/')}` : ''}</div>
+                  ))}
+                  {needReview.length > 4 && <div className='mt-1 text-muted-foreground'>还有 {needReview.length - 4} 个知识点</div>}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })}
       </div>
 
-      <div className='space-y-2'>
-        <div className='text-sm font-medium px-2'>知识点列表</div>
+      <section className='section-card topic-library'>
+        <div className='section-card__header'>
+          <div className='section-card__heading'>
+            <span><List className='h-4 w-4' /></span>
+            <div>
+              <h3>知识点路径</h3>
+              <p>按阶段推进，悬停知识点可快速生成讲解或进一步拆解。</p>
+            </div>
+          </div>
+          <span className='text-xs text-muted-foreground'>{plan.topics.length} 个知识点</span>
+        </div>
+
         {notStartedTopics.length === 0 && inProgressTopics.length === 0 && doneTopics.length === 0 && (
-          <div className='text-center py-8 text-sm text-muted-foreground'>还没有知识点，从下方添加或导入文件</div>
+          <div className='plans-empty-state compact'>
+            <span><BookOpen className='h-6 w-6' /></span>
+            <h4>这份计划还没有知识点</h4>
+            <p>从下方快速添加，或回到首页使用 AI 导入整份资料。</p>
+          </div>
         )}
 
         {notStartedTopics.length > 0 && (
-          <div className='space-y-1.5'>
-            <div className='text-xs font-medium text-muted-foreground px-4 py-2'>未开始（{notStartedTopics.length}）</div>
-            {renderPhaseTopics(notStartedGrouped, notStartedTopics, hasPhases)}
+          <div className='topic-section'>
+            <div className='topic-section__label'>未开始（{notStartedTopics.length}）</div>
+            {renderPhaseTopics(notStartedGrouped, notStartedTopics, hasPhases, 'pending')}
           </div>
         )}
 
         {inProgressTopics.length > 0 && (
-          <div className='space-y-1.5'>
-            <div className='text-xs font-medium text-muted-foreground px-4 py-2'>学习中（{inProgressTopics.length}）</div>
-            {renderPhaseTopics(inProgressGrouped, inProgressTopics, hasPhases)}
+          <div className='topic-section'>
+            <div className='topic-section__label'>学习中（{inProgressTopics.length}）</div>
+            {renderPhaseTopics(inProgressGrouped, inProgressTopics, hasPhases, 'progress')}
           </div>
         )}
 
         {doneTopics.length > 0 && (
-          <div className='space-y-1.5'>
-            <div className='text-xs font-medium text-muted-foreground px-4 py-2'>已学习</div>
-            {doneTopics.map((t) => {
-              const hasWeakPoints = (t.weakPoints && t.weakPoints.length > 0);
+          <div className='topic-section'>
+            <div className='topic-section__label'>已学习（{doneTopics.length}）</div>
+            {doneTopics.map((topic) => {
+              const hasWeakPoints = topic.weakPoints && topic.weakPoints.length > 0;
               return (
-                <div key={t.id} className={`flex items-center gap-2 px-4 py-3 text-sm rounded-sm cursor-pointer hover:bg-accent/50 transition-colors group ${hasWeakPoints ? 'bg-orange-50/50 dark:bg-orange-950/20' : ''}`} onClick={() => onSelectTopic(t.id)}>
-                  <span className='w-4 text-xs text-muted-foreground'>✓</span>
-                  <span className='flex-1 truncate text-muted-foreground'>{t.title}</span>
+                <div key={topic.id} className={`topic-row is-done group ${hasWeakPoints ? 'bg-orange-50/50 dark:bg-orange-950/20' : ''}`} style={{ paddingLeft: '16px', paddingRight: '12px' }}>
+                  <span className='w-4' />
+                  <span className='topic-row__dot' />
+                  <button type='button' className='flex-1 truncate text-left text-muted-foreground' onClick={() => onSelectTopic(topic.id)}>{topic.title}</button>
                   {hasWeakPoints && (
-                    <span className='text-[11px] font-medium text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-950 px-1.5 py-0.5 rounded' title={'薄弱: ' + t.weakPoints.join(', ')}>{t.weakPoints.length}</span>
+                    <span className='text-[11px] font-medium text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-950 px-1.5 py-0.5 rounded' title={'薄弱: ' + topic.weakPoints.join(', ')}>{topic.weakPoints.length} 个薄弱点</span>
                   )}
                 </div>
               );
             })}
           </div>
         )}
-      </div>
+      </section>
 
-      <div className='rounded-lg bg-muted/30 p-6 space-y-6'>
-        <div className='flex items-center gap-2'>
-          <span className='text-sm font-medium'>快速添加知识点</span>
-          <span className='text-xs text-muted-foreground'>每行列一个知识点名称</span>
+      <section className='section-card add-topics-card'>
+        <div className='section-card__header'>
+          <div className='section-card__heading'>
+            <span><Plus className='h-4 w-4' /></span>
+            <div>
+              <h3>快速添加知识点</h3>
+              <p>每行列一个知识点名称；整份长文档建议在首页使用 AI 导入。</p>
+            </div>
+          </div>
         </div>
-        <div className='text-xs text-muted-foreground bg-muted/50 rounded-md p-2 leading-relaxed'>
-          <strong>逐条添加</strong>：每行输入一个知识点名称。<br />
-          <strong>整份文档</strong>：请在首页使用「AI 导入」功能，AI 会自动分析文档结构生成学习计划。
+        <div className='add-topics-card__body space-y-3'>
+          <textarea
+            value={bulkInput}
+            onChange={e => setBulkInput(e.target.value)}
+            placeholder={'逐条输入知识点，每行一个：\n变量与数据类型\n控制流（if/else）\n循环结构（for/while）\n函数定义与调用'}
+            rows={4}
+            aria-label='批量添加知识点'
+          />
+          <div className='flex flex-wrap gap-2'>
+            <Button onClick={handleAdd} disabled={!bulkInput.trim()}><Plus className='h-4 w-4 mr-1.5' />添加</Button>
+            <Button variant='outline' onClick={() => fileInputRef.current?.click()}>
+              <Upload className='h-4 w-4 mr-1.5' />从文件读取
+            </Button>
+            <input ref={fileInputRef} type='file' accept='.txt,.md,.csv' onChange={handleFileImport} hidden />
+          </div>
         </div>
-        <textarea
-          value={bulkInput}
-          onChange={e => setBulkInput(e.target.value)}
-          placeholder={'逐条输入知识点，每行一个：\n变量与数据类型\n控制流（if/else）\n循环结构（for/while）\n函数定义与调用'}
-          rows={4}
-          className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'
-        />
-        <div className='flex gap-2'>
-          <Button onClick={handleAdd} disabled={!bulkInput.trim()}><Plus className='h-4 w-4 mr-1' />添加</Button>
-          <Button variant='outline' size='sm' onClick={() => fileInputRef.current?.click()}>
-            <Upload className='h-4 w-4 mr-1' />从文件导入
-          </Button>
-          <input ref={fileInputRef} type='file' accept='.txt,.md,.csv' onChange={handleFileImport} style={{ display: 'none' }} />
-        </div>
-      </div>
+      </section>
 
       {graphOpen && (
         <KnowledgeGraphModal
