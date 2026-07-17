@@ -117,6 +117,16 @@ Set-ExecutionPolicy -Scope Process Bypass
 cd server && npm test
 ```
 
+### 清理测试数据
+
+```bash
+npm run clean:testdata                 # 仅删除带显式测试标记的计划
+npm run clean:testdata:legacy          # 预览旧版名称规则命中的计划，不删除
+npm run clean:testdata:legacy:confirm  # 删除无学习数据的旧版测试计划
+```
+
+旧版名称清理会保护已有讲解、学习记录、练习/考试数据以及较大的知识点列表。
+
 ### API 端点
 
 60+ 端点，涵盖计划管理、AI 生成、交互教学、测验组卷、学习分析、知识图谱、数据导出等。详见 `server/routes/learn.js`。

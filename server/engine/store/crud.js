@@ -13,6 +13,7 @@ import {
   readJSON, readIndex, rebuildIndex, writeIndex, updateIndex, planPath,
   getCachedPlan, invalidatePlanCache,
 } from './storage.js';
+import { markPlanForTestCleanup } from './test-plan-marker.js';
 
 // ─── Public API ───
 
@@ -24,7 +25,7 @@ export function getPlan(planId) {
   return getCachedPlan(planId, () => readJSON(planPath(planId)));
 }
 
-export async function createPlan(name) {
+export async function createPlan(name, options = {}) {
   const id = uuidv4();
   const plan = {
     id,
@@ -35,6 +36,7 @@ export async function createPlan(name) {
     phases: [],
     history: [],
   };
+  markPlanForTestCleanup(plan, options);
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();
   index.push({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: 0 });
@@ -55,6 +57,7 @@ export async function deletePlan(planId) {
 export async function permanentlyDeletePlan(planId) {
   // 先等待队列清空，再删除
   await drainWriteQueue(planId);
+  invalidatePlanCache(planId);
 
   // Delete plan file from plans/
   const src = planPath(planId);
@@ -927,7 +930,7 @@ export function buildEnhancedKnowledgeGraph(plan, options = {}) {
   };
 }
 
-export function createPlanWithPhases(name, phases, relations) {
+export function createPlanWithPhases(name, phases, relations, options = {}) {
   const id = uuidv4();
   const sortedPhases = phases.map((p, i) => ({
     id: uuidv4().slice(0, 8),
@@ -972,6 +975,7 @@ export function createPlanWithPhases(name, phases, relations) {
     topics,
     history: [],
   };
+  markPlanForTestCleanup(plan, options);
 
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();

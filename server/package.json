@@ -1,6 +1,6 @@
 {
   "name": "study-assistant-server",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,8 @@
     "pretest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
     "posttest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
     "clean:testdata": "node scripts/clean-test-plans.js",
+    "clean:testdata:legacy": "node scripts/clean-test-plans.js --legacy-names",
+    "clean:testdata:legacy:confirm": "node scripts/clean-test-plans.js --legacy-names --confirm",
     "clean:cache": "node scripts/clean-cache.js",
     "clean:backups": "node scripts/clean-backups.js",
     "lint": "npx oxlint",
