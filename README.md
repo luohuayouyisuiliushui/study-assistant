@@ -24,6 +24,34 @@ npm run dev
 
 浏览器打开 `http://localhost:5173`，在设置里填入 API Key（支持 OpenAI / DeepSeek / SiliconFlow 等）即可使用。
 
+### Windows 快速开始
+
+要求 Windows 10/11 和 Node.js 20.19+（或 22.12+）。在项目根目录依次双击：
+
+1. `windows-doctor.cmd`：检查 Node.js、npm、端口和依赖状态
+2. `windows-setup.cmd`：安装根目录、服务端和客户端依赖
+3. `windows-dev.cmd`：启动开发环境，然后访问 `http://localhost:5173`
+
+前两个检查/安装窗口执行完会停留，阅读结果后按任意键关闭。
+
+生产模式使用 `windows-start.cmd`，它会先构建前端，再由服务端在 `http://localhost:3001` 提供完整应用。启动窗口中按 `Ctrl+C` 可正常停止；也可在另一个终端运行 `windows-stop.cmd`，脚本会校验已记录的 PID 和启动时间，再用 `taskkill /T /F` 终止完整的 npm/Node.js 进程树，避免残留后台进程。Windows 无法从另一个控制台可靠转发 `Ctrl+C`，如需优雅退出请在原启动窗口操作。
+
+这些 `.cmd` 入口会为当前进程使用 PowerShell `ExecutionPolicy Bypass`，不会修改系统或用户的永久执行策略。也可以在 PowerShell 中直接运行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\doctor.ps1
+.\scripts\windows\setup.ps1
+.\scripts\windows\dev.ps1
+```
+
+常见问题：
+
+- 提示端口 3001 或 5173 被占用：先运行 `windows-stop.cmd`；若不是本项目进程，可用 `Get-NetTCPConnection -State Listen -LocalPort 3001,5173` 找到 PID。
+- 缺少 API Key：可直接在应用设置中填写；也可将 `server/.env.example` 复制为 `server/.env` 后填写，切勿提交真实 Key。
+- `npm.ps1` 被执行策略阻止：Windows 脚本固定调用 `npm.cmd`，请使用上述 `.cmd` 或 `.ps1` 入口。
+- 数据位置：学习数据保存在 `server/data/`，缓存位于 `server/cache/`；升级或重装前请备份 `server/data/`。
+
 ## 截图
 
 <!-- 截图占位 -->

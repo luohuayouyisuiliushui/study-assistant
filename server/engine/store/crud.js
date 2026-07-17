@@ -311,7 +311,8 @@ function findTrashFile(planId) {
 }
 
 // ─── Auto-cleanup: run every hour ───
-setInterval(() => cleanExpiredTrash(), 60 * 60 * 1000);
+const trashCleanupTimer = setInterval(() => cleanExpiredTrash(), 60 * 60 * 1000);
+trashCleanupTimer.unref(); // Do not keep one-off CLI scripts alive after their work is done.
 cleanExpiredTrash(); // also run once on startup
 
 /**

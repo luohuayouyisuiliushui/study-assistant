@@ -1,6 +1,6 @@
 {
   "name": "textbook-maker",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
@@ -15,7 +15,12 @@
     "clean:cache": "npm run clean:cache --prefix server",
     "clean:backups": "npm run clean:backups --prefix server",
     "clean:test": "npm run clean:testdata --prefix server && npm run clean:backups --prefix server",
-    "clean:all": "npm run clean:testdata --prefix server && npm run clean:cache --prefix server && npm run clean:backups --prefix server"
+    "clean:all": "npm run clean:testdata --prefix server && npm run clean:cache --prefix server && npm run clean:backups --prefix server",
+    "windows:doctor": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/doctor.ps1",
+    "windows:setup": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/setup.ps1",
+    "windows:dev": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/dev.ps1",
+    "windows:start": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/start.ps1",
+    "windows:stop": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop.ps1"
   },
   "devDependencies": {
     "concurrently": "^10.0.3",

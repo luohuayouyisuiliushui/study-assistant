@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import TopicDetail from '../components/TopicDetail';
 
@@ -14,6 +13,8 @@ vi.mock('../api', () => ({
     factCheck: vi.fn(),
     autoFixFacts: vi.fn(),
     reviewErrors: vi.fn(),
+    inferRelations: vi.fn(() => Promise.resolve()),
+    getPlan: vi.fn(() => Promise.resolve({ id: 'plan-1', name: 'JavaScript 基础', topics: [] })),
     exportAnkiCSV: vi.fn(() => '/api/export/anki'),
     exportOPML: vi.fn(() => '/api/export/opml'),
     exportNotionCSV: vi.fn(() => '/api/export/notion'),

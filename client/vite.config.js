@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -9,9 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   plugins: [tailwindcss(), react()],
   resolve: {
-    alias: {
-      '#': path.resolve(__dirname, './src'),
-    },
+    alias: [
+      { find: '#', replacement: path.resolve(__dirname, './src') },
+      // Keep Mermaid's dayjs/plugin/* imports intact; a prefix alias would
+      // incorrectly resolve them below dayjs.min.js on Windows.
+      { find: /^dayjs$/, replacement: path.resolve(__dirname, 'node_modules/dayjs/dayjs.min.js') },
+    ],
   },
   server: {
     port: 5173,
@@ -44,6 +47,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    include: ['dayjs', '@braintree/sanitize-url'],
     exclude: ['mermaid'],
   },
   test: {

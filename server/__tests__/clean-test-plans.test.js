@@ -5,16 +5,16 @@ import { cleanTestPlans, isTestPlan, DEFAULT_PATTERNS } from '../scripts/clean-t
 
 const testPlanIds = [];
 
-function createPlan(name) {
-  const p = store.createPlan(name);
+async function createPlan(name) {
+  const p = await store.createPlan(name);
   testPlanIds.push(p.id);
   return p;
 }
 
 describe('cleanTestPlans — 测试计划清理', () => {
-  after(() => {
+  after(async () => {
     for (const id of testPlanIds) {
-      try { store.permanentlyDeletePlan(id); } catch {}
+      try { await store.permanentlyDeletePlan(id); } catch {}
     }
     testPlanIds.length = 0;
   });
@@ -42,15 +42,19 @@ describe('cleanTestPlans — 测试计划清理', () => {
       assert.ok(!isTestPlan('abcTest'), 'abcTest 不应匹配（缺少 - 或 _ 前缀）');
     });
 
-    it('匹配包含 test 关键词的名称', () => {
+    it('只匹配显式模式，不泛化普通 Test 课程名', () => {
       assert.ok(isTestPlan('V2 Test Plan'));
-      assert.ok(isTestPlan('Integration Test Suite'));
+      assert.ok(!isTestPlan('Integration Test Suite'));
+      assert.ok(!isTestPlan('Software Test Fundamentals'));
     });
 
     it('不匹配真实计划名称', () => {
       assert.ok(!isTestPlan('Linux 编程核心'));
       assert.ok(!isTestPlan('我的学习计划'));
       assert.ok(!isTestPlan('Python 基础'));
+      assert.ok(!isTestPlan('软件测试入门'));
+      assert.ok(!isTestPlan('Exam Preparation'));
+      assert.ok(!isTestPlan('History of Computing'));
     });
   });
 
@@ -71,9 +75,9 @@ describe('cleanTestPlans — 测试计划清理', () => {
   describe('默认模式安全性', () => {
     before(() => cleanTestPlans());
 
-    it('默认模式不会误删真实计划', () => {
-      const p = createPlan('Linux 编程核心');
-      const result = cleanTestPlans();
+    it('默认模式不会误删真实计划', async () => {
+      const p = await createPlan('Linux 编程核心');
+      const result = await cleanTestPlans();
       assert.strictEqual(result.count, 0, '默认模式不应匹配真实计划名');
       assert.ok(store.getPlan(p.id));
     });
@@ -81,25 +85,29 @@ describe('cleanTestPlans — 测试计划清理', () => {
 
   // ─── 新增前缀的删除测试 ───
 
-  it('删除 core20-/feynman-/scaffold- 前缀的计划', () => {
-    createPlan('core20-cache-test');
-    createPlan('core20-empty-cache-test');
-    createPlan('feynman-continue');
-    createPlan('feynman-test');
-    createPlan('scaffold-continue');
-    createPlan('mode-realtime-test');
-    createPlan('empty-fb-test');
-    createPlan('gendetail-preserve');
-    createPlan('gendetail-empty');
-    createPlan('gendetail-test');
-    const result = cleanTestPlans();
+  it('删除 core20-/feynman-/scaffold- 前缀的计划', async () => {
+    for (const name of [
+      'core20-cache-test',
+      'core20-empty-cache-test',
+      'feynman-continue',
+      'feynman-test',
+      'scaffold-continue',
+      'mode-realtime-test',
+      'empty-fb-test',
+      'gendetail-preserve',
+      'gendetail-empty',
+      'gendetail-test',
+    ]) {
+      await createPlan(name);
+    }
+    const result = await cleanTestPlans();
     assert.strictEqual(result.count, 10, `应删除 10 个测试计划，实际 ${result.count}`);
   });
 
-  it('删除匹配名称模式的计划', () => {
-    createPlan('engine-test-plan');
-    createPlan('adaptive-test-plan');
-    const result = cleanTestPlans({ patterns: ['engine-test-', 'adaptive-test-'] });
+  it('删除匹配名称模式的计划', async () => {
+    await createPlan('engine-test-plan');
+    await createPlan('adaptive-test-plan');
+    const result = await cleanTestPlans({ patterns: ['engine-test-', 'adaptive-test-'] });
     assert.strictEqual(result.count, 2);
     assert.strictEqual(result.dryRun, undefined);
     const remaining = store.listPlans();
@@ -107,29 +115,29 @@ describe('cleanTestPlans — 测试计划清理', () => {
     assert.ok(!remaining.some(p => p.name === 'adaptive-test-plan'));
   });
 
-  it('不删除不匹配的计划', () => {
-    const p = createPlan('我的真实学习计划');
-    const result = cleanTestPlans({ patterns: ['engine-test-', 'adaptive-test-'] });
+  it('不删除不匹配的计划', async () => {
+    const p = await createPlan('我的真实学习计划');
+    const result = await cleanTestPlans({ patterns: ['engine-test-', 'adaptive-test-'] });
     assert.strictEqual(result.count, 0);
     assert.ok(store.getPlan(p.id), '真实计划应保留');
   });
 
-  it('dry-run 不删除任何计划', () => {
-    const p = createPlan('engine-test-plan');
+  it('dry-run 不删除任何计划', async () => {
+    const p = await createPlan('my-feature-test');
     const beforeCount = store.listPlans().length;
 
-    const result = cleanTestPlans({ patterns: ['engine-test-'], dryRun: true });
+    const result = await cleanTestPlans({ patterns: ['my-feature-'], dryRun: true });
 
     assert.strictEqual(result.count, 1);
     assert.strictEqual(result.dryRun, true);
-    assert.deepStrictEqual(result.deleted, ['engine-test-plan']);
+    assert.deepStrictEqual(result.deleted, ['my-feature-test']);
     assert.ok(store.getPlan(p.id), 'dry-run 不应删除计划');
     assert.strictEqual(store.listPlans().length, beforeCount);
   });
 
-  it('自定义 patterns 与正则兜底并行生效', () => {
-    // engine-test-plan 从 dry-run 测试残留，包含 "test" 会被正则匹配
-    const result = cleanTestPlans({ patterns: ['never-match-xxx'] });
+  it('自定义 patterns 与正则兜底并行生效', async () => {
+    // my-feature-test 从 dry-run 测试残留，后缀规则应继续匹配
+    const result = await cleanTestPlans({ patterns: ['never-match-xxx'] });
     assert.ok(result.count >= 1, '正则兜底应匹配到含 test 的残留计划');
   });
 
@@ -138,8 +146,8 @@ describe('cleanTestPlans — 测试计划清理', () => {
     assert.ok(!isTestPlan('zzz-unique-learning-plan', ['never-match-xxx']));
   });
 
-  it('不存在的模式不崩溃', () => {
-    const result = cleanTestPlans({ patterns: ['zzz-nonexistent-xxxxx'] });
+  it('不存在的模式不崩溃', async () => {
+    const result = await cleanTestPlans({ patterns: ['zzz-nonexistent-xxxxx'] });
     assert.strictEqual(result.count, 0);
   });
 });

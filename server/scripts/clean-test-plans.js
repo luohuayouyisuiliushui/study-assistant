@@ -1,4 +1,10 @@
 import * as store from '../engine/learn-store.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const plansDir = path.join(__dirname, '..', 'data', 'learn', 'plans');
 
 export const DEFAULT_PATTERNS = [
   'engine-test-',
@@ -22,25 +28,64 @@ export const DEFAULT_PATTERNS = [
 ];
 
 /**
- * Check if a plan name looks like a test plan.
- * Matches: known prefixes, names ending with -test/_test, or containing "test"/"Test".
+ * Check if a plan name looks like a test plan (name-based heuristic).
  */
-export function isTestPlan(name, patterns = DEFAULT_PATTERNS) {
+export function looksLikeTestName(name, patterns = DEFAULT_PATTERNS) {
   if (patterns.some(pat => name.startsWith(pat))) return true;
   if (/[-_]test$/i.test(name)) return true;
-  if (/\btest\b/i.test(name)) return true;
   return false;
 }
 
-export function cleanTestPlans({ patterns = DEFAULT_PATTERNS, dryRun = false } = {}) {
+/**
+ * Check plan content to decide if it's real user data.
+ * A plan is considered "real" if any topic has generated detail (讲解)
+ * or it has 10+ topics.
+ */
+function isRealData(plan) {
+  if (!plan || !plan.topics) return false;
+  const topicCount = plan.topics.length;
+  if (topicCount >= 10) return true;
+  const hasDetail = plan.topics.some(t => t.detail && t.detail.trim().length > 0);
+  if (hasDetail) return true;
+  return false;
+}
+
+/**
+ * Determine whether a plan is safe to remove as test data.
+ *
+ * A matching test-like name is required. When full plan data is provided,
+ * generated Detail or a substantial topic list protects it from deletion.
+ */
+export function isTestPlan(planOrName, patterns = DEFAULT_PATTERNS) {
+  const plan = typeof planOrName === 'object' && planOrName !== null ? planOrName : null;
+  const name = plan ? plan.name : planOrName;
+  if (!looksLikeTestName(String(name ?? ''), patterns)) return false;
+  return !plan || !isRealData(plan);
+}
+
+export async function cleanTestPlans({ patterns = DEFAULT_PATTERNS, dryRun = false } = {}) {
   const plans = store.listPlans();
-  const matched = plans.filter(p => isTestPlan(p.name, patterns));
+
+  // Read full plan content for each entry to check topic count / detail
+  const matched = [];
+  for (const p of plans) {
+    let fullPlan;
+    try {
+      const filePath = path.join(plansDir, `${p.id}.json`);
+      if (!fs.existsSync(filePath)) continue;
+      fullPlan = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch {
+      continue;
+    }
+    const candidate = { ...fullPlan, name: p.name ?? fullPlan.name };
+    if (isTestPlan(candidate, patterns)) matched.push(p);
+  }
 
   if (dryRun) return { deleted: matched.map(p => p.name), count: matched.length, dryRun: true };
 
   for (const p of matched) {
     try {
-      store.permanentlyDeletePlan(p.id);
+      await store.permanentlyDeletePlan(p.id);
     } catch {
       // Plan file may have been removed by a concurrent process
     }
@@ -51,7 +96,7 @@ export function cleanTestPlans({ patterns = DEFAULT_PATTERNS, dryRun = false } =
 
 if (process.argv[1]?.includes('clean-test-plans')) {
   const dryRun = process.argv.includes('--dry-run');
-  const result = cleanTestPlans({ dryRun });
+  const result = await cleanTestPlans({ dryRun });
   if (dryRun) {
     if (result.count === 0) {
       console.log('没有匹配的测试计划');
