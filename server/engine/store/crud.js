@@ -13,6 +13,7 @@ import {
   readJSON, readIndex, rebuildIndex, writeIndex, updateIndex, planPath,
   getCachedPlan, invalidatePlanCache,
 } from './storage.js';
+import { markPlanForTestCleanup } from './test-plan-marker.js';
 
 // ─── Public API ───
 
@@ -20,11 +21,67 @@ export function listPlans() {
   return readIndex().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
+/**
+ * Scan every persisted plan file, including files missing from plans.json.
+ * Cleanup and integrity tooling use this instead of reaching into data paths.
+ */
+export function scanStoredPlans() {
+  const plans = [];
+  const errors = [];
+  const plansDir = path.join(DATA, 'plans');
+
+  let files;
+  try {
+    files = fs.readdirSync(plansDir).filter(file => file.endsWith('.json'));
+  } catch (error) {
+    return { plans, errors: [{ id: null, message: error.message }] };
+  }
+
+  for (const file of files) {
+    const fileId = path.basename(file, '.json');
+    const plan = readJSON(path.join(plansDir, file));
+    if (!plan || typeof plan !== 'object') {
+      errors.push({ id: fileId, message: 'Plan file could not be read' });
+      continue;
+    }
+    if (plan.id !== fileId) {
+      errors.push({ id: fileId, message: `Plan file contains mismatched id: ${plan.id ?? 'missing'}` });
+      continue;
+    }
+    plans.push(plan);
+  }
+
+  return { plans, errors };
+}
+
+/**
+ * Remove index entries only when their corresponding plan file is absent.
+ * Existing (including unreadable) files are never deleted by this operation.
+ */
+export async function pruneMissingPlanIndexEntries(planIds) {
+  const requestedIds = new Set(
+    (Array.isArray(planIds) ? planIds : []).filter(id => typeof id === 'string' && id.length > 0)
+  );
+  const missingIds = new Set([...requestedIds].filter(id => !fs.existsSync(planPath(id))));
+  const index = readIndex();
+  const removed = index.filter(entry => missingIds.has(entry.id));
+
+  if (removed.length > 0) {
+    await writeIndex(index.filter(entry => !missingIds.has(entry.id)));
+    for (const entry of removed) invalidatePlanCache(entry.id);
+  }
+
+  return {
+    removed,
+    retained: [...requestedIds].filter(id => !removed.some(entry => entry.id === id)),
+  };
+}
+
 export function getPlan(planId) {
   return getCachedPlan(planId, () => readJSON(planPath(planId)));
 }
 
-export async function createPlan(name) {
+export async function createPlan(name, options = {}) {
   const id = uuidv4();
   const plan = {
     id,
@@ -35,6 +92,7 @@ export async function createPlan(name) {
     phases: [],
     history: [],
   };
+  markPlanForTestCleanup(plan, options);
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();
   index.push({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: 0 });
@@ -55,6 +113,7 @@ export async function deletePlan(planId) {
 export async function permanentlyDeletePlan(planId) {
   // 先等待队列清空，再删除
   await drainWriteQueue(planId);
+  invalidatePlanCache(planId);
 
   // Delete plan file from plans/
   const src = planPath(planId);
@@ -311,7 +370,8 @@ function findTrashFile(planId) {
 }
 
 // ─── Auto-cleanup: run every hour ───
-setInterval(() => cleanExpiredTrash(), 60 * 60 * 1000);
+const trashCleanupTimer = setInterval(() => cleanExpiredTrash(), 60 * 60 * 1000);
+trashCleanupTimer.unref(); // Do not keep one-off CLI scripts alive after their work is done.
 cleanExpiredTrash(); // also run once on startup
 
 /**
@@ -530,7 +590,8 @@ export function extractRelationsFromDetail(detail, allTopics, currentTopicId) {
   // Section headers indicating a "related topics" section
   const sectionPatterns = [
     /^#{2,4}\s*与相关知识点的联系\s*$/m,
-    /^#{2,4}\s*(?:关联|相关|联系|后续|延伸)(?:知识|学习|概念|主题)?(?:点)?\s*(?:的联系|的关系)?\s*$/m,
+    /^#{2,4}\s*承上启下\s*[：:]\s*与相关知识点的联系\s*$/m,
+    /^#{2,4}\s*(?:承上启下\s*[：:]\s*)?(?:关联|相关|联系|后续|延伸)(?:知识|学习|概念|主题)?(?:点)?\s*(?:的联系|的关系)?\s*$/m,
   ];
 
   let sectionStart = -1;
@@ -926,7 +987,7 @@ export function buildEnhancedKnowledgeGraph(plan, options = {}) {
   };
 }
 
-export function createPlanWithPhases(name, phases, relations) {
+export function createPlanWithPhases(name, phases, relations, options = {}) {
   const id = uuidv4();
   const sortedPhases = phases.map((p, i) => ({
     id: uuidv4().slice(0, 8),
@@ -971,6 +1032,7 @@ export function createPlanWithPhases(name, phases, relations) {
     topics,
     history: [],
   };
+  markPlanForTestCleanup(plan, options);
 
   writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
   const index = readIndex();
@@ -983,7 +1045,7 @@ export function createPlanWithPhases(name, phases, relations) {
  * Serialized write: execute fn(plan), then atomically save.
  * fn receives the plan object and should mutate it in place.
  */
-function writePlan(planId, fn) {
+export function writePlan(planId, fn) {
   return enqueueWrite(planId, () => {
     const plan = getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
@@ -1466,4 +1528,30 @@ export function saveQuickQuizResults(planId, quizData) {
       plan.quickQuizHistory = plan.quickQuizHistory.slice(-20);
     }
   });
+}
+
+/**
+ * Atomically append a generation feedback entry to a topic.
+ * All operations (read existing, append, slice) happen inside a single
+ * writePlan mutator, making it safe against concurrent writes.
+ *
+ * @param {string} planId
+ * @param {string} topicId
+ * @param {object} entry - { reason, mode, timestamp }
+ * @param {number} [limit=20] - max entries to retain
+ * @returns {number} total entries after append
+ */
+export async function appendGenerationFeedback(planId, topicId, entry, limit = 20) {
+  // Normalize limit: finite positive integer, max 100
+  const maxLen = (Number.isFinite(limit) && limit > 0) ? Math.min(Math.round(limit), 100) : 20;
+  let total = 0;
+  await writePlan(planId, (plan) => {
+    const topic = plan.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    const existing = Array.isArray(topic.generationFeedback) ? topic.generationFeedback : [];
+    const updated = [...existing, entry].slice(-maxLen);
+    topic.generationFeedback = updated;
+    total = updated.length;
+  });
+  return { total };
 }

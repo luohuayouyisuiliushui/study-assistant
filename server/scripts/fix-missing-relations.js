@@ -77,8 +77,9 @@ async function main() {
       continue;
     }
 
-    // 检查是否有 "与相关知识点的联系" 段落
-    const hasSection = /^#{2,4}\s*与相关知识点的联系\s*$/m.test(topic.detail);
+    // 检查是否有 "与相关知识点的联系" 段落（支持多种标题格式）
+    const hasSection = /^#{2,4}\s*(?:承上启下\s*[：:]\s*)?与相关知识点的联系\s*$/m.test(topic.detail) ||
+                       /^#{2,4}\s*(?:承上启下\s*[：:]\s*)?(?:关联|相关|联系|后续|延伸)(?:知识|学习|概念|主题)?(?:点)?\s*(?:的联系|的关系)?\s*$/m.test(topic.detail);
     if (!hasSection) {
       console.log(`   ⏭️  跳过 ${topic.title}（detail 中没有"与相关知识点的联系"段落，后续由 AI 推断处理）`);
       continue;
@@ -138,7 +139,8 @@ async function main() {
     const hasExisting = (topic.prerequisites?.length || 0) > 0 ||
                         (topic.relatedTopics?.length || 0) > 0;
     if (hasExisting) continue;
-    const hasSection = /^#{2,4}\s*与相关知识点的联系\s*$/m.test(topic.detail);
+    const hasSection = /^#{2,4}\s*(?:承上启下\s*[：:]\s*)?与相关知识点的联系\s*$/m.test(topic.detail) ||
+                       /^#{2,4}\s*(?:承上启下\s*[：:]\s*)?(?:关联|相关|联系|后续|延伸)(?:知识|学习|概念|主题)?(?:点)?\s*(?:的联系|的关系)?\s*$/m.test(topic.detail);
     if (!hasSection) {
       needAI.push({ id: topic.id, title: topic.title });
     }
