@@ -21,6 +21,8 @@ import { AdaptivePromptInjector } from './adaptive-engine.js';
 import { getUserProfile } from './user-profile.js';
 import { buildDetailMessages, buildDeterministicContext } from './learn-prompts.js';
 import { updateTopic, addHistory } from './learn-store.js';
+import { extractRelationsFromDetail } from './learn-store.js';
+import { INFER_RELATIONS_PROMPT } from './learn-prompts.js';
 import { generateExam, gradeExam, generateExamPractice,
   generateBlueprint, generateSingleQuestion, selfCorrectQuestion,
   generateExamStream, evaluateQuestionQuality } from './exam-engine.js';
@@ -159,6 +161,36 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
     await updateTopic(plan.id, topicId, { detail: fullContent, done: true, lastError: null });
     await addHistory(plan.id, topicId, 'ai', fullContent);
 
+    // ── Extract relations from generated detail and persist ──
+    try {
+      const extractedEdges = extractRelationsFromDetail(fullContent, plan.topics, topicId);
+      if (extractedEdges.length > 0) {
+        const prereqs = new Set(topic.prerequisites || []);
+        const related = new Set(topic.relatedTopics || []);
+
+        for (const e of extractedEdges) {
+          if (e.to === topicId) {
+            // A matched topic points to the current topic
+            if (e.type === 'prerequisite' || e.type === 'buildsOn' || e.type === 'references') {
+              prereqs.add(e.from);  // matched topic is something current needs first
+            } else {
+              related.add(e.from);  // matched topic is related
+            }
+          } else if (e.from === topicId) {
+            // Current topic points to a matched topic
+            related.add(e.to);
+          }
+        }
+
+        await updateTopic(plan.id, topicId, {
+          prerequisites: [...prereqs],
+          relatedTopics: [...related],
+        });
+      }
+    } catch (err) {
+      console.error('[generateDetail] Relation extraction failed:', err.message);
+    }
+
     // ── Post-generation fact-check (quick scan, fire-and-forget) ──
     factCheckQuickScan(provider, fullContent, topic.title, model).then(result => {
       if (result && result.flagged) {
@@ -289,66 +321,295 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
   }
 }
 
-
 /**
- * Build a rich, detailed image generation prompt based on the topic title.
- * Uses keyword analysis to determine illustration type and composition.
+ * Infer prerequisite and related-topic relationships among all topics in a plan.
+ * Uses AI to analyze all topic titles at once and produce a mapping of relationships.
+ * Called once per plan when topics lack relationship data (fire-and-forget).
+ *
+ * @param {object} providerOrConfig - Provider instance or config
+ * @param {object} plan - Full plan object
+ * @param {string} model - Model name
+ * @returns {Promise<object>} Inferred relations result
  */
-function buildImagePrompt(title) {
-  const lower = (title || '').toLowerCase();
-
-  let illType = 'conceptual diagram';
-  let style = 'Modern flat vector illustration, clean minimalist design, soft color palette with pastel blues and greens';
-  let composition = 'Center a clear visual representation with supporting elements around it';
-  let details = 'Well-structured layout, visually appealing, suitable for academic study notes';
-
-  if (/流程|步骤|过程|workflow|pipeline|flow|build|deploy/.test(lower)) {
-    illType = 'process flow diagram';
-    composition = 'Left-to-right connected steps with directional arrows, each step as a distinct labeled box';
-    details = 'Clear flow direction, sequential numbering, organized pipeline layout';
-  } else if (/架构|结构|体系|分层|stack|architecture|layer|hierarchy/.test(lower)) {
-    illType = 'architecture diagram';
-    composition = 'Layered blocks stacked vertically with connecting lines, each layer distinctly colored and labeled';
-    details = 'Clean hierarchical structure, well-organized layers';
-  } else if (/对比|区别|vs|versus|比较|comparison|diff/.test(lower)) {
-    illType = 'comparison diagram';
-    composition = 'Side-by-side layout with two columns, contrasting colors, key attributes listed';
-    details = 'Symmetrical balanced layout, clear visual comparison';
-  } else if (/网络|连接|通信|protocol|network|connect|link/.test(lower)) {
-    illType = 'network diagram';
-    composition = 'Interconnected nodes or devices with labeled connection paths, distinct node types';
-    details = 'Clean network topology, organized node layout';
-  } else if (/编译|部署|构建|交叉|toolchain|compile|cross/.test(lower)) {
-    illType = 'development workflow';
-    composition = 'Host machine on left, target device on right, transformation arrows between showing compile-link-deploy flow';
-    details = 'Clear host-to-target pipeline, developer workstation visualization';
-  } else if (/硬件|设备|芯片|电路|board|hardware|chip|embedded/.test(lower)) {
-    illType = 'hardware diagram';
-    composition = 'Isometric hardware device view with labeled components and annotations around it';
-    details = 'Technical hardware representation, clean annotated parts diagram';
-  } else if (/编程|代码|语法|函数|class|function|code|variable/.test(lower)) {
-    illType = 'code visualization';
-    composition = 'Code blocks as colored tokens, flow of execution indicated by arrows, syntax elements visually distinct';
-    details = 'Clean code representation with syntax highlighting colors';
-  } else if (/调试|排查|错误|debug|error|bug|fix/.test(lower)) {
-    illType = 'debug process diagram';
-    composition = 'Diagnostic workflow with inspection points, tools, and resolution paths';
-    details = 'Clear problem-solving visual flow';
-  } else if (/概念|原理|理论|基础|theory|concept|principle/.test(lower)) {
-    illType = 'concept mind map';
-    composition = 'Central concept with radiating color-coded sub-concepts connected by lines, organized radially';
-    details = 'Clean mind map layout, hierarchical concept organization';
+export async function inferTopicRelations(providerOrConfig, plan, model = 'gpt-4o-mini') {
+  const provider = resolveProvider(providerOrConfig, model);
+  const topics = plan.topics || [];
+  if (topics.length < 2) {
+    return { relations: [], analysis: '知识点少于 2 个，无需推断' };
   }
 
+  // Build topic list as numbered index for the AI
+  const sorted = [...topics].sort((a, b) => a.order - b.order);
+  const topicLines = sorted.map((t, i) => `topic-${i}: ${t.title}`).join('\n');
+
+  const userMessage =
+    `以下是学习计划「${plan.name || '未命名'}」中按顺序排列的知识点列表。请分析并推断它们之间的关系：\n\n${topicLines}`;
+
+  const messages = [
+    { role: 'system', content: INFER_RELATIONS_PROMPT },
+    { role: 'user', content: userMessage },
+  ];
+
+  try {
+    const result = await provider.complete(messages, {
+      temperature: 0.3,
+      maxTokens: 4096,
+      responseFormat: { type: 'json_object' },
+    });
+
+    const parsed = JSON.parse(result.content || '{}');
+    const relations = parsed.relations || [];
+
+    // Map topic indices back to actual topic IDs
+    const indexToId = {};
+    sorted.forEach((t, i) => { indexToId[`topic-${i}`] = t.id; });
+
+    // Collect updates per topic
+    const updatesByTopicId = {};
+
+    for (const rel of relations) {
+      const fromId = indexToId[rel.from];
+      const toId = indexToId[rel.to];
+      if (!fromId || !toId || fromId === toId) continue;
+
+      if (rel.type === 'prerequisite') {
+        if (!updatesByTopicId[toId]) updatesByTopicId[toId] = { prerequisites: [] };
+        if (!updatesByTopicId[toId].prerequisites.includes(fromId)) {
+          updatesByTopicId[toId].prerequisites.push(fromId);
+        }
+      } else if (rel.type === 'related') {
+        if (!updatesByTopicId[fromId]) updatesByTopicId[fromId] = { relatedTopics: [] };
+        if (!updatesByTopicId[toId]) updatesByTopicId[toId] = { relatedTopics: [] };
+        if (!updatesByTopicId[fromId].relatedTopics.includes(toId)) {
+          updatesByTopicId[fromId].relatedTopics.push(toId);
+        }
+        if (!updatesByTopicId[toId].relatedTopics.includes(fromId)) {
+          updatesByTopicId[toId].relatedTopics.push(fromId);
+        }
+      }
+    }
+
+    // Apply all updates to topics
+    for (const [topicId, updates] of Object.entries(updatesByTopicId)) {
+      const topic = plan.topics.find(t => t.id === topicId);
+      if (!topic) continue;
+      const merged = {
+        prerequisites: [...(topic.prerequisites || [])],
+        relatedTopics: [...(topic.relatedTopics || [])],
+      };
+      for (const pid of (updates.prerequisites || [])) {
+        if (!merged.prerequisites.includes(pid)) merged.prerequisites.push(pid);
+      }
+      for (const rid of (updates.relatedTopics || [])) {
+        if (!merged.relatedTopics.includes(rid)) merged.relatedTopics.push(rid);
+      }
+      await updateTopic(plan.id, topicId, {
+        prerequisites: merged.prerequisites,
+        relatedTopics: merged.relatedTopics,
+      });
+    }
+
+    return { relations, analysis: parsed.analysis || '' };
+  } catch (err) {
+    console.error('[inferTopicRelations] AI call failed:', err.message);
+    throw err;
+  }
+}
+
+/**
+ * Clean up topic detail for image prompt context:
+ * - Remove fenced code/Mermaid blocks
+ * - Remove exercise/answer sections
+ * - Strip Markdown formatting
+ * - Collapse whitespace
+ * - Trim to ~1000 chars
+ */
+function cleanDetailForContext(detail) {
+  if (!detail) return '';
+  let text = detail;
+
+  // Remove fenced code blocks (including Mermaid)
+  text = text.replace(/```[\s\S]*?```/g, ' ');
+
+  // Remove inline code
+  text = text.replace(/`[^`]+`/g, ' ');
+
+  // Remove Mermaid diagram definitions
+  text = text.replace(/```mermaid[\s\S]*?```/g, ' ');
+
+  // Remove exercise section (from "练习题" heading onward)
+  const exerciseIdx = text.search(/^#{1,3}\s*练习题|📝\s*练习题/m);
+  if (exerciseIdx >= 0) text = text.slice(0, exerciseIdx);
+
+  // Remove Markdown headings markers
+  text = text.replace(/^#{1,6}\s*/gm, '');
+
+  // Remove bold/italic markers
+  text = text.replace(/\*\*(.+?)\*\*/g, '$1');
+  text = text.replace(/\*(.+?)\*/g, '$1');
+
+  // Remove link syntax but keep text
+  text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+  // Remove image syntax
+  text = text.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
+
+  // Remove horizontal rules
+  text = text.replace(/^---+\s*$/gm, '');
+
+  // Remove blockquote markers
+  text = text.replace(/^>\s*/gm, '');
+
+  // Remove list markers
+  text = text.replace(/^[\s]*(?:[-*+]|\d+\.)\s+/gm, '');
+
+  // Remove HTML tags
+  text = text.replace(/<[^>]+>/g, '');
+
+  // Collapse whitespace
+  text = text.replace(/\s+/g, ' ').trim();
+
+  // Trim to max 1000 chars
+  if (text.length > 1000) {
+    // Cut at last sentence boundary within limit
+    const cut = text.lastIndexOf('。', 1000);
+    if (cut > 500) text = text.slice(0, cut + 1);
+    else text = text.slice(0, 1000) + '...';
+  }
+
+  return text;
+}
+
+/**
+ * Detect illustration type based on title + detail context.
+ * Returns { type, style, composition } for the image prompt.
+ */
+function detectIllustrationType(title, context) {
+  const lower = (title || '').toLowerCase();
+  const ctx = (context || '').toLowerCase();
+  // Match against both title and context for better classification
+  const text = lower + ' ' + ctx;
+
+  if (/流程|步骤|过程|workflow|pipeline|flow|build|deploy|编译|部署|构建/.test(text)) {
+    return {
+      type: 'process flow diagram',
+      style: 'Modern flat vector, clean lines, directional arrows in blue and green tones',
+      composition: 'Horizontal left-to-right connected steps with clear directional arrows between distinct stages',
+      details: 'Each stage as a distinct visual block, sequential flow, organized pipeline with clear progression'
+    };
+  }
+
+  if (/架构|结构|体系|分层|stack|architecture|layer|hierarchy|模块/.test(text)) {
+    return {
+      type: 'architecture diagram',
+      style: 'Modern flat vector, layered blocks in coordinated color scheme',
+      composition: 'Vertically stacked layers or interconnected modules showing hierarchical structure',
+      details: 'Clean layered architecture, each tier visually distinct, organized structural layout'
+    };
+  }
+
+  if (/对比|区别|vs|versus|比较|comparison|diff|异同/.test(text)) {
+    return {
+      type: 'comparison diagram',
+      style: 'Modern flat vector, side-by-side layout with contrasting complementary colors',
+      composition: 'Two-column symmetrical layout alternating key attributes for clear visual comparison',
+      details: 'Balanced symmetrical design, contrasting but harmonious color pairs'
+    };
+  }
+
+  if (/网络|连接|通信|protocol|network|connect|link|拓扑/.test(text)) {
+    return {
+      type: 'network topology diagram',
+      style: 'Modern flat vector, interconnected nodes in tech-blue and gray palette',
+      composition: 'Distributed nodes or devices with connecting lines showing communication paths',
+      details: 'Clean network topology, distinct node types, organized spatial layout'
+    };
+  }
+
+  if (/硬件|设备|芯片|电路|board|hardware|chip|embedded|存储器|CPU|内存/.test(text)) {
+    return {
+      type: 'hardware component diagram',
+      style: 'Modern flat vector, isometric or 2D top-down view with tech-industrial palette',
+      composition: 'Technical hardware illustration with clearly separated functional blocks and data/control flow arrows',
+      details: 'Component-level hardware representation, organized functional blocks'
+    };
+  }
+
+  if (/编程|代码|语法|函数|class|function|code|variable|算法|排序|搜索|递归/.test(text)) {
+    return {
+      type: 'algorithm/code visualization',
+      style: 'Modern flat vector, code-token-inspired blocks in syntax-highlight colors',
+      composition: 'Step-by-step execution flow diagram with colored data/control elements and transformation arrows',
+      details: 'Algorithmic process visualization, clear data flow, execution path highlighted'
+    };
+  }
+
+  if (/调试|排查|错误|debug|error|bug|fix|异常/.test(text)) {
+    return {
+      type: 'debug/troubleshooting workflow',
+      style: 'Modern flat vector, diagnostic flowchart with decision diamonds in amber-blue palette',
+      composition: 'Decision-tree style diagnostic workflow showing inspection points, branching paths, and resolution',
+      details: 'Problem-solving flowchart, clear decision points, resolution path highlighted'
+    };
+  }
+
+  if (/数据|database|sql|存储|缓存|cache|持久化|文件系统/.test(text)) {
+    return {
+      type: 'data storage diagram',
+      style: 'Modern flat vector, database/server icons in cool blue-gray palette',
+      composition: 'Data storage hierarchy or database schema showing tables/collections with relationship connectors',
+      details: 'Clean data organization, entity-relationship style layout, organized storage tiers'
+    };
+  }
+
+  if (/时间复杂度|空间复杂度|算法|排序|遍历|递归/.test(text)) {
+    return {
+      type: 'algorithm complexity visualization',
+      style: 'Modern flat vector, chart-style in vibrant educational palette',
+      composition: 'Comparative visual showing growth curves or step-by-step transformation of data structures',
+      details: 'Educational algorithm illustration, conceptual data transformation visualization'
+    };
+  }
+
+  // Default: concept explanation
+  return {
+    type: 'concept illustration',
+    style: 'Modern flat vector illustration, clean minimalist design, soft educational color palette',
+    composition: 'Central concept representation with clearly arranged supporting elements around it, showing relationships and structure',
+    details: 'Educational concept visualization with clear visual hierarchy, suitable for study notes'
+  };
+}
+
+/**
+ * Build a rich, detailed image generation prompt based on the full topic object.
+ * Uses topic title + cleaned detail context for better relevance.
+ * The context is trimmed to ~600 characters — enough for key concepts
+ * without overwhelming the image model prompt budget.
+ * Accepts plain string title for backward compatibility.
+ *
+ * @param {object|string} topic - Topic object (with title, detail, id) or plain title string
+ * @returns {string} Detailed image generation prompt
+ */
+export function buildImagePrompt(topic) {
+  const title = (typeof topic === 'string') ? topic : (topic?.title || '');
+  const context = (typeof topic === 'string') ? '' : cleanDetailForContext(topic?.detail);
+
+  const { type, style, composition, details } = detectIllustrationType(title, context);
+
+  // Trim context to ~600 chars — enough for subject-specific keywords
+  // while leaving room for instruction tokens in the image model's prompt budget.
+  const contextHint = context
+    ? ` Key concepts to illustrate: ${context.slice(0, 600).trim()}.`
+    : '';
+
   return [
-    `Professional educational ${illType} about "${title}".`,
-    `${style}.`,
-    `${composition}.`,
-    `${details}.`,
-    'High quality, sharp details, flat vector art style, clean lines.',
-    'Light cream or white background, no text errors or typos.',
-    'Suitable for printing and digital display, 4K detail level.',
-    'No photorealistic humans, no 3D rendering, no dark backgrounds.',
+    `Professional educational ${type} about "${title}".${contextHint}`,
+    `${style}. ${composition}.`,
+    `${details}. High quality, sharp details, flat vector art style, clean lines.`,
+    'NO text, NO letters, NO numbers, NO labels, NO watermarks, NO UI screenshots or mockups anywhere in the image.',
+    'Use icons, shapes, arrows, and color coding to convey meaning without any readable text.',
+    'Light cream or white background. No photorealistic humans, no 3D rendering, no dark backgrounds.',
+    'Suitable for academic study and learning materials. Conceptually accurate and educationally valuable.',
   ].join(' ');
 }
 
@@ -366,7 +627,7 @@ export async function generateTopicImage(topic, imageApiKey, model) {
   const imageModel = model || 'black-forest-labs/FLUX.1-dev';
 
   // Build a structured prompt based on the topic title
-  const prompt = buildImagePrompt(topic.title);
+  const prompt = buildImagePrompt(topic);
 
   const imageDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'images');
   fs.mkdirSync(imageDir, { recursive: true });
@@ -540,6 +801,7 @@ export default {
   generateDetail,
   generateDetailWithImage,
   generateTopicImage,
+  buildImagePrompt,
   answerFollowUp,
   answerAnalysisFollowUp,
   analyzeLearning,
@@ -564,6 +826,7 @@ export default {
   textToSpeech,
   getEngineCacheDiagnostics,
   createProviderFromConfig,
+  inferTopicRelations,
   // Fact-check engine (re-exported from fact-checker.js)
   factCheckDetail,
   factCheckQuickScan,
