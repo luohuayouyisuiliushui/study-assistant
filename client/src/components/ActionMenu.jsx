@@ -1,4 +1,4 @@
-import { Search, BarChart3 } from 'lucide-react';
+import { Search, BarChart3, Lightbulb } from 'lucide-react';
 
 /**
  * Reusable action menu for TopicDetail.

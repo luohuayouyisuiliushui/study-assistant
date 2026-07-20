@@ -1,0 +1,142 @@
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { Provider } from '../engine/provider.js';
+import {
+  recommendResources,
+  buildImagePrompt,
+} from '../engine/learn-engine.js';
+import {
+  buildDetailMessages,
+  buildDeterministicContext,
+} from '../engine/learn-prompts.js';
+import * as store from '../engine/learn-store.js';
+
+// ─── Mock provider that returns a fixed completion ───
+function createMockProvider(resultContent, modelName = 'mock-model') {
+  const mockClient = {
+    chat: {
+      completions: {
+        async create() {
+          return {
+            choices: [{ message: { content: resultContent, role: 'assistant' } }],
+            model: modelName,
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          };
+        },
+      },
+    },
+  };
+  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: modelName });
+  provider._client = mockClient;
+  provider._autoWarm = false;
+  return provider;
+}
+
+let planId = null;
+
+before(async () => {
+  const plan = await store.createPlan('rec-test-plan');
+  planId = plan.id;
+  await store.addTopics(plan.id, ['Socket 编程基础']);
+});
+
+after(() => {
+  if (planId) {
+    try { store.deletePlan(planId); } catch {}
+  }
+});
+
+describe('recommendResources', () => {
+  it('returns structured multi-channel resources from AI JSON', async () => {
+    const json = JSON.stringify({
+      topicTitle: 'Socket 编程基础',
+      resources: [
+        { type: 'book', title: 'UNIX 网络编程', source: ' Prentice Hall', level: 'advanced', paid: true, reason: '经典权威', url: 'https://example.com/book' },
+        { type: 'video', title: 'Socket 入门视频', source: 'YouTube', level: 'beginner', paid: false, reason: '直观演示', url: '' },
+      ],
+    });
+    const provider = createMockProvider(json);
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    const result = await recommendResources(provider, plan, topicId, 'mock-model');
+
+    assert.equal(result.topicTitle, 'Socket 编程基础');
+    assert.equal(result.resources.length, 2);
+    assert.equal(result.resources[0].type, 'book');
+    assert.equal(result.resources[0].title, 'UNIX 网络编程');
+    assert.equal(result.resources[0].paid, true);
+    assert.equal(result.resources[1].type, 'video');
+  });
+
+  it('normalizes missing optional fields safely', async () => {
+    const json = JSON.stringify({
+      topicTitle: 'X',
+      resources: [{ title: 'Some article' }], // missing type/source/level/paid/url
+    });
+    const provider = createMockProvider(json);
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    // Give the topic distinct detail so the request hash differs from the
+    // previous test (the Provider shares a process-wide response cache keyed
+    // on the exact request — identical prompts would hit the cache).
+    await store.updateTopic(plan.id, topicId, { detail: '完全不同的知识点内容用于区分缓存键。' });
+    const result = await recommendResources(provider, plan, topicId, 'mock-model');
+    assert.equal(result.resources.length, 1);
+    assert.equal(result.resources[0].type, 'article'); // defaulted
+    assert.equal(result.resources[0].paid, false); // defaulted
+    assert.equal(result.resources[0].level, 'intermediate'); // defaulted
+  });
+
+  it('throws on unknown topic', async () => {
+    const provider = createMockProvider('{}');
+    const plan = store.getPlan(planId);
+    await assert.rejects(() => recommendResources(provider, plan, 'no-such-topic', 'mock-model'));
+  });
+});
+
+describe('buildImagePrompt', () => {
+  it('produces a coherent, text-free educational brief', () => {
+    const prompt = buildImagePrompt({ title: 'TCP 三次握手', detail: '客户端发送 SYN，服务端回 SYN-ACK，客户端再发 ACK 建立连接。' });
+    assert.ok(prompt.includes('TCP 三次握手'), 'should mention the title');
+    assert.ok(/network|拓扑|连接|通信/i.test(prompt), 'should detect a network-type illustration');
+    assert.ok(prompt.length > 50 && prompt.length < 1200, 'prompt should be reasonably sized');
+  });
+
+  it('does not require a language-tagged input', () => {
+    const prompt = buildImagePrompt('进程与线程');
+    assert.ok(prompt.includes('进程与线程'));
+  });
+});
+
+describe('explainStyle injection', () => {
+  it('injects the chosen style guide into the deterministic context', () => {
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    const ctx = buildDeterministicContext(plan, topicId, undefined, 'visual');
+    assert.ok(ctx.includes('【讲解风格：直观图解】'), 'visual style should be injected');
+  });
+
+  it('respects plan.explainStyle when no explicit arg is given', () => {
+    const plan = store.getPlan(planId);
+    plan.explainStyle = 'abstract';
+    const topicId = plan.topics[0].id;
+    const ctx = buildDeterministicContext(plan, topicId);
+    assert.ok(ctx.includes('【讲解风格：抽象精炼】'));
+    delete plan.explainStyle;
+  });
+
+  it('omits style line when none selected', () => {
+    const plan = store.getPlan(planId);
+    delete plan.explainStyle;
+    const topicId = plan.topics[0].id;
+    const ctx = buildDeterministicContext(plan, topicId);
+    assert.ok(!/【讲解风格/.test(ctx));
+  });
+
+  it('buildDetailMessages forwards explainStyle into the context message', () => {
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    const msgs = buildDetailMessages(plan, topicId, '讲讲看', 'textbook');
+    assert.ok(msgs[1].content.includes('【讲解风格：纸质教材感】'));
+  });
+});
