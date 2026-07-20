@@ -5,17 +5,36 @@ import rehypeRaw from 'rehype-raw';
 import MermaidDiagram from './MermaidDiagram';
 
 const markdownComponents = {
-  p({ children, ...props }) {
-    return <p className='mb-4 last:mb-0' {...props}>{children}</p>;
+  p({ children }) {
+    return <p className='mb-4 last:mb-0'>{children}</p>;
   },
-  code({ className, children, ...props }) {
-    const isInline = !props?.node?.properties?.className && !className;
+  pre({ children }) {
+    // Mermaid fenced blocks should NOT be wrapped in <pre>.
+    // In react-markdown v10, pre receives the raw hast <code> element as children,
+    // not our custom code component's return value — so we check className.
+    if (children?.props?.className?.includes('language-mermaid')) {
+      return children;
+    }
+    return <pre>{children}</pre>;
+  },
+  code({ className, children }) {
     const code = String(children).replace(/\n$/, '');
-    if (className && className.includes('language-mermaid') && !isInline) {
+    // Mermaid fenced block
+    if (className && className.includes('language-mermaid')) {
       return <MermaidDiagram code={code} />;
     }
-    if (isInline) return <code {...props}>{children}</code>;
-    return <pre {...props}><code className={className}>{children}</code></pre>;
+    // Block vs inline detection.
+    // react-markdown v10 removed the `inline` prop, so we can no longer rely on it.
+    // A fenced code block WITHOUT a language (e.g. ``` with no lang) has no
+    // className — previously this was misclassified as inline code and lost its
+    // <pre> wrapper. Treat anything with a language- class OR containing a
+    // newline as a block (fenced) code block.
+    const isBlock = (className && className.includes('language-')) || code.includes('\n');
+    if (!isBlock) {
+      return <code>{children}</code>;
+    }
+    // Fenced code block — <pre> wrapper is provided by the pre component above
+    return <code className={className}>{code}</code>;
   },
 };
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, Download, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Search, Wrench, FileText, BarChart3, BookOpen, Play, Mic, X, Lightbulb, Target, Zap, Swords, Layers, Brain, CheckCircle, AlertCircle, List, ThumbsUp, ThumbsDown, Meh, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
 import RegenerateDialog from './RegenerateDialog';
@@ -10,6 +10,8 @@ import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
 import QAPanel from './QAPanel.jsx';
+import ActionMenu from './ActionMenu.jsx';
+import { loadSettings } from '#/lib/settings-storage';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -86,13 +88,15 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const headerSentinelRef = useRef(null);
   const [headerStuck, setHeaderStuck] = useState(false);
+  const [headerStuckVisible, setHeaderStuckVisible] = useState(false);
+  const relationsInferredRef = useRef(false);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
   const [revealErrors, setRevealErrors] = useState(null);
   const [revealLoading, setRevealLoading] = useState(false);
   const [foundErrorsInput, setFoundErrorsInput] = useState('');
   const lastReportedRef = useRef(0);
-  const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+  const settings = loadSettings();
 
   const [exercises, setExercises] = useState([]);
   const [exerciseAnswers, setExerciseAnswers] = useState({});
@@ -113,14 +117,12 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [interactiveFinished, setInteractiveFinished] = useState(false);
   const [interactiveInput, setInteractiveInput] = useState('');
   const [interactiveStateMachine, setInteractiveStateMachine] = useState(null);
-  const interactiveInputRef = useRef(null);
   const interactiveBusyRef = useRef(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
   const [voiceSupported, setVoiceSupported] = useState(true);
 
-  const [showExportMenu, setShowExportMenu] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const fixedMenuRef = useRef(null);
@@ -137,9 +139,16 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const [adaptiveData, setAdaptiveData] = useState(null);
   const [adaptiveLoading, setAdaptiveLoading] = useState(false);
+
+  const [resources, setResources] = useState(topic?.resources || null);
+  const [resourcesLoading, setResourcesLoading] = useState(false);
+  const [feynmanInsights, setFeynmanInsights] = useState(topic?.feynmanInsights || null);
   const [feynmanInsightsOpen, setFeynmanInsightsOpen] = useState(true);
   const [feynmanAnalyzing, setFeynmanAnalyzing] = useState(false);
   const [feynmanHistoryOpen, setFeynmanHistoryOpen] = useState(false);
+
+  const [imageGenerating, setImageGenerating] = useState(false);
+  const [imageError, setImageError] = useState(null);
 
   // AI request abort controller — cancels all pending AI calls on unmount / mode switch
   const abortRef = useRef(null);
@@ -210,12 +219,46 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     const sentinel = headerSentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
-      ([entry]) => setHeaderStuck(!entry.isIntersecting),
+      ([entry]) => {
+        setHeaderStuck(!entry.isIntersecting);
+        // Add a small delay for the fade-in animation
+        if (!entry.isIntersecting) {
+          requestAnimationFrame(() => setHeaderStuckVisible(true));
+        } else {
+          setHeaderStuckVisible(false);
+        }
+      },
       { threshold: 0, rootMargin: '-1px 0px 0px 0px' }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, []);
+
+  // Auto-infer topic relationships when viewing a topic with no relationship data
+  useEffect(() => {
+    if (!plan || !topic || relationsInferredRef.current) return;
+    if (plan.relationsInferredAt) { relationsInferredRef.current = true; return; }
+
+    // Skip if any topic already has relationship data (e.g. from AI import)
+    const hasAnyRelations = plan.topics.some(t =>
+      (t.prerequisites && t.prerequisites.length > 0) ||
+      (t.relatedTopics && t.relatedTopics.length > 0) ||
+      t.parentId
+    );
+    if (hasAnyRelations) { relationsInferredRef.current = true; return; }
+
+    // Fire inference — don't await, don't block UI
+    relationsInferredRef.current = true;
+    api.inferRelations(plan.id).then(() => {
+      // Refresh plan data after inference completes
+      api.getPlan(plan.id).then(fresh => {
+        if (fresh.plan) onRefresh(fresh.plan);
+      }).catch(() => {});
+    }).catch(() => {
+      // Silent failure — allow retry on next mount
+      relationsInferredRef.current = false;
+    });
+  }, [plan?.id, topic?.id]);
 
   useEffect(() => {
     const pid = plan?.id;
@@ -359,19 +402,22 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   }, [topic?.id]);
 
   const handleGenerateImage = async (topicId) => {
-    setGenerating(true);
+    setImageGenerating(true);
+    setImageError(null);
     try {
-      await api.generateDetail(plan.id, topicId);
-      setTimeout(async () => {
-        const fresh = await api.getPlan(plan.id);
-        if (fresh.plan) { setTopic(fresh.plan.topics.find(t => t.id === topicId)); }
-        setGenerating(false);
-      }, 5000);
-    } catch { setGenerating(false); }
+      await api.generateTopicImage(plan.id, topicId);
+      const fresh = await api.getPlan(plan.id);
+      if (fresh.plan) {
+        onRefresh(fresh.plan);
+        const t = fresh.plan.topics.find(t => t.id === topicId);
+        if (t?.imageUrl) setLocalDetail(t.detail || localDetail);
+      }
+    } catch (err) {
+      setImageError(err.message || '生成配图失败');
+    } finally {
+      setImageGenerating(false);
+    }
   };
-
-  useEffect(() => {
-    }, [generating, localDetail, error]);
 
   useEffect(() => {
     if (!generating || !plan) return;
@@ -387,13 +433,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }, 2000);
     return () => clearInterval(timer);
   }, [generating, plan?.id, topic?.id]);
-
-  useEffect(() => {
-    if (!showExportMenu) return;
-    const handler = (e) => { if (!e.target.closest('.export-menu-container')) setShowExportMenu(false); };
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [showExportMenu]);
 
   if (!topic) return null;
 
@@ -590,6 +629,16 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     try { const d = await api.adaptiveAnalysis(plan.id); setAdaptiveData(d); } catch (err) { alert('自适应分析失败: ' + err.message); } finally { setAdaptiveLoading(false); }
   };
 
+  const handleRecommendResources = async () => {
+    if (resourcesLoading || !localDetail) return;
+    setResourcesLoading(true);
+    try {
+      const d = await api.recommendResources(plan.id, topic.id);
+      setResources(d.resources || []);
+      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
+    } catch (err) { alert('资源推荐失败: ' + err.message); } finally { setResourcesLoading(false); }
+  };
+
   const handleExportFormat = (format) => {
     if (!localDetail) return; setShowExportMenu(false);
     const urls = { anki: api.exportAnkiCSV(plan.id, topic.id), opml: api.exportOPML(plan.id, topic.id), notas: api.exportNotionCSV(plan.id), json: api.exportJSON(plan.id, topic.id), notes: api.exportStudyNotes(plan.id, topic.id), bundle: api.exportBundle(plan.id) };
@@ -666,7 +715,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => {
         // Only update if the new analysis has real content (not an empty "no content" result)
         if (insights && insights.summary && insights.strengths?.length > 0) {
-          setTopic(prev => prev ? { ...prev, feynmanInsights: insights } : prev);
+          setFeynmanInsights(insights);
           setTimeout(() => {
             const el = document.getElementById('feynman-insights-section');
             if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -682,7 +731,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     if (!currentPlanId || !currentTopicId || !mode) return;
     try { await api.clearInteractiveSession(currentPlanId, currentTopicId); } catch {}
     // Clear old feynman insights if restarting feynman mode
-    if (mode === 'feynman') setTopic(prev => prev ? { ...prev, feynmanInsights: null } : prev);
+    if (mode === 'feynman') setFeynmanInsights(null);
     setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
     handleStartInteractive(mode);
   };
@@ -697,7 +746,12 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     recognition.onresult = (event) => {
       for (let i = event.resultIndex; i < event.results.length; i++) { if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript; }
       const latestTranscript = Array.from(event.results).map(r => r[0].transcript).join('');
-       };
+      setInteractiveInput(latestTranscript);
+    };
+    recognition.onend = () => {
+      setIsRecording(false);
+      if (finalTranscript.trim()) setInteractiveInput(finalTranscript.trim());
+    };
     recognition.onerror = (event) => { console.error('Speech recognition error:', event.error); setIsRecording(false); if (event.error === 'not-allowed') alert('语音输入需要麦克风权限，请在浏览器设置中允许'); };
     recognitionRef.current = recognition; recognition.start(); setIsRecording(true);
   };
@@ -725,37 +779,210 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             {reviewMode ? '返回讲解' : '复习'}
           </Button>
         )}
+        {interactiveMode && (
+          <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white' onClick={handleExitInteractive}>
+            <X className='h-3.5 w-3.5 mr-1' />退出互动
+          </Button>
+        )}
+        <AIStatusIndicator />
+        <div className='relative' ref={menuRef}>
+          <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+            <MoreHorizontal className='h-4 w-4' />
+          </Button>
+          {menuOpen && (
+            <ActionMenu
+              onStartInteractive={(mode) => { handleStartInteractive(mode); setMenuOpen(false); }}
+              onExport={() => { handleExport(); setMenuOpen(false); }}
+              onExportHtml={() => { handleExportHtml(); setMenuOpen(false); }}
+              onExportFormat={(format) => { handleExportFormat(format); setMenuOpen(false); }}
+              onFactCheck={() => { handleFactCheck(); setMenuOpen(false); }}
+                     onAdaptiveAnalysis={() => { handleAdaptiveAnalysis(); setMenuOpen(false); }}
+                     onRecommendResources={() => { handleRecommendResources(); setMenuOpen(false); }}
+                     factCheckLoading={factCheckLoading}
+                     adaptiveLoading={adaptiveLoading}
+                     resourcesLoading={resourcesLoading}
+                     showExport={!!(localDetail && !error && !generating)}
+                     showTeaching={!generating && !!localDetail && !error && !interactiveMode}
+                     showAnalysis={!generating && !!(localDetail && !error)}
+            />
+          )}
+        </div>
+      </div>
+      </div>
+
+      {/* Topic navigation bar */}
+      <div className='flex flex-wrap gap-3 text-sm py-3 px-4 rounded-lg bg-blue-200 dark:bg-blue-800/50 border-2 border-blue-400 dark:border-blue-600 shadow-sm font-medium'>
+          {prerequisites.length === 0 && childrenTopics.length === 0 && nextTopics.length === 0 && relatedTopics.length === 0 && (
+            <span className='text-muted-foreground italic'>暂无关联知识点</span>
+          )}
+          {prerequisites.length > 0 && (
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>前置：</span>
+              {prerequisites.map(t => (
+                <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+              ))}
+            </div>
+          )}
+          {childrenTopics.length > 0 && (
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>子知识：</span>
+              {childrenTopics.map(t => (
+                <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+              ))}
+            </div>
+          )}
+          {nextTopics.length > 0 && (
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>后续：</span>
+              {nextTopics.map(t => (
+                <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+              ))}
+            </div>
+          )}
+          {relatedTopics.length > 0 && (
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>相关：</span>
+              {relatedTopics.map(t => (
+                <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+              ))}
+            </div>
+          )}
+      </div>
+
+      {/* Sticky navigation bar — appears when scrolling past the original header */}
+      {headerStuckVisible && (
+        <div className='sticky-nav-enter fixed top-[49px] left-0 right-0 z-40 bg-background border-b border-border/50 shadow-md'>
+          <div className='w-full max-w-4xl mx-auto px-6 py-1.5'>
+            {/* Action toolbar row */}
+            <div className='flex items-center flex-wrap gap-2 mb-1'>
+              <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
+              <span className='font-semibold text-foreground truncate text-sm flex-1 min-w-0'>{topic.title}</span>
+              <AIStatusIndicator />
+              {localDetail && !error && !generating && topic.done === false && (
+                <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white h-7 text-xs' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
+                  {revealLoading ? <RotateCcw className='h-3 w-3 mr-1 animate-spin' /> : <CheckCheck className='h-3 w-3 mr-1' />}
+                  {revealLoading ? '检查中...' : '学完了'}
+                </Button>
+              )}
+              {localDetail && !error && !generating && topic.done && (
+                <Button size='sm' className='bg-indigo-500 hover:opacity-90 text-white h-7 text-xs' onClick={handleToggleReview} title='复习模式'>
+                  {reviewLoading ? <RotateCcw className='h-3 w-3 mr-1 animate-spin' /> : <RotateCcw className='h-3 w-3 mr-1' />}
+                  {reviewMode ? '返回讲解' : '复习'}
+                </Button>
+              )}
+              {interactiveMode && (
+                <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white h-7 text-xs' onClick={handleExitInteractive}>
+                  <X className='h-3 w-3 mr-1' />退出互动
+                </Button>
+              )}
+              <div className='relative' ref={fixedMenuRef}>
+                <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+                  <MoreHorizontal className='h-4 w-4' />
+                </Button>
+                {menuOpen && (
+                  <ActionMenu
+                    onStartInteractive={(mode) => { handleStartInteractive(mode); setMenuOpen(false); }}
+                    onExport={() => { handleExport(); setMenuOpen(false); }}
+                    onExportHtml={() => { handleExportHtml(); setMenuOpen(false); }}
+                    onExportFormat={(format) => { handleExportFormat(format); setMenuOpen(false); }}
+                    onFactCheck={() => { handleFactCheck(); setMenuOpen(false); }}
+              onAdaptiveAnalysis={() => { handleAdaptiveAnalysis(); setMenuOpen(false); }}
+              onRecommendResources={() => { handleRecommendResources(); setMenuOpen(false); }}
+                    factCheckLoading={factCheckLoading}
+                    adaptiveLoading={adaptiveLoading}
+                    showExport={!!(localDetail && !error && !generating)}
+                    showTeaching={!generating && !!localDetail && !error && !interactiveMode}
+                    showAnalysis={!generating && !!(localDetail && !error)}
+                  />
+                )}
+              </div>
+            </div>
+            {/* Relation navigation row */}
+            <div className='flex flex-wrap gap-3 text-xs'>
+              {prerequisites.length === 0 && childrenTopics.length === 0 && nextTopics.length === 0 && relatedTopics.length === 0 && (
+                <span className='text-muted-foreground italic'>暂无关联知识点</span>
+              )}
+              {prerequisites.length > 0 && (
+                <div className='flex items-center gap-1.5'>
+                  <span className='text-muted-foreground'>前置：</span>
+                  {prerequisites.map(t => (
+                    <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+                  ))}
+                </div>
+              )}
+              {childrenTopics.length > 0 && (
+                <div className='flex items-center gap-1.5'>
+                  <span className='text-muted-foreground'>子知识：</span>
+                  {childrenTopics.map(t => (
+                    <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+                  ))}
+                </div>
+              )}
+              {nextTopics.length > 0 && (
+                <div className='flex items-center gap-1.5'>
+                  <span className='text-muted-foreground'>后续：</span>
+                  {nextTopics.map(t => (
+                    <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+                  ))}
+                </div>
+              )}
+              {relatedTopics.length > 0 && (
+                <div className='flex items-center gap-1.5'>
+                  <span className='text-muted-foreground'>相关：</span>
+                  {relatedTopics.map(t => (
+                    <button key={t.id} className='text-blue-600 hover:underline dark:text-blue-400' onClick={() => handleNavigateToTopic(t.id)}>{t.title}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {interactiveMode && (
         <InteractivePanel
-        interactiveMode={interactiveMode}
-        interactiveSections={interactiveSections}
-        streamingContent={streamingContent}
-        interactiveLoading={interactiveLoading}
-        interactiveFinished={interactiveFinished}
-        interactiveInput={interactiveInput}
-        interactiveStateMachine={interactiveStateMachine}
-        isRecording={isRecording}
-        voiceSupported={voiceSupported}
-        onInputChange={setInteractiveInput}
-        onQuickAction={handleQuickAction}
-        onSendFeedback={handleSendInteractiveFeedback}
-        onVoiceInput={handleVoiceInput}
-        onExit={handleExitInteractive}
-        onRegenerate={() => setRegenerateDialogOpen(true)}
-      />
+          interactiveMode={interactiveMode}
+          interactiveSections={interactiveSections}
+          streamingContent={streamingContent}
+          interactiveLoading={interactiveLoading}
+          interactiveFinished={interactiveFinished}
+          interactiveInput={interactiveInput}
+          interactiveStateMachine={interactiveStateMachine}
+          isRecording={isRecording}
+          voiceSupported={voiceSupported}
+          onInputChange={setInteractiveInput}
+          onQuickAction={handleQuickAction}
+          onSendFeedback={handleSendInteractiveFeedback}
+          onVoiceInput={handleVoiceInput}
+          onExit={handleExitInteractive}
+          onRegenerate={() => setRegenerateDialogOpen(true)}
+        />
+      )}
 
         {localDetail && !error && !interactiveMode && !reviewMode && (
           <div className='flex flex-col' style={{ gap: '144px' }}>
+            {/* Image generation error */}
+            {imageError && (
+              <div className='rounded-md bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-3 text-sm text-red-700 dark:text-red-300'>
+                {imageError}
+              </div>
+            )}
             {topic.imageUrl ? (
             <div className='rounded-lg bg-muted/20 overflow-hidden'>
               <div className='flex items-center justify-between px-4 py-2 bg-muted/50 text-xs text-muted-foreground'>
                   <span>知识点配图</span>
-                  <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs' onClick={() => handleGenerateImage(topic.id)} disabled={generating} title='重新生成配图'><RotateCcw className='h-3 w-3' /></Button>
+                  <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs' onClick={() => handleGenerateImage(topic.id)} disabled={imageGenerating} title='重新生成配图'>
+                    {imageGenerating ? <RotateCcw className='h-3 w-3 animate-spin' /> : <RotateCcw className='h-3 w-3' />}
+                  </Button>
                 </div>
                 <img src={topic.imageUrl} alt={topic.title} className='w-full' />
               </div>
             ) : localDetail && !generating && settings.imageApiKey && (
               <div className='flex items-center gap-2'>
-                <Button variant='outline' size='sm' onClick={() => handleGenerateImage(topic.id)}><Image className='h-3.5 w-3.5 mr-1' />生成配图</Button>
+                <Button variant='outline' size='sm' onClick={() => handleGenerateImage(topic.id)} disabled={imageGenerating}>
+                  {imageGenerating ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <Image className='h-3.5 w-3.5 mr-1' />}
+                  {imageGenerating ? '生成中...' : '生成配图'}
+                </Button>
                 <span className='text-xs text-muted-foreground'>使用硅基流动 AI 为知识点生成插图</span>
               </div>
             )}
@@ -810,48 +1037,48 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </div>
             )}
 
-            {feynmanAnalyzing && (!topic?.feynmanInsights || !topic.feynmanInsights.summary) && (
+            {feynmanAnalyzing && (!feynmanInsights || !feynmanInsights.summary) && (
               <div id='feynman-insights-section' className='pt-4 flex items-center gap-2 text-sm text-muted-foreground'>
                 <div className='animate-spin rounded-full h-4 w-4 border-2 border-purple-500 border-t-transparent' />
                 <span>AI 正在分析你的费曼讲解...</span>
               </div>
             )}
 
-            {topic?.feynmanInsights && topic.feynmanInsights.summary && topic.feynmanInsights.strengths?.length > 0 ? (
+            {feynmanInsights && feynmanInsights.summary && feynmanInsights.strengths?.length > 0 ? (
               <div id='feynman-insights-section' className='pt-4'>
                 <button onClick={() => setFeynmanInsightsOpen(!feynmanInsightsOpen)} className='flex items-center gap-2 w-full text-left'>
                   <Brain className='h-4 w-4 text-purple-500' />
                   <h3 className='text-sm font-medium'>费曼教学评估报告</h3>
                   <span className={`text-xs px-1.5 py-0.5 rounded ${
-                    topic.feynmanInsights.teachingQuality === 'excellent' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' :
-                    topic.feynmanInsights.teachingQuality === 'good' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' :
-                    topic.feynmanInsights.teachingQuality === 'fair' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
+                    feynmanInsights.teachingQuality === 'excellent' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' :
+                    feynmanInsights.teachingQuality === 'good' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' :
+                    feynmanInsights.teachingQuality === 'fair' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
                     'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
                   }`}>
-                    {topic.feynmanInsights.teachingQuality === 'excellent' ? '优秀' : topic.feynmanInsights.teachingQuality === 'good' ? '良好' : topic.feynmanInsights.teachingQuality === 'fair' ? '一般' : topic.feynmanInsights.teachingQuality === 'needsWork' ? '需改进' : '未评估'}
+                    {feynmanInsights.teachingQuality === 'excellent' ? '优秀' : feynmanInsights.teachingQuality === 'good' ? '良好' : feynmanInsights.teachingQuality === 'fair' ? '一般' : feynmanInsights.teachingQuality === 'needsWork' ? '需改进' : '未评估'}
                   </span>
                   {feynmanInsightsOpen ? <ChevronDown className='h-4 w-4 text-muted-foreground' /> : <ChevronRight className='h-4 w-4 text-muted-foreground' />}
                 </button>
                 {feynmanInsightsOpen && (
                   <div className='mt-3 space-y-4 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20 p-4'>
-                    <p className='text-sm text-muted-foreground'>{topic.feynmanInsights.summary}</p>
-                    {topic.feynmanInsights.strengths?.length > 0 && (
+                    <p className='text-sm text-muted-foreground'>{feynmanInsights.summary}</p>
+                    {feynmanInsights.strengths?.length > 0 && (
                       <div className='space-y-1'>
                         <h4 className='text-xs font-medium text-green-600 flex items-center gap-1'><CheckCircle className='h-3 w-3' />讲得好的地方</h4>
-                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{feynmanInsights.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
                       </div>
                     )}
-                    {topic.feynmanInsights.gaps?.length > 0 && (
+                    {feynmanInsights.gaps?.length > 0 && (
                       <div className='space-y-1'>
                         <h4 className='text-xs font-medium text-orange-600 flex items-center gap-1'><AlertTriangle className='h-3 w-3' />教材遗漏的重要内容</h4>
-                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{topic.feynmanInsights.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                        <ul className='text-sm text-muted-foreground list-disc pl-4 space-y-1'>{feynmanInsights.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
                       </div>
                     )}
-                    {topic.feynmanInsights.lingeringQuestions?.length > 0 && (
+                    {feynmanInsights.lingeringQuestions?.length > 0 && (
                       <div className='space-y-2'>
                         <h4 className='text-xs font-medium flex items-center gap-1'><Lightbulb className='h-3 w-3' />学生听完后还会问的问题</h4>
                         <p className='text-xs text-muted-foreground'>试试看你能不能回答这些问题——这才是费曼学习法的核心</p>
-                        <div className='space-y-2'>{topic.feynmanInsights.lingeringQuestions.map((q, i) => (
+                        <div className='space-y-2'>{feynmanInsights.lingeringQuestions.map((q, i) => (
                           <div key={i} className='rounded-md bg-background/80 border p-3 text-sm space-y-1'>
                             <div>❓ {q.question}</div>
                             {q.whyThisMatters && <div className='text-xs text-muted-foreground'>为什么重要：{q.whyThisMatters}</div>}
@@ -860,10 +1087,10 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                         ))}</div>
                       </div>
                     )}
-                    {topic.feynmanInsights.sparklingExplanations?.length > 0 && (
+                    {feynmanInsights.sparklingExplanations?.length > 0 && (
                       <div className='space-y-2'>
                         <h4 className='text-xs font-medium flex items-center gap-1'><Sparkles className='h-3 w-3' />可以直接当作教材的精彩讲解</h4>
-                        {topic.feynmanInsights.sparklingExplanations.map((note, i) => (
+                        {feynmanInsights.sparklingExplanations.map((note, i) => (
                           <blockquote key={i} className='border-l-2 border-purple-400 pl-3 text-sm text-muted-foreground italic bg-background/60 rounded-r p-2'>{note.content}</blockquote>
                         ))}
                       </div>
@@ -992,10 +1219,40 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                     ))}
                   </div>
                 )}
+          </div>
+        )}
+
+            {!generating && localDetail && !interactiveMode && (
+              <div className='pt-4 space-y-3'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>推荐学习资源</h3>
+                  <Button variant='ghost' size='sm' onClick={handleRecommendResources} disabled={resourcesLoading} title='基于本知识点推荐多形式、多渠道资源'>
+                    {resourcesLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <Lightbulb className='h-3.5 w-3.5 mr-1' />}
+                    {resourcesLoading ? '推荐中...' : (resources ? '重新推荐' : '推荐资源')}
+                  </Button>
+                </div>
+                {resources && resources.length > 0 && (
+                  <div className='grid grid-cols-1 sm:grid-cols-2 gap-2'>
+                    {resources.map((r, i) => (
+                      <div key={i} className='rounded-md border p-3 text-sm space-y-1'>
+                        <div className='flex items-center gap-2 flex-wrap'>
+                          <span className='text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300'>{r.type}</span>
+                          <span className='font-medium'>{r.title}</span>
+                          {r.paid && <span className='text-xs px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300'>付费</span>}
+                        </div>
+                        <div className='text-xs text-muted-foreground'>{r.source}{r.level ? ' · ' + ({ beginner: '入门', intermediate: '进阶', advanced: '深入' }[r.level] || r.level) : ''}</div>
+                        {r.reason && <p className='text-xs text-muted-foreground'>{r.reason}</p>}
+                        {r.url && (
+                          <a href={r.url} target='_blank' rel='noreferrer' className='text-xs text-blue-600 hover:underline break-all'>{r.url}</a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            <div className='flex justify-center pt-2'>
+        <div className='flex justify-center pt-2'>
               <Button size='lg' className='bg-green-600 hover:bg-green-700 text-white min-w-[200px]' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
                 {revealLoading ? <RotateCcw className='h-4 w-4 mr-2 animate-spin' /> : <CheckCheck className='h-4 w-4 mr-2' />}
                 {revealLoading ? '检查错误中...' : '学完了，返回列表'}
@@ -1003,7 +1260,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             </div>
           </div>
         )}
-      </div>
 
       {/* Review mode content — rendered outside the main content block so it's visible when reviewMode=true */}
       {reviewMode && (
@@ -1021,7 +1277,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           )}
         </div>
       )}
-      </div>
 
       <RegenerateDialog open={regenerateDialogOpen} onClose={() => setRegenerateDialogOpen(false)} onSubmit={handleRegenerate} />
     </div>

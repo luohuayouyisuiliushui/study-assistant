@@ -1,32 +1,46 @@
+import { loadSettings, selectTextProvider } from './lib/settings-storage';
+
 const API_BASE = '/api';
 
-/** Read API settings from localStorage (set by SettingsModal) */
 function getApiSettings() {
-  try {
-    const raw = localStorage.getItem('textbook-maker-settings');
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return loadSettings();
 }
 
-async function request(url, options = {}, includeApiKey = false) {
-  const headers = { 'Content-Type': 'application/json' };
+/**
+ * Inject provider credentials from the selected channel into the request body.
+ * Accepts body as undefined, JSON string, or plain object.
+ */
+function injectProvider(body, settings, taskType) {
+  const provider = selectTextProvider(settings, taskType);
+  if (!provider.apiKey) return body;
 
-  let body = options.body;
-  if (includeApiKey) {
-    const settings = getApiSettings();
-    if (settings.apiKey) {
-      const parsed = body ? JSON.parse(body) : {};
-      parsed.apiKey = settings.apiKey;
-      parsed.baseURL = settings.baseURL;
-      parsed.model = settings.model;
-      body = JSON.stringify(parsed);
-    }
+  let parsed = {};
+  if (typeof body === 'string') {
+    try { parsed = JSON.parse(body); } catch { parsed = {}; }
+  } else if (body && typeof body === 'object') {
+    parsed = { ...body };
   }
 
-  const fetchOpts = { headers, ...options };
-  if (body !== undefined) fetchOpts.body = body;
+  parsed.apiKey = provider.apiKey;
+  parsed.baseURL = provider.baseURL;
+  parsed.model = provider.model;
+  return JSON.stringify(parsed);
+}
+
+async function request(url, options = {}, taskType = null) {
+  let body = options.body;
+
+  if (taskType) {
+    const settings = getApiSettings();
+    body = injectProvider(body, settings, taskType);
+  }
+
+  const fetchOpts = { ...options };
+  if (body !== undefined) {
+    fetchOpts.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    // Ensure body is a JSON string for fetch
+    fetchOpts.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
 
   const res = await fetch(url, fetchOpts);
   let data;
@@ -78,12 +92,12 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/profile`);
   },
 
-  // ─── AI Import (needs API key) ───
+  // ─── AI Import ───
   async importPlan(text) {
     return request(`${API_BASE}/learn/plans/import`, {
       method: 'POST',
       body: JSON.stringify({ text }),
-    }, true); // includeApiKey
+    }, 'import-plan');
   },
 
   // ─── Topics ───
@@ -103,19 +117,31 @@ const api = {
     });
   },
 
-  // ─── Generation & Q&A (needs API key) ───
+  // ─── Generation & Q&A ───
   async generateDetail(planId, topicId) {
     const settings = getApiSettings();
-    const body = settings.imageApiKey ? JSON.stringify({ imageApiKey: settings.imageApiKey, imageModel: settings.imageModel }) : undefined;
-    const headers = body ? { 'Content-Type': 'application/json' } : {};
+    let body = settings.imageApiKey ? { imageApiKey: settings.imageApiKey, imageModel: settings.imageModel } : undefined;
+    if (settings.explainStyle) {
+      body = { ...(body || {}), explainStyle: settings.explainStyle };
+    }
     return request(`${API_BASE}/learn/plans/${planId}/generate/${topicId}`,
-      { method: 'POST', body, headers }, true);
+      { method: 'POST', body }, 'generate-detail');
   },
   async askQuestion(planId, topicId, question) {
     return request(`${API_BASE}/learn/plans/${planId}/ask/${topicId}`, {
       method: 'POST',
       body: JSON.stringify({ question }),
-    }, true);
+    }, 'ask-question');
+  },
+
+  // ─── Resource Recommendations ───
+  async getResources(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/resources/${topicId}`);
+  },
+  async recommendResources(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/resources/${topicId}`, {
+      method: 'POST',
+    }, 'generate-detail');
   },
 
   // ─── Interactive Mode ───
@@ -123,13 +149,13 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/interactive-start/${topicId}`, {
       method: 'POST',
       body: JSON.stringify({ mode }),
-    }, true);
+    }, 'interactive-start');
   },
   async continueInteractive(planId, topicId, mode, feedback) {
     return request(`${API_BASE}/learn/plans/${planId}/interactive-continue/${topicId}`, {
       method: 'POST',
       body: JSON.stringify({ mode, feedback }),
-    }, true);
+    }, 'interactive-continue');
   },
   async clearInteractiveSession(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/interactive-session/${topicId}`, {
@@ -137,11 +163,12 @@ const api = {
     });
   },
 
-  /** SSE streaming: start interactive mode. Calls onEvent for each SSE event (chunk, pause, done, error). */
+  /** SSE streaming: start interactive mode. */
   async startInteractiveSSE(planId, topicId, mode, onEvent, signal) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
+    const provider = selectTextProvider(settings, 'interactive-start-sse');
     const headers = { 'Content-Type': 'application/json' };
-    const body = JSON.stringify({ mode, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const body = JSON.stringify({ mode, apiKey: provider.apiKey, baseURL: provider.baseURL, model: provider.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-start-sse/${topicId}`, {
       method: 'POST', headers, body, signal,
     });
@@ -166,11 +193,12 @@ const api = {
     }
   },
 
-  /** SSE streaming: continue interactive mode. Calls onEvent for each SSE event. */
+  /** SSE streaming: continue interactive mode. */
   async continueInteractiveSSE(planId, topicId, mode, feedback, onEvent, signal) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
+    const provider = selectTextProvider(settings, 'interactive-continue-sse');
     const headers = { 'Content-Type': 'application/json' };
-    const body = JSON.stringify({ mode, feedback, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const body = JSON.stringify({ mode, feedback, apiKey: provider.apiKey, baseURL: provider.baseURL, model: provider.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/interactive-continue-sse/${topicId}`, {
       method: 'POST', headers, body, signal,
     });
@@ -200,17 +228,17 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/reveal-errors/${topicId}`, {
       method: 'POST',
       body: JSON.stringify({ recognizedErrors }),
-    }, true);
+    }, 'reveal-errors');
   },
 
   // ─── Scaffold: Decompose Topic ───
   async decomposeTopic(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/decompose/${topicId}`, {
       method: 'POST',
-    }, true);
+    }, 'decompose-topic');
   },
 
-  // ─── TTS: Text-to-Speech ───
+  // ─── TTS (imageApiKey only, no text channel) ───
   async textToSpeech(text) {
     const settings = getApiSettings();
     if (!settings.imageApiKey) throw new Error('请先在设置中配置图片 API Key（硅基流动）');
@@ -226,11 +254,23 @@ const api = {
     return res.blob();
   },
 
-  // ─── Time Tracking ───
+  // ─── Time Tracking (no AI) ───
   async recordTime(planId, topicId, seconds) {
     return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/time`, {
       method: 'POST',
       body: JSON.stringify({ seconds }),
+    });
+  },
+
+  // ─── Image Generation (imageApiKey only, no text channel) ───
+  async generateTopicImage(planId, topicId) {
+    const settings = getApiSettings();
+    const body = {};
+    if (settings.imageApiKey) body.imageApiKey = settings.imageApiKey;
+    if (settings.imageModel) body.imageModel = settings.imageModel;
+    return request(`${API_BASE}/learn/plans/${planId}/image/${topicId}`, {
+      method: 'POST',
+      body,
     });
   },
 
@@ -240,14 +280,15 @@ const api = {
     if (analysisChat && analysisChat.length > 0) {
       body.body = JSON.stringify({ analysisChat });
     }
-    return request(`${API_BASE}/learn/plans/${planId}/analysis`, body, true);
+    return request(`${API_BASE}/learn/plans/${planId}/analysis`, body, 'analyze-learning');
   },
   async askAnalysisQuestion(planId, question, analysis) {
     return request(`${API_BASE}/learn/plans/${planId}/analysis/ask`, {
       method: 'POST',
       body: JSON.stringify({ question, analysis }),
-    }, true);
+    }, 'analysis-ask');
   },
+
   // ─── Knowledge Graph ───
   async getKnowledgeGraph(planId, infer = false) {
     const qs = infer ? '?infer=true' : '';
@@ -256,27 +297,32 @@ const api = {
   async extractRelations(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/extract-relations`);
   },
+  async inferRelations(planId) {
+    return request(`${API_BASE}/learn/plans/${planId}/infer-relations`, {
+      method: 'POST',
+    }, 'infer-relations');
+  },
 
-  // ─── Exercises & Review (needs API key) ───
+  // ─── Exercises & Review ───
   async generateReview(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/review/${topicId}`,
-      { method: 'POST' }, true);
+      { method: 'POST' }, 'generate-review');
   },
   async submitFeedback(planId, topicId, reason, mode) {
     return request(`${API_BASE}/learn/plans/${planId}/topic/${topicId}/feedback`, {
       method: 'POST',
       body: JSON.stringify({ reason, mode }),
-    }, true);
+    });
   },
   async submitExercises(planId, topicId, answers) {
     return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {
       method: 'POST',
       body: JSON.stringify({ answers }),
-    }, true);
+    }, 'submit-exercises');
   },
   async analyzeWeakPoints(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/weak-points`,
-      { method: 'POST' }, true);
+      { method: 'POST' }, 'weak-points');
   },
   async getReviewNeeds(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
@@ -286,9 +332,8 @@ const api = {
   async generateQuickQuiz(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/quick-quiz`, {
       method: 'POST',
-    }, true);
+    }, 'quick-quiz');
   },
-
   async submitQuickQuiz(planId, questions, results) {
     return request(`${API_BASE}/learn/plans/${planId}/quick-quiz/submit`, {
       method: 'POST',
@@ -299,7 +344,7 @@ const api = {
   async analyzeFeynmanSession(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/feynman-analyze/${topicId}`, {
       method: 'POST',
-    }, true);
+    }, 'feynman-analyze');
   },
 
   // ─── User Profile ───
@@ -312,7 +357,7 @@ const api = {
   async analyzeUserProfile() {
     return request(`${API_BASE}/user-profile/analyze`, {
       method: 'POST',
-    }, true);
+    }, 'user-profile-analyze');
   },
 
   // ─── Connection Test ───
@@ -323,20 +368,20 @@ const api = {
     });
   },
 
-  // ─── v1.6.0 Fact-Check (Anti-Hallucination) ───
+  // ─── Fact-Check ───
   async factCheck(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/fact-check/${topicId}`, {
       method: 'POST',
-    }, true);
+    }, 'fact-check');
   },
   async autoFixFacts(planId, topicId, findings) {
     return request(`${API_BASE}/learn/plans/${planId}/fact-check-auto-fix/${topicId}`, {
       method: 'POST',
       body: JSON.stringify({ findings }),
-    }, true);
+    }, 'auto-fix-facts');
   },
 
-  // ─── v1.6.0 Adaptive Engine ───
+  // ─── Adaptive Engine ───
   async adaptiveAnalysis(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/adaptive-analysis`, {
       method: 'POST',
@@ -348,9 +393,8 @@ const api = {
     });
   },
 
-  // ─── v1.6.0 Export Engine ───
+  // ─── Export Engine (no AI) ───
   exportAnkiCSV(planId, topicId) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
     return `${API_BASE}/learn/plans/${planId}/export/anki/${topicId}`;
   },
   exportOPML(planId, topicId) {
@@ -369,7 +413,7 @@ const api = {
     return `${API_BASE}/learn/plans/${planId}/export/bundle`;
   },
 
-  // ─── v1.6.1 Multi-Agent Dispatcher ───
+  // ─── Multi-Agent Dispatcher ───
   async listAgents() {
     return request(`${API_BASE}/learn/agents/list`, {
       method: 'POST',
@@ -379,7 +423,7 @@ const api = {
   async getAgentUsage() {
     return request(`${API_BASE}/learn/agents/usage`, {
       method: 'POST',
-    }, true);
+    });
   },
 
   // ─── Exam System ───
@@ -390,12 +434,13 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/exam/generate`, {
       method: 'POST',
       body: JSON.stringify({ topicIds, config }),
-    }, true);
+    }, 'generate-exam');
   },
   async generateExamStream(planId, topicIds, config, onEvent) {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('textbook-maker-settings') || '{}'); } catch { return {}; } })();
+    const settings = getApiSettings();
+    const provider = selectTextProvider(settings, 'generate-exam');
     const headers = { 'Content-Type': 'application/json' };
-    const body = JSON.stringify({ topicIds, config, apiKey: settings.apiKey, baseURL: settings.baseURL, model: settings.model });
+    const body = JSON.stringify({ topicIds, config, apiKey: provider.apiKey, baseURL: provider.baseURL, model: provider.model });
     const response = await fetch(`${API_BASE}/learn/plans/${planId}/exam/generate-stream`, {
       method: 'POST', headers, body,
     });
@@ -423,7 +468,7 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/submit`, {
       method: 'POST',
       body: JSON.stringify({ answers }),
-    }, true);
+    }, 'submit-exam');
   },
   async deleteExam(planId, examId) {
     return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}`, {
@@ -434,15 +479,16 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/practice`, {
       method: 'POST',
       body: JSON.stringify({ count }),
-    }, true);
+    }, 'exam-practice');
   },
 
   // ─── Core Topics (Pareto 20%) ───
   async getCoreTopics(planId, force = false) {
+    const body = force ? { force: true } : undefined;
     return request(`${API_BASE}/learn/plans/${planId}/core-topics`, {
       method: 'POST',
-      body: force ? { force: true } : {},
-    }, true);
+      body,
+    }, 'get-core-topics');
   },
 };
 

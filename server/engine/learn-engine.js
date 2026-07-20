@@ -101,7 +101,7 @@ export function createProviderFromConfig(apiKey, baseURL, model) {
  * - Only the user question at the end varies per-session
  * - Provider tracks cache hit/miss tokens automatically
  */
-export async function generateDetail(providerOrConfig, plan, topicId, model = 'gpt-4o-mini') {
+export async function generateDetail(providerOrConfig, plan, topicId, model = 'gpt-4o-mini', explainStyle) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
@@ -126,7 +126,7 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
     const injector = new AdaptivePromptInjector(profile);
     const adaptiveContext = injector.buildAdaptiveContext();
 
-    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。');
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle);
 
     // Inject adaptive guidance between context and question (cache-safe:
     // user profile changes infrequently, so prefix stays stable most of the time)
@@ -232,7 +232,7 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
  * Events: chunk ({ content }), done ({ topicId, detail }), error ({ message })
  * Still persists to store (same as generateDetail), but also streams via SSE.
  */
-export async function generateDetailStream(providerOrConfig, plan, topicId, writeEvent, model = 'gpt-4o-mini') {
+export async function generateDetailStream(providerOrConfig, plan, topicId, writeEvent, model = 'gpt-4o-mini', explainStyle) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
@@ -253,7 +253,7 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
     const injector = new AdaptivePromptInjector(profile);
     const adaptiveContext = injector.buildAdaptiveContext();
 
-    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。');
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle);
 
     if (adaptiveContext && injector.hasMeaningfulProfile) {
       messages[1] = {
@@ -581,6 +581,26 @@ function detectIllustrationType(title, context) {
 }
 
 /**
+ * Map a detected illustration type to a concrete, high-quality visual brief:
+ * a coherent subject, a single dominant visual metaphor, an explicit color
+ * palette, and lighting. Keeping the brief tight and consistent (rather than a
+ * long laundry list of prohibitions) measurably improves FLUX output quality.
+ */
+function buildVisualBrief(illustration) {
+  const { type, style, composition, details } = illustration;
+  const palette = 'cohesive palette of indigo #4f46e5, teal #0d9488, amber #f59e0b and slate #475569 on a clean #fafafa background';
+  return {
+    subject: `a single, clearly readable ${type} for the topic`,
+    metaphor: 'one dominant visual metaphor that instantly communicates the core idea',
+    palette,
+    lighting: 'soft even studio lighting, subtle drop shadow for depth, no harsh contrast',
+    style,
+    composition,
+    details,
+  };
+}
+
+/**
  * Build a rich, detailed image generation prompt based on the full topic object.
  * Uses topic title + cleaned detail context for better relevance.
  * The context is trimmed to ~600 characters — enough for key concepts
@@ -594,7 +614,7 @@ export function buildImagePrompt(topic) {
   const title = (typeof topic === 'string') ? topic : (topic?.title || '');
   const context = (typeof topic === 'string') ? '' : cleanDetailForContext(topic?.detail);
 
-  const { type, style, composition, details } = detectIllustrationType(title, context);
+  const brief = buildVisualBrief(detectIllustrationType(title, context));
 
   // Trim context to ~600 chars — enough for subject-specific keywords
   // while leaving room for instruction tokens in the image model's prompt budget.
@@ -603,13 +623,14 @@ export function buildImagePrompt(topic) {
     : '';
 
   return [
-    `Professional educational ${type} about "${title}".${contextHint}`,
-    `${style}. ${composition}.`,
-    `${details}. High quality, sharp details, flat vector art style, clean lines.`,
-    'NO text, NO letters, NO numbers, NO labels, NO watermarks, NO UI screenshots or mockups anywhere in the image.',
-    'Use icons, shapes, arrows, and color coding to convey meaning without any readable text.',
-    'Light cream or white background. No photorealistic humans, no 3D rendering, no dark backgrounds.',
-    'Suitable for academic study and learning materials. Conceptually accurate and educationally valuable.',
+    `Professional educational infographic: ${brief.subject} about "${title}".${contextHint}`,
+    `Central idea: ${brief.metaphor}.`,
+    `${brief.style}. ${brief.composition}.`,
+    `${brief.details}.`,
+    `Visual quality: ${brief.palette}; ${brief.lighting}. High detail, crisp vector shapes, clean consistent line work, balanced negative space.`,
+    'Convey meaning through icons, geometric shapes, arrows, and color coding rather than words.',
+    'No readable text, no letters, no numbers, no watermarks, no UI screenshots. No photorealistic humans, no 3D render, no dark background.',
+    'Conceptually accurate, pedagogically clear, suitable as a study-note illustration.',
   ].join(' ');
 }
 
@@ -624,7 +645,7 @@ export function buildImagePrompt(topic) {
 export async function generateTopicImage(topic, imageApiKey, model) {
   if (!topic?.id || !topic?.title || !imageApiKey) return null;
 
-  const imageModel = model || 'black-forest-labs/FLUX.1-dev';
+  const imageModel = model || 'black-forest-labs/FLUX.1-pro';
 
   // Build a structured prompt based on the topic title
   const prompt = buildImagePrompt(topic);
@@ -686,9 +707,9 @@ export async function generateTopicImage(topic, imageApiKey, model) {
 /**
  * Generate a detail + illustration for a topic (combines text and image generation).
  */
-export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel) {
+export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel, explainStyle) {
   // First generate the text detail
-  const content = await generateDetail(providerOrConfig, plan, topicId, model);
+  const content = await generateDetail(providerOrConfig, plan, topicId, model, explainStyle);
 
   // Then generate an illustration (fire-and-forget on the image, don't block)
   const topic = plan.topics.find(t => t.id === topicId);
@@ -789,6 +810,76 @@ export function getEngineCacheDiagnostics() {
 }
 
 /**
+ * Recommend learning resources for a knowledge point.
+ * Returns structured recommendations across multiple channels/forms
+ * (books, videos, docs, articles, courses, interactive) so the learner
+ * can reinforce the topic through their preferred medium.
+ *
+ * @param {object} providerOrConfig - Provider instance or config
+ * @param {object} plan - Full plan object
+ * @param {string} topicId - Topic id
+ * @param {string} model - Model name
+ * @returns {Promise<{topicTitle: string, resources: Array}>}
+ */
+export async function recommendResources(providerOrConfig, plan, topicId, model = 'gpt-4o-mini') {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) throw new Error('Topic not found');
+
+  const provider = resolveProvider(providerOrConfig, model);
+
+  const context = cleanDetailForContext(topic.detail).slice(0, 800);
+
+  const systemPrompt =
+    '你是一位资深的学习资源策展人。根据用户正在学习的一个知识点，推荐多种渠道、多种形式的优质学习资源。\n' +
+    '## 要求\n' +
+    '- 覆盖多种「形式」：书籍(book)、视频(video)、官方文档(doc)、技术文章(article)、在线课程(course)、互动练习(practice)\n' +
+    '- 覆盖多种「渠道」：经典教材、知名慕课平台、官方文档、技术博客/社区（如官方文档、MDN、Stack Overflow、知名博客等）\n' +
+    '- 每个资源必须真实、权威、广为人知，不要编造不存在的书名或链接\n' +
+    '- 标注适合人群（初学者/进阶）与推荐理由（为什么对这个知识点有帮助）\n' +
+    '- 优先推荐免费或易获取的资源，付费资源需明确标注\n' +
+    '## 输出格式（只输出 JSON）\n' +
+    '{\n' +
+    '  "topicTitle": "知识点名称",\n' +
+    '  "resources": [\n' +
+    '    { "type": "book|video|doc|article|course|practice", "title": "资源名称", "source": "渠道/平台", "level": "beginner|intermediate|advanced", "paid": false, "reason": "推荐理由", "url": "官方/权威链接(可选，确保真实)" }\n' +
+    '  ]\n' +
+    '}\n' +
+    '只输出 JSON，不要其他文字。';
+
+  const userMessage =
+    `知识点名称：${topic.title}\n` +
+    `知识点讲解摘要：${context || topic.title}\n\n` +
+    `请为这个知识点推荐 6-10 个学习资源，覆盖书籍、视频、文档、文章、课程、互动练习等不同形式与渠道。`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMessage },
+  ];
+
+  const result = await provider.complete(messages, {
+    temperature: 0.4,
+    maxTokens: 2048,
+    responseFormat: { type: 'json_object' },
+    model,
+  });
+
+  const parsed = JSON.parse(result.content || '{}');
+  const resources = Array.isArray(parsed.resources) ? parsed.resources : [];
+  return {
+    topicTitle: parsed.topicTitle || topic.title,
+    resources: resources.map(r => ({
+      type: r.type || 'article',
+      title: r.title || '',
+      source: r.source || '',
+      level: r.level || 'intermediate',
+      paid: !!r.paid,
+      reason: r.reason || '',
+      url: r.url || '',
+    })),
+  };
+}
+
+/**
  * Generate a lightweight quick quiz (2-3 questions) from random topics in a plan.
  * Uses fewer tokens than a full exam paper.
  * @param {object} provider - Provider instance
@@ -827,6 +918,7 @@ export default {
   getEngineCacheDiagnostics,
   createProviderFromConfig,
   inferTopicRelations,
+  recommendResources,
   // Fact-check engine (re-exported from fact-checker.js)
   factCheckDetail,
   factCheckQuickScan,
