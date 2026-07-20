@@ -226,6 +226,8 @@ export async function trashPlan(planId) {
   const trashIndex = readTrashIndex();
   trashIndex.push(trashEntry);
   writeTrashIndex(trashIndex);
+
+  invalidatePlanCache(planId);
 }
 
 /**
@@ -273,6 +275,8 @@ export function restorePlan(planId) {
   // Remove from trash index
   const updated = trashIndex.filter(e => e.id !== planId);
   writeTrashIndex(updated);
+
+  invalidatePlanCache(planId);
 }
 
 /**

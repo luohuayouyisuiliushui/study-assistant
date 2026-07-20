@@ -13,7 +13,7 @@ const INDEX_FILE = path.join(DATA_DIR, 'plans.json');
 describe('Data Consistency & Integrity', () => {
 
   describe('Index-Plan file consistency', () => {
-    it('every plan in index should have a corresponding file', () => {
+    it('every plan in index should have a corresponding file', async () => {
       if (!fs.existsSync(INDEX_FILE)) return;
       const idx = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf-8'));
       for (const entry of idx) {
@@ -22,7 +22,7 @@ describe('Data Consistency & Integrity', () => {
       }
     });
 
-    it('every plan file should be valid JSON', () => {
+    it('every plan file should be valid JSON', async () => {
       if (!fs.existsSync(PLANS_DIR)) return;
       const files = fs.readdirSync(PLANS_DIR).filter(f => f.endsWith('.json'));
       for (const f of files) {
@@ -31,7 +31,7 @@ describe('Data Consistency & Integrity', () => {
       }
     });
 
-    it('plan index should be an array', () => {
+    it('plan index should be an array', async () => {
       if (!fs.existsSync(INDEX_FILE)) return;
       const idx = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf-8'));
       assert.ok(Array.isArray(idx));
@@ -39,7 +39,7 @@ describe('Data Consistency & Integrity', () => {
   });
 
   describe('Plan data structure integrity', () => {
-    it('every plan should have required fields', () => {
+    it('every plan should have required fields', async () => {
       const planEntries = store.listPlans();
       for (const entry of planEntries) {
         assert.ok(entry.id, `Plan entry missing id`);
@@ -52,7 +52,7 @@ describe('Data Consistency & Integrity', () => {
       }
     });
 
-    it('every topic should have required fields', () => {
+    it('every topic should have required fields', async () => {
       const planEntries = store.listPlans();
       for (const entry of planEntries) {
         const plan = store.getPlan(entry.id);
@@ -71,7 +71,7 @@ describe('Data Consistency & Integrity', () => {
       }
     });
 
-    it('topics should have unique IDs within a plan', () => {
+    it('topics should have unique IDs within a plan', async () => {
       const planEntries = store.listPlans();
       for (const entry of planEntries) {
         const plan = store.getPlan(entry.id);
@@ -89,7 +89,7 @@ describe('Data Consistency & Integrity', () => {
         ? JSON.parse(fs.readFileSync(INDEX_FILE, 'utf-8')).length
         : 0;
 
-      const plan = store.createPlan('一致性测试');
+      const plan = await store.createPlan('一致性测试');
       const updated = await store.addTopics(plan.id, ['测试知识点']);
       await store.updateTopic(plan.id, updated.topics[0].id, { detail: '测试内容', done: true });
 
@@ -109,7 +109,7 @@ describe('Data Consistency & Integrity', () => {
     });
 
     it('trash and restore should preserve all topic data', async () => {
-      const plan = store.createPlan('恢复一致性');
+      const plan = await store.createPlan('恢复一致性');
       const updated = await store.addTopics(plan.id, ['恢复知识点']);
       await store.updateTopic(plan.id, updated.topics[0].id, {
         detail: '恢复内容',
@@ -136,7 +136,7 @@ describe('Data Consistency & Integrity', () => {
 
   describe('Atomic write verification', () => {
     it('no .tmp files should be left after operations', async () => {
-      const plan = store.createPlan('原子写入测试');
+      const plan = await store.createPlan('原子写入测试');
       await store.addTopics(plan.id, ['原子写入知识点']);
       await store.deletePlan(plan.id);
 
@@ -149,7 +149,7 @@ describe('Data Consistency & Integrity', () => {
 
   describe('Exam paper data integrity', () => {
     it('exam paper CRUD should maintain data integrity', async () => {
-      const plan = store.createPlan('试卷数据测试');
+      const plan = await store.createPlan('试卷数据测试');
       const updated = await store.addTopics(plan.id, ['试卷知识点']);
       const topic = updated.topics[0];
 
@@ -166,13 +166,13 @@ describe('Data Consistency & Integrity', () => {
         results: null,
       };
 
-      store.addExamPaper(plan.id, paper);
+      await store.addExamPaper(plan.id, paper);
       const papers = store.getExamPapers(plan.id);
       assert.equal(papers.length, 1);
       assert.equal(papers[0].title, '测试试卷');
       assert.equal(papers[0].questions.length, 2);
 
-      store.updateExamResults(plan.id, paper.id, [
+      await store.updateExamResults(plan.id, paper.id, [
         { exerciseIndex: 0, correct: true, userAnswer: 'A', correctAnswer: 'A' },
         { exerciseIndex: 1, correct: false, userAnswer: '错误答案', correctAnswer: '答案2' },
       ]);
@@ -181,7 +181,7 @@ describe('Data Consistency & Integrity', () => {
       assert.equal(updatedPapers[0].results[0].correct, true);
       assert.equal(updatedPapers[0].results[1].correct, false);
 
-      store.deleteExamPaper(plan.id, paper.id);
+      await store.deleteExamPaper(plan.id, paper.id);
       const afterDelete = store.getExamPapers(plan.id);
       assert.equal(afterDelete.length, 0);
 
@@ -191,7 +191,7 @@ describe('Data Consistency & Integrity', () => {
 
   describe('Teaching errors data integrity', () => {
     it('should persist teaching errors and retrieve them', async () => {
-      const plan = store.createPlan('教学错误测试');
+      const plan = await store.createPlan('教学错误测试');
       const updated = await store.addTopics(plan.id, ['错误知识点']);
       const topic = updated.topics[0];
 

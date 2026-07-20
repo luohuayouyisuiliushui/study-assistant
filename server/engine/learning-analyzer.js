@@ -5,7 +5,7 @@
 
 import { Provider } from './provider.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
-import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory } from './learn-store.js';
+import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory, addHistory, updateTopic, saveCoreAnalysis } from './learn-store.js';
 import {
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, FEYNMAN_ANALYSIS_PROMPT,
@@ -14,7 +14,7 @@ import {
   buildFollowUpMessages, buildDeterministicContext,
 } from './learn-prompts.js';
 import { getUserProfile } from './user-profile.js';
-import { resolveProvider } from './learn-engine.js';
+import { resolveProvider, engineCacheMonitor } from './learn-engine.js';
 
 export async function answerFollowUp(providerOrConfig, plan, topicId, question, model = 'gpt-4o-mini') {
   if (!question || !question.trim()) throw new Error('问题不能为空');
@@ -394,6 +394,7 @@ export async function gradeExercises(providerOrConfig, plan, topicId, userAnswer
       if (idx >= 0 && idx < exercises.length) {
         exercises[idx].userAnswer = grade.userAnswer || exercises[idx].userAnswer;
         exercises[idx].correct = grade.correct;
+        exercises[idx].gradedAt = Date.now();
       }
     }
     await updateTopic(plan.id, topicId, { exercises });

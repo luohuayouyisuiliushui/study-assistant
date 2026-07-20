@@ -56,7 +56,7 @@ function createMockProvider(resultContent) {
 let testPlanId = null;
 
 async function createPlanWithDetail() {
-  const plan = store.createPlan('fact-check-test-plan');
+  const plan = await store.createPlan('fact-check-test-plan');
   testPlanId = plan.id;
   await store.addTopics(plan.id, ['TCP协议基础']);
   const p = store.getPlan(plan.id);
@@ -77,9 +77,9 @@ async function createPlanWithDetail() {
 // ─── Tests ───
 
 describe('fact-checker', () => {
-  after(() => {
+  after(async () => {
     if (testPlanId) {
-      try { store.permanentlyDeletePlan(testPlanId); } catch {}
+      try { await store.permanentlyDeletePlan(testPlanId); } catch {}
     }
   });
 
@@ -285,7 +285,7 @@ describe('fact-checker', () => {
   });
 
   describe('applyFixesToContent', () => {
-    it('should replace wrong claims with corrections', () => {
+    it('should replace wrong claims with corrections', async () => {
       const content = 'TCP使用7次握手建立连接。定义在RFC 9999中。';
       const fixes = [
         { claim: 'TCP使用7次握手建立连接', action: 'correct', replacement: 'TCP使用三次握手建立连接', reason: '' },
@@ -301,7 +301,7 @@ describe('fact-checker', () => {
       assert.ok(fixedCount >= 2);
     });
 
-    it('should not modify content when action is confirm', () => {
+    it('should not modify content when action is confirm', async () => {
       const content = 'TCP是面向连接的协议。';
       const fixes = [
         { claim: 'TCP是面向连接的协议', action: 'confirm', replacement: 'same thing', reason: '' },
@@ -313,7 +313,7 @@ describe('fact-checker', () => {
       assert.strictEqual(fixedCount, 0);
     });
 
-    it('should handle empty fixes', () => {
+    it('should handle empty fixes', async () => {
       const content = 'some content';
       const { content: corrected, fixedCount } = applyFixesToContent(content, []);
       assert.strictEqual(corrected, content);
@@ -322,7 +322,7 @@ describe('fact-checker', () => {
   });
 
   describe('buildFactCheckReport', () => {
-    it('should build a Markdown report with findings', () => {
+    it('should build a Markdown report with findings', async () => {
       const result = {
         overallScore: 0.6,
         verdict: 'caution',
@@ -340,7 +340,7 @@ describe('fact-checker', () => {
       assert.ok(report.includes('端口号'));
     });
 
-    it('should handle empty findings', () => {
+    it('should handle empty findings', async () => {
       const result = {
         overallScore: 1.0,
         verdict: 'trusted',
@@ -354,14 +354,14 @@ describe('fact-checker', () => {
       assert.ok(report.includes('100%'));
     });
 
-    it('should handle error state', () => {
+    it('should handle error state', async () => {
       const report = buildFactCheckReport(null);
       assert.ok(report.includes('未能完成'));
     });
   });
 
   describe('buildFactCheckSummary', () => {
-    it('should return one-line summary for clean content', () => {
+    it('should return one-line summary for clean content', async () => {
       const summary = buildFactCheckSummary({
         overallScore: 0.95,
         verdict: 'trusted',
@@ -372,7 +372,7 @@ describe('fact-checker', () => {
       assert.ok(summary.includes('未发现问题'));
     });
 
-    it('should return caution summary for flagged content', () => {
+    it('should return caution summary for flagged content', async () => {
       const summary = buildFactCheckSummary({
         overallScore: 0.6,
         verdict: 'caution',

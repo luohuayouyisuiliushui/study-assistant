@@ -17,10 +17,10 @@ const _testPlanIds = [];
 describe('learn-store', () => {
   let createdPlanIds = _testPlanIds;
 
-  after(() => {
+  after(async () => {
     // Cleanup test plans from active index
     for (const id of _testPlanIds) {
-      try { store.deletePlan(id); } catch {}
+      try { await store.deletePlan(id); } catch {}
     }
     // Also clean up any plans that ended up in trash
     for (const tp of store.listTrash()) {
@@ -29,8 +29,8 @@ describe('learn-store', () => {
   });
 
   describe('createPlan', () => {
-    it('should create a plan with correct structure', () => {
-      const plan = store.createPlan('测试计划1');
+    it('should create a plan with correct structure', async () => {
+      const plan = await store.createPlan('测试计划1');
       createdPlanIds.push(plan.id);
       assert.ok(plan.id);
       assert.strictEqual(plan.name, '测试计划1');
@@ -45,15 +45,15 @@ describe('learn-store', () => {
   });
 
   describe('getPlan', () => {
-    it('should retrieve a created plan', () => {
-      const plan = store.createPlan('get-test');
+    it('should retrieve a created plan', async () => {
+      const plan = await store.createPlan('get-test');
       createdPlanIds.push(plan.id);
       const retrieved = store.getPlan(plan.id);
       assert.ok(retrieved);
       assert.strictEqual(retrieved.name, 'get-test');
     });
 
-    it('should return null for non-existent plan', () => {
+    it('should return null for non-existent plan', async () => {
       const result = store.getPlan('non-existent-id-' + Date.now());
       assert.strictEqual(result, null);
     });
@@ -61,7 +61,7 @@ describe('learn-store', () => {
 
   describe('addTopics', () => {
     it('should add topics to a plan', async () => {
-      const plan = store.createPlan('topics-test');
+      const plan = await store.createPlan('topics-test');
       createdPlanIds.push(plan.id);
       const titles = ['主题A', '主题B', '主题C'];
       const updated = await store.addTopics(plan.id, titles);
@@ -78,7 +78,7 @@ describe('learn-store', () => {
     });
 
     it('should not add duplicate titles', async () => {
-      const plan = store.createPlan('dup-test');
+      const plan = await store.createPlan('dup-test');
       createdPlanIds.push(plan.id);
       await store.addTopics(plan.id, ['唯一主题']);
       const updated = await store.addTopics(plan.id, ['唯一主题', '新主题']);
@@ -88,7 +88,7 @@ describe('learn-store', () => {
 
   describe('updateTopic', () => {
     it('should update topic fields', async () => {
-      const plan = store.createPlan('update-test');
+      const plan = await store.createPlan('update-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['待更新主题']);
       const tid = afterAdd.topics[0].id;
@@ -101,7 +101,7 @@ describe('learn-store', () => {
 
   describe('updateTopicTime', () => {
     it('should accumulate time and set lastAccessed', async () => {
-      const plan = store.createPlan('time-test');
+      const plan = await store.createPlan('time-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['计时主题']);
       const tid = afterAdd.topics[0].id;
@@ -118,7 +118,7 @@ describe('learn-store', () => {
 
   describe('removeTopic', () => {
     it('should remove a topic by id', async () => {
-      const plan = store.createPlan('remove-test');
+      const plan = await store.createPlan('remove-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['A', 'B', 'C']);
       const tid = afterAdd.topics[0].id;
@@ -130,7 +130,7 @@ describe('learn-store', () => {
 
   describe('addHistory', () => {
     it('should add history entries', async () => {
-      const plan = store.createPlan('history-test');
+      const plan = await store.createPlan('history-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['知识点']);
       const tid = afterAdd.topics[0].id;
@@ -143,7 +143,7 @@ describe('learn-store', () => {
     });
 
     it('should merge consecutive user messages', async () => {
-      const plan = store.createPlan('merge-test');
+      const plan = await store.createPlan('merge-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['知识点']);
       const tid = afterAdd.topics[0].id;
@@ -159,7 +159,7 @@ describe('learn-store', () => {
     });
 
     it('should not merge non-consecutive user messages', async () => {
-      const plan = store.createPlan('no-merge-test');
+      const plan = await store.createPlan('no-merge-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['知识点']);
       const tid = afterAdd.topics[0].id;
@@ -176,7 +176,7 @@ describe('learn-store', () => {
 
   describe('getTopicHistory', () => {
     it('should filter history by topic', async () => {
-      const plan = store.createPlan('filter-test');
+      const plan = await store.createPlan('filter-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['主题1', '主题2']);
 
@@ -196,8 +196,8 @@ describe('learn-store', () => {
   });
 
   describe('buildLearningProfile', () => {
-    it('should return correct structure for empty plan', () => {
-      const plan = store.createPlan('profile-test');
+    it('should return correct structure for empty plan', async () => {
+      const plan = await store.createPlan('profile-test');
       createdPlanIds.push(plan.id);
       const profile = store.buildLearningProfile(plan);
       assert.strictEqual(profile.planName, 'profile-test');
@@ -207,7 +207,7 @@ describe('learn-store', () => {
     });
 
     it('should calculate completion rate correctly', async () => {
-      const plan = store.createPlan('completion-test');
+      const plan = await store.createPlan('completion-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['A', 'B', 'C', 'D']);
       await store.updateTopic(plan.id, afterAdd.topics[0].id, { done: true });
@@ -221,7 +221,7 @@ describe('learn-store', () => {
     });
 
     it('should count questions by topic', async () => {
-      const plan = store.createPlan('qa-count-test');
+      const plan = await store.createPlan('qa-count-test');
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['主题X']);
       const tid = afterAdd.topics[0].id;
@@ -241,7 +241,7 @@ describe('learn-store', () => {
   //  NEW: createPlanWithPhases (nested hierarchy)
   // ═══════════════════════════════════════════════════════
   describe('createPlanWithPhases (hierarchy)', () => {
-    it('should create plan with nested hierarchy (old string format)', () => {
+    it('should create plan with nested hierarchy (old string format)', async () => {
       const phases = [{ name: '基础', topics: ['变量', '函数'] }];
       const plan = store.createPlanWithPhases('旧格式兼容', phases);
       createdPlanIds.push(plan.id);
@@ -251,7 +251,7 @@ describe('learn-store', () => {
       assert.strictEqual(plan.topics[0].parentId, null);
     });
 
-    it('should create plan with nested hierarchy (new object format)', () => {
+    it('should create plan with nested hierarchy (new object format)', async () => {
       const phases = [{
         name: 'Python',
         topics: [
@@ -283,7 +283,7 @@ describe('learn-store', () => {
       assert.strictEqual(param.level, 3);
     });
 
-    it('should process external relations (prerequisite + related)', () => {
+    it('should process external relations (prerequisite + related)', async () => {
       const phases = [{ name: '内容', topics: [
         { title: 'A', level: 1 },
         { title: 'B', level: 1 },
@@ -302,7 +302,7 @@ describe('learn-store', () => {
       assert.ok(a.relatedTopics.includes(c.id) || c.relatedTopics.includes(a.id));
     });
 
-    it('should handle item-level prerequisites with external relations', () => {
+    it('should handle item-level prerequisites with external relations', async () => {
       const phases = [{ name: '内容', topics: [
         { title: 'A', level: 1 },
         { title: 'B', level: 1, prerequisites: ['A'] },
@@ -320,8 +320,8 @@ describe('learn-store', () => {
   //  NEW: getTopicChildren / getTopicPrerequisites
   // ═══════════════════════════════════════════════════════
   describe('getTopicChildren', () => {
-    it('should return direct children sorted by order', () => {
-      const plan = store.createPlan('children-test');
+    it('should return direct children sorted by order', async () => {
+      const plan = await store.createPlan('children-test');
       createdPlanIds.push(plan.id);
       // Manually build a plan with parent-child
       const parentId = 'p1';
@@ -337,8 +337,8 @@ describe('learn-store', () => {
   });
 
   describe('getTopicPrerequisites', () => {
-    it('should return prerequisite topics', () => {
-      const plan = store.createPlan('pre-test');
+    it('should return prerequisite topics', async () => {
+      const plan = await store.createPlan('pre-test');
       createdPlanIds.push(plan.id);
       const p1 = { id: 'p1', title: '前置', prerequisites: [], relatedTopics: [] };
       const p2 = { id: 'p2', title: '后置', prerequisites: ['p1'], relatedTopics: [] };
@@ -348,8 +348,8 @@ describe('learn-store', () => {
       assert.strictEqual(prereqs[0].title, '前置');
     });
 
-    it('should return empty array for topic without prerequisites', () => {
-      const plan = store.createPlan('no-pre-test');
+    it('should return empty array for topic without prerequisites', async () => {
+      const plan = await store.createPlan('no-pre-test');
       createdPlanIds.push(plan.id);
       plan.topics = [{ id: 'x', title: '独立', prerequisites: [], relatedTopics: [] }];
       const prereqs = store.getTopicPrerequisites(plan, 'x');
@@ -361,8 +361,8 @@ describe('learn-store', () => {
   //  NEW: buildKnowledgeGraph
   // ═══════════════════════════════════════════════════════
   describe('buildKnowledgeGraph', () => {
-    it('should return nodes and edges from plan topics', () => {
-      const plan = store.createPlan('graph-test');
+    it('should return nodes and edges from plan topics', async () => {
+      const plan = await store.createPlan('graph-test');
       createdPlanIds.push(plan.id);
       plan.topics = [
         { id: 'a', title: 'A', phaseId: 'ph1', level: 1, done: false, difficulty: null, parentId: null, prerequisites: [], relatedTopics: ['b'] },
@@ -381,10 +381,10 @@ describe('learn-store', () => {
   });
 
   describe('deletePlan', () => {
-    it('should delete a plan', () => {
-      const plan = store.createPlan('delete-me');
+    it('should delete a plan', async () => {
+      const plan = await store.createPlan('delete-me');
       createdPlanIds.push(plan.id);
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
       const result = store.getPlan(plan.id);
       assert.strictEqual(result, null);
     });
@@ -394,10 +394,10 @@ describe('learn-store', () => {
   //  NEW: Trash / Recycle Bin
   // ═══════════════════════════════════════════════════════
   describe('trashPlan / listTrash / restorePlan', () => {
-    it('should move plan to trash on delete', () => {
-      const plan = store.createPlan('trash-test-1');
+    it('should move plan to trash on delete', async () => {
+      const plan = await store.createPlan('trash-test-1');
       createdPlanIds.push(plan.id);
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
       // Plan should not be in active list
       assert.strictEqual(store.getPlan(plan.id), null);
       // But should appear in trash
@@ -409,10 +409,10 @@ describe('learn-store', () => {
       assert.strictEqual(entry.hasData, false);
     });
 
-    it('should restore plan from trash', () => {
-      const plan = store.createPlan('trash-test-2');
+    it('should restore plan from trash', async () => {
+      const plan = await store.createPlan('trash-test-2');
       createdPlanIds.push(plan.id);
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
       assert.strictEqual(store.getPlan(plan.id), null);
       store.restorePlan(plan.id);
       const restored = store.getPlan(plan.id);
@@ -422,17 +422,17 @@ describe('learn-store', () => {
       assert.strictEqual(afterRestore.find(t => t.id === plan.id), undefined);
     });
 
-    it('should permanently delete from trash', () => {
-      const plan = store.createPlan('trash-test-3');
+    it('should permanently delete from trash', async () => {
+      const plan = await store.createPlan('trash-test-3');
       createdPlanIds.push(plan.id);
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
       store.permanentlyDeleteTrash(plan.id);
       const after = store.listTrash();
       assert.strictEqual(after.find(t => t.id === plan.id), undefined);
     });
 
     it('should flag hasData for plans with learning content', async () => {
-      const plan = store.createPlan('trash-test-4');
+      const plan = await store.createPlan('trash-test-4');
       createdPlanIds.push(plan.id);
       await store.addTopics(plan.id, ['知识点A']);
       const fresh = store.getPlan(plan.id);
@@ -453,12 +453,12 @@ describe('learn-store', () => {
   //  NEW: parseExercisesFromDetail / extractWeakPoints / getTopicsNeedingReview
   // ═══════════════════════════════════════════════════════
   describe('parseExercisesFromDetail', () => {
-    it('should return empty array for null/empty input', () => {
+    it('should return empty array for null/empty input', async () => {
       assert.strictEqual(store.parseExercisesFromDetail(null).length, 0);
       assert.strictEqual(store.parseExercisesFromDetail('').length, 0);
     });
 
-    it('should parse choice exercises from structured markdown', () => {
+    it('should parse choice exercises from structured markdown', async () => {
       const md = '## 📝 练习题\n' +
         '> **练习题 1**（选择题）以下哪个是变量？\n' +
         '> - A. var\n' +
@@ -475,7 +475,7 @@ describe('learn-store', () => {
       assert.strictEqual(result[0].conceptTag, '变量声明');
     });
 
-    it('should parse open-ended exercises', () => {
+    it('should parse open-ended exercises', async () => {
       const md = '## 📝 练习题\n' +
         '> **练习题 1**（简答题）什么是闭包？\n' +
         '> > 参考答案：闭包是能访问外部函数变量的函数\n' +
@@ -487,7 +487,7 @@ describe('learn-store', () => {
       assert.strictEqual(result[0].answer, '闭包是能访问外部函数变量的函数');
     });
 
-    it('should parse multiple exercises', () => {
+    it('should parse multiple exercises', async () => {
       const md = '## 📝 练习题\n' +
         '> **练习题 1**（选择题）题1？\n' +
         '> - A. Opt1\n' +
@@ -503,7 +503,7 @@ describe('learn-store', () => {
       assert.strictEqual(result[1].index, 2);
     });
 
-    it('should return empty array when detail has no exercise section', () => {
+    it('should return empty array when detail has no exercise section', async () => {
       const md = '普通内容，没有练习题\n';
       const result = store.parseExercisesFromDetail(md);
       assert.strictEqual(result.length, 0);
@@ -511,23 +511,23 @@ describe('learn-store', () => {
   });
 
   describe('extractWeakPoints', () => {
-    it('should extract weak point names from JSON', () => {
+    it('should extract weak point names from JSON', async () => {
       const json = '{"topicTitle":"JS基础","weakPoints":[{"concept":"闭包","confidence":"high","evidence":"答错练习题"},{"concept":"变量提升","confidence":"medium","evidence":"追问较多"}]}';
       const result = store.extractWeakPoints(json);
       assert.deepStrictEqual(result, ['闭包', '变量提升']);
     });
 
-    it('should return empty array for invalid JSON', () => {
+    it('should return empty array for invalid JSON', async () => {
       assert.deepStrictEqual(store.extractWeakPoints('not json'), []);
       assert.deepStrictEqual(store.extractWeakPoints(''), []);
     });
 
-    it('should return empty array for missing weakPoints', () => {
+    it('should return empty array for missing weakPoints', async () => {
       const json = '{"topicTitle":"JS基础","weakPoints":[]}';
       assert.deepStrictEqual(store.extractWeakPoints(json), []);
     });
 
-    it('should filter out entries without concept', () => {
+    it('should filter out entries without concept', async () => {
       const json = '{"weakPoints":[{"concept":"闭包"},{"confidence":"high"}]}';
       const result = store.extractWeakPoints(json);
       assert.deepStrictEqual(result, ['闭包']);
@@ -535,7 +535,7 @@ describe('learn-store', () => {
   });
 
   describe('getTopicsNeedingReview', () => {
-    it('should return topics with weakPoints', () => {
+    it('should return topics with weakPoints', async () => {
       const plan = {
         topics: [
           { id: 't1', title: '主题1', done: true, weakPoints: ['闭包'], exercises: [] },
@@ -548,7 +548,7 @@ describe('learn-store', () => {
       assert.strictEqual(needs[0].title, '主题1');
     });
 
-    it('should return topics with exercise errors', () => {
+    it('should return topics with exercise errors', async () => {
       const plan = {
         topics: [
           { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [
@@ -566,7 +566,7 @@ describe('learn-store', () => {
       assert.strictEqual(needs[0].lastErrorCount, 1);
     });
 
-    it('should return empty array when no topics need review', () => {
+    it('should return empty array when no topics need review', async () => {
       const plan = {
         topics: [
           { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [] },
@@ -577,7 +577,7 @@ describe('learn-store', () => {
       assert.strictEqual(needs.length, 0);
     });
 
-    it('should flag topics with exam paper errors', () => {
+    it('should flag topics with exam paper errors', async () => {
       const plan = {
         topics: [
           { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [] },
@@ -603,12 +603,12 @@ describe('learn-store', () => {
   // ═══════════════════════════════════════════════════════
 
   describe('examPapers', () => {
-    it('should add and retrieve exam papers', () => {
-      const plan = store.createPlan('exam-store-test');
+    it('should add and retrieve exam papers', async () => {
+      const plan = await store.createPlan('exam-store-test');
       _testPlanIds.push(plan.id);
 
       const exam = { id: 'ex1', title: '第1章测验', config: { topicIds: ['t1'], questionCount: 5, choiceRatio: 0.6 }, paper: '# 试卷', questions: [] };
-      store.addExamPaper(plan.id, exam);
+      await store.addExamPaper(plan.id, exam);
 
       const papers = store.getExamPapers(plan.id);
       assert.strictEqual(papers.length, 1);
@@ -617,20 +617,20 @@ describe('learn-store', () => {
       assert.ok(papers[0].createdAt > 0);
 
       // Add another
-      store.addExamPaper(plan.id, { id: 'ex2', title: '第2章测验', config: { topicIds: ['t2'], questionCount: 3, choiceRatio: 0.5 }, paper: '# 试卷2', questions: [] });
+      await store.addExamPaper(plan.id, { id: 'ex2', title: '第2章测验', config: { topicIds: ['t2'], questionCount: 3, choiceRatio: 0.5 }, paper: '# 试卷2', questions: [] });
       assert.strictEqual(store.getExamPapers(plan.id).length, 2);
     });
 
-    it('should update exam results after grading', () => {
-      const plan = store.createPlan('exam-grade-test');
+    it('should update exam results after grading', async () => {
+      const plan = await store.createPlan('exam-grade-test');
       _testPlanIds.push(plan.id);
 
-      store.addExamPaper(plan.id, { id: 'ex-grade', title: '批改测试', config: {}, paper: '', questions: [
+      await store.addExamPaper(plan.id, { id: 'ex-grade', title: '批改测试', config: {}, paper: '', questions: [
         { id: 'q1', index: 0, type: 'choice', question: '题1', options: ['A', 'B'], answer: 'A', explanation: '', conceptTag: '', topicId: null, difficulty: 'easy' },
       ]});
 
       const results = [{ exerciseIndex: 0, correct: true, userAnswer: 'A', correctAnswer: 'A', explanation: '正确' }];
-      store.updateExamResults(plan.id, 'ex-grade', results);
+      await store.updateExamResults(plan.id, 'ex-grade', results);
 
       const papers = store.getExamPapers(plan.id);
       assert.strictEqual(papers[0].results.length, 1);
@@ -638,25 +638,25 @@ describe('learn-store', () => {
       assert.ok(papers[0].gradedAt > 0);
     });
 
-    it('should delete exam papers', () => {
-      const plan = store.createPlan('exam-del-test');
+    it('should delete exam papers', async () => {
+      const plan = await store.createPlan('exam-del-test');
       _testPlanIds.push(plan.id);
 
-      store.addExamPaper(plan.id, { id: 'ex-del', title: '待删除', config: {}, paper: '', questions: [] });
+      await store.addExamPaper(plan.id, { id: 'ex-del', title: '待删除', config: {}, paper: '', questions: [] });
       assert.strictEqual(store.getExamPapers(plan.id).length, 1);
 
-      store.deleteExamPaper(plan.id, 'ex-del');
+      await store.deleteExamPaper(plan.id, 'ex-del');
       assert.strictEqual(store.getExamPapers(plan.id).length, 0);
     });
 
-    it('should throw for non-existent plan', () => {
-      assert.throws(() => store.addExamPaper('bad-id', { id: 'x', title: 'x', config: {}, paper: '', questions: [] }), /计划不存在/);
+    it('should throw for non-existent plan', async () => {
+      await assert.rejects(store.addExamPaper('bad-id', { id: 'x', title: 'x', config: {}, paper: '', questions: [] }), /计划不存在/);
     });
 
-    it('should throw for non-existent exam on update', () => {
-      const plan = store.createPlan('exam-null-test');
+    it('should throw for non-existent exam on update', async () => {
+      const plan = await store.createPlan('exam-null-test');
       _testPlanIds.push(plan.id);
-      assert.throws(() => store.updateExamResults(plan.id, 'no-such-exam', []), /没有试卷/);
+      await assert.rejects(store.updateExamResults(plan.id, 'no-such-exam', []), /没有试卷/);
     });
   });
 });
@@ -669,7 +669,7 @@ describe('Edge cases', () => {
   let createdPlanIds = _testPlanIds;
 
   it('addTopics should handle empty array', async () => {
-    const plan = store.createPlan('empty-topics-test');
+    const plan = await store.createPlan('empty-topics-test');
     createdPlanIds.push(plan.id);
     const result = await store.addTopics(plan.id, []);
     assert.strictEqual(result.topics.length, 0);
@@ -683,7 +683,7 @@ describe('Edge cases', () => {
   });
 
   it('updateTopicTime should throw for non-existent topic', async () => {
-    const plan = store.createPlan('time-edge-test');
+    const plan = await store.createPlan('time-edge-test');
     createdPlanIds.push(plan.id);
     await assert.rejects(
       () => store.updateTopicTime(plan.id, 'non-existent-topic-id', 60),
@@ -692,7 +692,7 @@ describe('Edge cases', () => {
   });
 
   it('should handle topics with special characters in titles', async () => {
-    const plan = store.createPlan('special-chars');
+    const plan = await store.createPlan('special-chars');
     createdPlanIds.push(plan.id);
     await store.addTopics(plan.id, ['变量&函数<>测试', '正则/.*[测试]']);
     const p = store.getPlan(plan.id);
@@ -702,7 +702,7 @@ describe('Edge cases', () => {
   });
 
   it('should handle addTopics with duplicate filtering', async () => {
-    const plan = store.createPlan('dup-edge');
+    const plan = await store.createPlan('dup-edge');
     createdPlanIds.push(plan.id);
     await store.addTopics(plan.id, ['A', 'B']);
     const result = await store.addTopics(plan.id, ['A', 'C']); // A is duplicate
@@ -710,8 +710,8 @@ describe('Edge cases', () => {
     assert.ok(result.topics.filter(t => t.title === 'A').length, 1);
   });
 
-  it('buildKnowledgeGraph should handle empty plan', () => {
-    const plan = store.createPlan('empty-graph');
+  it('buildKnowledgeGraph should handle empty plan', async () => {
+    const plan = await store.createPlan('empty-graph');
     createdPlanIds.push(plan.id);
     const graph = store.buildKnowledgeGraph(plan);
     assert.strictEqual(graph.nodes.length, 0);
@@ -719,7 +719,7 @@ describe('Edge cases', () => {
   });
 
   it('removeTopic should handle non-existent topic', async () => {
-    const plan = store.createPlan('remove-nonexist');
+    const plan = await store.createPlan('remove-nonexist');
     createdPlanIds.push(plan.id);
     const result = await store.removeTopic(plan.id, 'non-existent');
     assert.ok(result);
@@ -728,7 +728,7 @@ describe('Edge cases', () => {
 
   describe('recordTeachingErrors', () => {
     it('should persist teaching errors onto the topic', async () => {
-      const plan = store.createPlan('teaching-errors-plan');
+      const plan = await store.createPlan('teaching-errors-plan');
       createdPlanIds.push(plan.id);
       await store.addTopics(plan.id, ['误区知识点']);
       const p = store.getPlan(plan.id);
@@ -746,7 +746,7 @@ describe('Edge cases', () => {
     });
 
     it('should normalize non-array input to empty array', async () => {
-      const plan = store.createPlan('teaching-errors-empty');
+      const plan = await store.createPlan('teaching-errors-empty');
       createdPlanIds.push(plan.id);
       await store.addTopics(plan.id, ['空误区']);
       const p = store.getPlan(plan.id);
@@ -756,7 +756,7 @@ describe('Edge cases', () => {
     });
 
     it('should throw for non-existent topic', async () => {
-      const plan = store.createPlan('teaching-errors-notopic');
+      const plan = await store.createPlan('teaching-errors-notopic');
       createdPlanIds.push(plan.id);
       await assert.rejects(() => store.recordTeachingErrors(plan.id, 'no-such', []), /Topic not found/);
     });
@@ -769,45 +769,45 @@ describe('Edge cases', () => {
 
 describe('Null safety', () => {
   describe('buildKnowledgeGraph', () => {
-    it('should return empty graph for null plan', () => {
+    it('should return empty graph for null plan', async () => {
       const result = store.buildKnowledgeGraph(null);
       assert.deepStrictEqual(result, { nodes: [], edges: [] });
     });
 
-    it('should return empty graph for undefined plan', () => {
+    it('should return empty graph for undefined plan', async () => {
       const result = store.buildKnowledgeGraph(undefined);
       assert.deepStrictEqual(result, { nodes: [], edges: [] });
     });
 
-    it('should return empty graph for plan without topics', () => {
+    it('should return empty graph for plan without topics', async () => {
       const result = store.buildKnowledgeGraph({ id: 'x', name: 'empty' });
       assert.deepStrictEqual(result, { nodes: [], edges: [] });
     });
   });
 
   describe('buildInferredEdges', () => {
-    it('should return empty for null plan', () => {
+    it('should return empty for null plan', async () => {
       assert.deepStrictEqual(store.buildInferredEdges(null), []);
     });
 
-    it('should return empty for plan with no topics', () => {
+    it('should return empty for plan with no topics', async () => {
       assert.deepStrictEqual(store.buildInferredEdges({ name: 'empty' }), []);
     });
 
-    it('should return empty for plan with empty topics array', () => {
+    it('should return empty for plan with empty topics array', async () => {
       assert.deepStrictEqual(store.buildInferredEdges({ topics: [] }), []);
     });
   });
 
   describe('buildEnhancedKnowledgeGraph', () => {
-    it('should not crash with null plan', () => {
+    it('should not crash with null plan', async () => {
       const result = store.buildEnhancedKnowledgeGraph(null);
       assert.ok(result, 'should return something');
       assert.deepStrictEqual(result.nodes, []);
       assert.deepStrictEqual(result.edges, []);
     });
 
-    it('should not crash with plan missing topics', () => {
+    it('should not crash with plan missing topics', async () => {
       const result = store.buildEnhancedKnowledgeGraph({ id: 'bare' });
       assert.deepStrictEqual(result.nodes, []);
       assert.deepStrictEqual(result.edges, []);
@@ -815,34 +815,34 @@ describe('Null safety', () => {
   });
 
   describe('getTopicChildren', () => {
-    it('should return empty array for null plan', () => {
+    it('should return empty array for null plan', async () => {
       assert.deepStrictEqual(store.getTopicChildren(null, 'x'), []);
     });
 
-    it('should return empty array for plan without topics', () => {
+    it('should return empty array for plan without topics', async () => {
       assert.deepStrictEqual(store.getTopicChildren({ name: 'no topics' }, 'x'), []);
     });
   });
 
   describe('getTopicPrerequisites', () => {
-    it('should return empty array for null plan', () => {
+    it('should return empty array for null plan', async () => {
       assert.deepStrictEqual(store.getTopicPrerequisites(null, 'x'), []);
     });
 
-    it('should return empty array for plan without topics', () => {
+    it('should return empty array for plan without topics', async () => {
       assert.deepStrictEqual(store.getTopicPrerequisites({ name: 'no topics' }, 'x'), []);
     });
   });
 
   describe('buildLearningProfile', () => {
-    it('should return default profile for null plan', () => {
+    it('should return default profile for null plan', async () => {
       const profile = store.buildLearningProfile(null);
       assert.strictEqual(profile.totalTopics, 0);
       assert.strictEqual(profile.doneTopics, 0);
       assert.strictEqual(profile.completionRate, 0);
     });
 
-    it('should return default profile for plan without topics', () => {
+    it('should return default profile for plan without topics', async () => {
       const profile = store.buildLearningProfile({ name: 'empty', history: [] });
       assert.strictEqual(profile.totalTopics, 0);
       assert.strictEqual(profile.completionRate, 0);
@@ -850,11 +850,11 @@ describe('Null safety', () => {
   });
 
   describe('getTopicsNeedingReview', () => {
-    it('should return empty array for null plan', () => {
+    it('should return empty array for null plan', async () => {
       assert.deepStrictEqual(store.getTopicsNeedingReview(null), []);
     });
 
-    it('should return empty array for plan without topics', () => {
+    it('should return empty array for plan without topics', async () => {
       assert.deepStrictEqual(store.getTopicsNeedingReview({ name: 'empty' }), []);
     });
   });
@@ -865,8 +865,8 @@ describe('Null safety', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('Temp file cleanup', () => {
-  it('should not leave .tmp files after write operations', () => {
-    const plan = store.createPlan('tmp-cleanup-test');
+  it('should not leave .tmp files after write operations', async () => {
+    const plan = await store.createPlan('tmp-cleanup-test');
     _testPlanIds.push(plan.id);
 
     // Perform write operations
@@ -880,7 +880,7 @@ describe('Temp file cleanup', () => {
       assert.strictEqual(tmpFiles.length, 0, `should have no .tmp files, found: ${tmpFiles.join(', ')}`);
     }
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -889,7 +889,7 @@ describe('Temp file cleanup', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('listPlans', () => {
-  it('should return an array', () => {
+  it('should return an array', async () => {
     const plans = store.listPlans();
     assert.ok(Array.isArray(plans));
     // Should contain at least the plans created in this test run
@@ -900,8 +900,8 @@ describe('listPlans', () => {
 
 describe('reorderTopics', () => {
   let plan;
-  before(() => {
-    plan = store.createPlan('reorder-test');
+  before(async () => {
+    plan = await store.createPlan('reorder-test');
     _testPlanIds.push(plan.id);
   });
 
@@ -929,12 +929,12 @@ describe('reorderTopics', () => {
 
 describe('trash operations (gap)', () => {
   let trashPlan;
-  before(() => {
-    trashPlan = store.createPlan('trash-gap-test');
+  before(async () => {
+    trashPlan = await store.createPlan('trash-gap-test');
   });
 
-  it('should empty the trash', () => {
-    store.trashPlan(trashPlan.id);
+  it('should empty the trash', async () => {
+    await store.trashPlan(trashPlan.id);
     const before = store.listTrash();
     const found = before.find(t => t.id === trashPlan.id);
     assert.ok(found, 'plan should be in trash');
@@ -950,7 +950,7 @@ describe('trash operations (gap)', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('readFlags / writeFlag / clearFlag', () => {
-  it('should write and read flags', () => {
+  it('should write and read flags', async () => {
     const flagPlanId = 'flag-test-' + Date.now();
     store.writeFlag(flagPlanId);
     const flags = store.readFlags();
@@ -958,7 +958,7 @@ describe('readFlags / writeFlag / clearFlag', () => {
     assert.ok(flags.includes(flagPlanId), 'flag planId should be present in readFlags');
   });
 
-  it('should clear a specific flag', () => {
+  it('should clear a specific flag', async () => {
     const flagPlanId = 'flag-clear-test-' + Date.now();
     store.writeFlag(flagPlanId);
     store.clearFlag(flagPlanId);
@@ -966,7 +966,7 @@ describe('readFlags / writeFlag / clearFlag', () => {
     assert.ok(!flags.includes(flagPlanId), 'flag should be cleared');
   });
 
-  it('should handle clearing non-existent flag gracefully', () => {
+  it('should handle clearing non-existent flag gracefully', async () => {
     store.clearFlag('non-existent-flag-id');
     const flags = store.readFlags();
     assert.ok(Array.isArray(flags));

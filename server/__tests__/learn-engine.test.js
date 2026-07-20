@@ -31,7 +31,7 @@ function createMockProvider(resultContent, modelName = 'mock-model') {
 let testPlanId = null;
 
 async function createFullPlan() {
-  const plan = store.createPlan('engine-test-plan');
+  const plan = await store.createPlan('engine-test-plan');
   testPlanId = plan.id;
   await store.addTopics(plan.id, ['知识点A', '知识点B']);
   const p = store.getPlan(plan.id);
@@ -55,9 +55,9 @@ async function createFullPlan() {
 }
 
 describe('learn-engine', () => {
-  after(() => {
+  after(async () => {
     if (testPlanId) {
-      try { store.deletePlan(testPlanId); } catch {}
+      try { await store.deletePlan(testPlanId); } catch {}
     }
   });
 
@@ -161,7 +161,7 @@ describe('learn-engine', () => {
     it('should skip topics without exercises and Q&A', async () => {
       const provider = createMockProvider(JSON.stringify({ weakPoints: [] }));
       // Create a plan with a done topic that has no exercises and no Q&A
-      const plan = store.createPlan('empty-topic-plan');
+      const plan = await store.createPlan('empty-topic-plan');
       testPlanId = plan.id;
       await store.addTopics(plan.id, ['空知识点']);
       const p = store.getPlan(plan.id);
@@ -180,7 +180,7 @@ describe('learn-engine', () => {
   // ─── parseExercisesFromDetail ───
 
   describe('store.parseExercisesFromDetail', () => {
-    it('should parse exercises from markdown detail', () => {
+    it('should parse exercises from markdown detail', async () => {
       const detail = `## 讲解内容
 
 ### 📝 练习题
@@ -204,13 +204,13 @@ describe('learn-engine', () => {
       assert.strictEqual(exercises[1].type, 'open');
     });
 
-    it('should return empty array for no exercises', () => {
+    it('should return empty array for no exercises', async () => {
       const result = store.parseExercisesFromDetail('## 纯讲解内容\n无练习题');
       assert.ok(Array.isArray(result));
       assert.strictEqual(result.length, 0);
     });
 
-    it('should return empty array for null/undefined input', () => {
+    it('should return empty array for null/undefined input', async () => {
       assert.deepStrictEqual(store.parseExercisesFromDetail(null), []);
       assert.deepStrictEqual(store.parseExercisesFromDetail(undefined), []);
     });
@@ -219,7 +219,7 @@ describe('learn-engine', () => {
   // ─── extractWeakPoints ───
 
   describe('store.extractWeakPoints', () => {
-    it('should extract concept names from analysis JSON', () => {
+    it('should extract concept names from analysis JSON', async () => {
       const json = JSON.stringify({
         weakPoints: [
           { concept: '数组', severity: 'high', suggestion: '复习数组操作' },
@@ -230,16 +230,16 @@ describe('learn-engine', () => {
       assert.deepStrictEqual(result, ['数组', '指针']);
     });
 
-    it('should return empty array for empty weak points', () => {
+    it('should return empty array for empty weak points', async () => {
       const json = JSON.stringify({ weakPoints: [] });
       assert.deepStrictEqual(store.extractWeakPoints(json), []);
     });
 
-    it('should return empty array for invalid JSON', () => {
+    it('should return empty array for invalid JSON', async () => {
       assert.deepStrictEqual(store.extractWeakPoints('invalid json'), []);
     });
 
-    it('should return empty array for missing weakPoints field', () => {
+    it('should return empty array for missing weakPoints field', async () => {
       const json = JSON.stringify({ otherField: 'value' });
       assert.deepStrictEqual(store.extractWeakPoints(json), []);
     });
@@ -260,7 +260,7 @@ describe('learn-engine', () => {
     });
 
     it('should not include topics without weak points and correct exercises', async () => {
-      const plan = store.createPlan('clean-plan');
+      const plan = await store.createPlan('clean-plan');
       store.updateTopic(plan.id, store.getPlan(plan.id).topics[0]?.id || 'x', {}); // no-op
       await store.addTopics(plan.id, ['干净知识点']);
       const p = store.getPlan(plan.id);
@@ -277,7 +277,7 @@ describe('learn-engine', () => {
       assert.ok(!found, 'should not include topic without issues');
 
       // Cleanup
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
     });
   });
 });
@@ -350,16 +350,16 @@ describe('Interactive mode', () => {
   let testTopicId = null;
 
   before(async () => {
-    const plan = store.createPlan('interactive-test-plan');
+    const plan = await store.createPlan('interactive-test-plan');
     await store.addTopics(plan.id, ['交互测试知识点']);
     const p = store.getPlan(plan.id);
     testPlan = p;
     testTopicId = p.topics[0].id;
   });
 
-  after(() => {
+  after(async () => {
     if (testPlan) {
-      try { store.deletePlan(testPlan.id); } catch {}
+      try { await store.deletePlan(testPlan.id); } catch {}
     }
   });
 
@@ -425,7 +425,7 @@ describe('Interactive mode', () => {
   // State machine retry test removed — no longer tracked on the backend
 
   it('continueInteractiveDetail should advance dynamic state machine on tool call', async () => {
-    const sepPlan = store.createPlan('fc-step-test');
+    const sepPlan = await store.createPlan('fc-step-test');
     await store.addTopics(sepPlan.id, ['工具调用推进测试']);
     const p = store.getPlan(sepPlan.id);
 
@@ -442,11 +442,11 @@ describe('Interactive mode', () => {
     assert.strictEqual(result.session.stateMachine.completedSteps, 2, 'should have 2 completed steps');
     assert.strictEqual(result.session.stateMachine.currentStep, 2, 'should advance to step 2');
     assert.ok(result.tool_calls, 'should have tool_calls');
-    store.deletePlan(sepPlan.id);
+    await store.deletePlan(sepPlan.id);
   });
 
   it('continueInteractiveDetail should not advance state machine without tool call', async () => {
-    const sepPlan = store.createPlan('fc-no-tc');
+    const sepPlan = await store.createPlan('fc-no-tc');
     await store.addTopics(sepPlan.id, ['无工具调用']);
     const p = store.getPlan(sepPlan.id);
 
@@ -454,7 +454,7 @@ describe('Interactive mode', () => {
     await startInteractiveDetail(provider1, p, p.topics[0].id, 'stepwise');
     // No tool_calls → session.finished = true
     assert.ok(store.getPlan(sepPlan.id).topics[0].interactiveSession.finished, 'should be finished without tool call');
-    store.deletePlan(sepPlan.id);
+    await store.deletePlan(sepPlan.id);
   });
 
   it('continueInteractiveDetail should take feedback and return next section', async () => {
@@ -478,7 +478,7 @@ describe('Interactive mode', () => {
 
   it('continueInteractiveDetail should detect [SESSION_END] marker', async () => {
     // Use a separate plan to avoid cross-test interference
-    const sepPlan = store.createPlan('session-end-test');
+    const sepPlan = await store.createPlan('session-end-test');
     await store.addTopics(sepPlan.id, ['测试结束检测']);
     const p = store.getPlan(sepPlan.id);
     const provider1 = createToolMockProvider('以上是全部内容。', [
@@ -493,12 +493,12 @@ describe('Interactive mode', () => {
 
     assert.ok(result.finished, 'session should be marked as finished');
     assert.strictEqual(result.session.finished, true, 'session.finished should be true');
-    store.deletePlan(sepPlan.id);
+    await store.deletePlan(sepPlan.id);
   });
 
   it('continueInteractiveDetail should re-open finished session for further questions', async () => {
     // Use separate plan
-    const reopenPlan = store.createPlan('reopen-test');
+    const reopenPlan = await store.createPlan('reopen-test');
     await store.addTopics(reopenPlan.id, ['重开测试']);
     const p2 = store.getPlan(reopenPlan.id);
 
@@ -515,13 +515,13 @@ describe('Interactive mode', () => {
 
     assert.ok(result.content, 'should return answer for follow-up question');
     assert.strictEqual(result.session.finished, false, 'session should be re-opened (finished = false)');
-    store.deletePlan(reopenPlan.id);
+    await store.deletePlan(reopenPlan.id);
   });
 
   it('continueInteractiveDetail should throw when no session exists', async () => {
     const provider = createStreamMockProvider('');
     // Call continue without starting interactive session first
-    const freshPlan = store.createPlan('no-session-test');
+    const freshPlan = await store.createPlan('no-session-test');
     await store.addTopics(freshPlan.id, ['无会话知识点']);
     const p = store.getPlan(freshPlan.id);
 
@@ -530,7 +530,7 @@ describe('Interactive mode', () => {
       { message: /没有互动讲解会话/ }
     );
 
-    store.deletePlan(freshPlan.id);
+    await store.deletePlan(freshPlan.id);
   });
 
   it('continueInteractiveDetail should support all modes with feedback', async () => {
@@ -583,7 +583,7 @@ describe('Interactive mode', () => {
 
 describe('generateDetail', () => {
   it('should generate content and mark topic as done', async () => {
-    const plan = store.createPlan('gendetail-test');
+    const plan = await store.createPlan('gendetail-test');
     await store.addTopics(plan.id, ['测试核心生成']);
     const p = store.getPlan(plan.id);
     const topicId = p.topics[0].id;
@@ -600,21 +600,21 @@ describe('generateDetail', () => {
     assert.strictEqual(topic.done, true, 'topic should be marked done');
     assert.ok(topic.detail, 'topic should have detail');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should throw for non-existent topic', async () => {
-    const plan = store.createPlan('gendetail-err');
+    const plan = await store.createPlan('gendetail-err');
     const provider = createStreamMockProvider('');
     await assert.rejects(
       () => generateDetail(provider, plan, 'non-existent'),
       { message: 'Topic not found' }
     );
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle empty AI response as error', async () => {
-    const plan = store.createPlan('gendetail-empty');
+    const plan = await store.createPlan('gendetail-empty');
     await store.addTopics(plan.id, ['空响应']);
     const p = store.getPlan(plan.id);
     const provider = createStreamMockProvider('');
@@ -622,7 +622,7 @@ describe('generateDetail', () => {
       () => generateDetail(provider, p, p.topics[0].id),
       { message: 'AI 返回内容为空' }
     );
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -632,7 +632,7 @@ describe('generateDetail', () => {
 
 describe('answerFollowUp', () => {
   it('should answer a follow-up question and store in history', async () => {
-    const plan = store.createPlan('followup-test');
+    const plan = await store.createPlan('followup-test');
     await store.addTopics(plan.id, ['测试追问']);
     const p = store.getPlan(plan.id);
     // Set up detail so context is non-empty
@@ -655,27 +655,27 @@ describe('answerFollowUp', () => {
     assert.strictEqual(topicHistory[topicHistory.length - 2].role, 'user', 'penultimate entry should be user question');
     assert.strictEqual(topicHistory[topicHistory.length - 2].content, '能再解释一下吗？');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should throw for empty question', async () => {
-    const plan = store.createPlan('followup-empty');
+    const plan = await store.createPlan('followup-empty');
     const provider = createMockProvider('');
     await assert.rejects(
       () => answerFollowUp(provider, plan, 'some-topic', '   '),
       { message: '问题不能为空' }
     );
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should throw for non-existent topic', async () => {
-    const plan = store.createPlan('followup-nope');
+    const plan = await store.createPlan('followup-nope');
     const provider = createMockProvider('');
     await assert.rejects(
       () => answerFollowUp(provider, plan, 'non-existent', '你好'),
       { message: 'Topic not found' }
     );
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -685,18 +685,18 @@ describe('answerFollowUp', () => {
 
 describe('revealEmbeddedErrors', () => {
   it('should return empty when topic has no detail', async () => {
-    const plan = store.createPlan('reveal-no-detail');
+    const plan = await store.createPlan('reveal-no-detail');
     await store.addTopics(plan.id, ['空知识点']);
     const p = store.getPlan(plan.id);
     const provider = createMockProvider('{}');
     const result = await revealEmbeddedErrors(provider, p, p.topics[0].id);
     assert.strictEqual(result.hasErrors, false);
     assert.deepStrictEqual(result.errors, []);
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should detect errors from AI response', async () => {
-    const plan = store.createPlan('reveal-test');
+    const plan = await store.createPlan('reveal-test');
     await store.addTopics(plan.id, ['带错误的知识点']);
     const p = store.getPlan(plan.id);
     const topic = p.topics[0];
@@ -720,7 +720,7 @@ describe('revealEmbeddedErrors', () => {
     assert.strictEqual(result.hasErrors, true);
     assert.strictEqual(result.errors.length, 1);
     assert.ok(result.errors[0].correction.includes('8'));
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -730,7 +730,7 @@ describe('revealEmbeddedErrors', () => {
 
 describe('decomposeTopic', () => {
   it('should return subtopics from AI', async () => {
-    const plan = store.createPlan('decompose-test');
+    const plan = await store.createPlan('decompose-test');
     await store.addTopics(plan.id, ['JavaScript 闭包']);
     const p = store.getPlan(plan.id);
 
@@ -746,17 +746,17 @@ describe('decomposeTopic', () => {
     assert.strictEqual(result.length, 3);
     assert.strictEqual(result[0].title, '作用域链');
     assert.strictEqual(result[1].title, '闭包的定义与原理');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should throw for non-existent topic', async () => {
-    const plan = store.createPlan('decompose-nope');
+    const plan = await store.createPlan('decompose-nope');
     const provider = createMockProvider('');
     await assert.rejects(
       () => decomposeTopic(provider, plan, 'non-existent'),
       { message: 'Topic not found' }
     );
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -767,7 +767,7 @@ describe('decomposeTopic', () => {
 describe('analyzeLearning', () => {
   it('should return analysis structure with provider response', async () => {
     const mockProvider = createMockProvider('## 分析结果\n\n学习进度良好，继续努力！');
-    const plan = store.createPlan('analysis-test');
+    const plan = await store.createPlan('analysis-test');
     await store.addTopics(plan.id, ['分析测试']);
     const p1 = store.getPlan(plan.id); // reload after addTopics
     await store.updateTopic(p1.id, p1.topics[0].id, {
@@ -786,24 +786,24 @@ describe('analyzeLearning', () => {
     assert.strictEqual(result.doneCount, 1, 'should count done topics');
     assert.strictEqual(result.totalQuestions, 1, 'should count questions');
     assert.ok(result.usage, 'should include usage data');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle empty plan gracefully', async () => {
     const mockProvider = createMockProvider('无分析数据。');
-    const plan = store.createPlan('empty-analysis');
+    const plan = await store.createPlan('empty-analysis');
     const p = store.getPlan(plan.id);
 
     const result = await analyzeLearning(mockProvider, p, 'mock-model');
     assert.ok(result.analysis, 'should still return analysis');
     assert.strictEqual(result.topicCount, 0, 'no topics');
     assert.strictEqual(result.doneCount, 0, 'no done topics');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should include previous analysis chat when provided', async () => {
     const mockProvider = createMockProvider('根据之前的讨论，我调整了分析。');
-    const plan = store.createPlan('analysis-chat-test');
+    const plan = await store.createPlan('analysis-chat-test');
     const p = store.getPlan(plan.id);
     const chatHistory = [
       { role: 'user', content: '能详细说下我的学习风格吗？' },
@@ -813,7 +813,7 @@ describe('analyzeLearning', () => {
     const result = await analyzeLearning(mockProvider, p, 'mock-model', chatHistory);
     assert.ok(result.analysis, 'should have analysis');
     assert.ok(result.analysis.includes('之前的讨论'), 'should reference chat');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -833,7 +833,7 @@ describe('analyzeCoreTopics', () => {
     };
     const provider = createMockProvider(JSON.stringify(mockResult));
 
-    const plan = store.createPlan('core20-test');
+    const plan = await store.createPlan('core20-test');
     await store.addTopics(plan.id, ['变量与数据类型', '运算符', '控制流', '函数', '数组', '对象', '类与继承', '异步编程']);
     const p = store.getPlan(plan.id);
 
@@ -855,14 +855,14 @@ describe('analyzeCoreTopics', () => {
     assert.ok(matchedTopic, 'core topicId should match a plan topic');
     assert.strictEqual(matchedTopic.title, '变量与数据类型');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle empty core topics gracefully', async () => {
     const mockResult = { coreTopics: [], summary: '暂无足够数据确定核心知识点', corePrinciple: '' };
     const provider = createMockProvider(JSON.stringify(mockResult));
 
-    const plan = store.createPlan('core20-empty-test');
+    const plan = await store.createPlan('core20-empty-test');
     await store.addTopics(plan.id, ['知识点A']);
     const p = store.getPlan(plan.id);
 
@@ -870,13 +870,13 @@ describe('analyzeCoreTopics', () => {
     assert.deepStrictEqual(result.coreTopics, []);
     assert.ok(result.summary);
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle malformed AI response gracefully', async () => {
     const provider = createMockProvider('不是JSON格式的响应');
 
-    const plan = store.createPlan('core20-malformed-test');
+    const plan = await store.createPlan('core20-malformed-test');
     await store.addTopics(plan.id, ['测试知识点']);
     const p = store.getPlan(plan.id);
 
@@ -885,7 +885,7 @@ describe('analyzeCoreTopics', () => {
     assert.ok(Array.isArray(result.coreTopics), 'should have topics array');
     assert.strictEqual(result.coreTopics.length, 0, 'should be empty for malformed response');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should save core analysis to the plan', async () => {
@@ -898,7 +898,7 @@ describe('analyzeCoreTopics', () => {
     };
     const provider = createMockProvider(JSON.stringify(mockResult));
 
-    const plan = store.createPlan('core20-save-test');
+    const plan = await store.createPlan('core20-save-test');
     await store.addTopics(plan.id, ['核心知识点', '次要知识点']);
     const p = store.getPlan(plan.id);
 
@@ -910,11 +910,11 @@ describe('analyzeCoreTopics', () => {
     assert.ok(updatedPlan.coreAnalysis.analyzedAt, 'should have timestamp');
     assert.strictEqual(updatedPlan.coreAnalysis.summary, '总结内容');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should return cached result if already analyzed', async () => {
-    const plan = store.createPlan('core20-cache-test');
+    const plan = await store.createPlan('core20-cache-test');
     await store.addTopics(plan.id, ['知识点A']);
 
     // Pre-set coreAnalysis via store
@@ -936,11 +936,11 @@ describe('analyzeCoreTopics', () => {
     assert.strictEqual(result.summary, '已有分析', 'should return cached result');
     assert.strictEqual(result.coreTopics[0].title, '知识点A');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should re-analyze when force=true even if cached', async () => {
-    const plan = store.createPlan('core20-force-test');
+    const plan = await store.createPlan('core20-force-test');
     await store.addTopics(plan.id, ['知识点A', '知识点B']);
 
     // Pre-set coreAnalysis
@@ -965,11 +965,11 @@ describe('analyzeCoreTopics', () => {
     assert.strictEqual(result.summary, '新分析结果', 'should return fresh analysis');
     assert.strictEqual(result.coreTopics[0].title, '知识点B');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should not cache empty AI results', async () => {
-    const plan = store.createPlan('core20-empty-cache-test');
+    const plan = await store.createPlan('core20-empty-cache-test');
     await store.addTopics(plan.id, ['知识点A', '知识点B']);
     const p = store.getPlan(plan.id);
 
@@ -992,7 +992,7 @@ describe('analyzeCoreTopics', () => {
     assert.strictEqual(result.coreTopics.length, 1, 'should have re-analyzed');
     assert.strictEqual(result.coreTopics[0].title, '知识点A');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -1004,7 +1004,7 @@ describe('answerAnalysisFollowUp', () => {
   it('should return answer for analysis follow-up', async () => {
     const analysis = '## 分析报告\n你的学习进度良好。';
     const mockProvider = createMockProvider('这是一个很好的追问！让我详细说明。');
-    const plan = store.createPlan('analysis-fu-test');
+    const plan = await store.createPlan('analysis-fu-test');
     const p = store.getPlan(plan.id);
     await store.addTopics(plan.id, ['追问测试']);
     const p2 = store.getPlan(plan.id);
@@ -1013,17 +1013,17 @@ describe('answerAnalysisFollowUp', () => {
     assert.ok(result, 'should return result');
     assert.ok(result.content, 'should have content');
     assert.ok(result.content.includes('很好'), 'should include response');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle empty question gracefully', async () => {
     const mockProvider = createMockProvider('请提供你的问题。');
-    const plan = store.createPlan('analysis-fu-empty');
+    const plan = await store.createPlan('analysis-fu-empty');
     const p = store.getPlan(plan.id);
 
     const result = await answerAnalysisFollowUp(mockProvider, p, '报告内容', '');
     assert.ok(result, 'should still return something');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -1032,14 +1032,14 @@ describe('answerAnalysisFollowUp', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('getEngineCacheDiagnostics', () => {
-  it('should return cache diagnostics object', () => {
+  it('should return cache diagnostics object', async () => {
     const diag = getEngineCacheDiagnostics();
     assert.ok(diag, 'should return diagnostics');
     assert.ok('summary' in diag, 'should have summary');
     assert.ok('prefixChanges' in diag, 'should have prefixChanges');
   });
 
-  it('should have summary with totalCalls', () => {
+  it('should have summary with totalCalls', async () => {
     const diag = getEngineCacheDiagnostics();
     assert.strictEqual(typeof diag.summary.totalCalls, 'number');
   });
@@ -1050,19 +1050,19 @@ describe('getEngineCacheDiagnostics', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('createProviderFromConfig', () => {
-  it('should create a Provider from config values', () => {
+  it('should create a Provider from config values', async () => {
     const provider = createProviderFromConfig('test-key', 'https://test.api/v1', 'test-model');
     assert.ok(provider instanceof Provider, 'should be a Provider instance');
     assert.strictEqual(provider.model, 'test-model');
   });
 
-  it('should return the same instance for same config (cached)', () => {
+  it('should return the same instance for same config (cached)', async () => {
     const p1 = createProviderFromConfig('cache-key', 'https://cache.api/v1', 'cache-model');
     const p2 = createProviderFromConfig('cache-key', 'https://cache.api/v1', 'cache-model');
     assert.strictEqual(p1, p2, 'should be the same instance');
   });
 
-  it('should create different instances for different config', () => {
+  it('should create different instances for different config', async () => {
     const p1 = createProviderFromConfig('key1', 'https://api1/v1', 'model1');
     const p2 = createProviderFromConfig('key2', 'https://api2/v1', 'model2');
     assert.notStrictEqual(p1, p2, 'should be different instances');
@@ -1100,7 +1100,7 @@ describe('buildImagePrompt', () => {
 
 describe('generateDetail failure recovery', () => {
   it('should NOT mark topic as done when generation fails', async () => {
-    const plan = store.createPlan('gendetail-fail-done');
+    const plan = await store.createPlan('gendetail-fail-done');
     await store.addTopics(plan.id, ['失败不标记']);
     const p = store.getPlan(plan.id);
     const topic = p.topics[0];
@@ -1111,11 +1111,11 @@ describe('generateDetail failure recovery', () => {
     const updated = store.getPlan(plan.id);
     const updatedTopic = updated.topics[0];
     assert.strictEqual(updatedTopic.done, false, 'failed generation should not set done=true');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should preserve previous detail content on regeneration failure', async () => {
-    const plan = store.createPlan('gendetail-preserve');
+    const plan = await store.createPlan('gendetail-preserve');
     await store.addTopics(plan.id, ['保留旧内容']);
     const p = store.getPlan(plan.id);
     const topic = p.topics[0];
@@ -1139,11 +1139,11 @@ describe('generateDetail failure recovery', () => {
     assert.ok(failedTopic.detail.includes('成功生成'), 'should have old detail content restored');
     assert.ok(failedTopic.lastError, 'should record error message');
     assert.ok(failedTopic.lastError.includes('AI 返回内容为空'), 'should record specific error');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle first-generation failure without previous content', async () => {
-    const plan = store.createPlan('gendetail-first-fail');
+    const plan = await store.createPlan('gendetail-first-fail');
     await store.addTopics(plan.id, ['首次失败']);
     const p = store.getPlan(plan.id);
     const topic = p.topics[0];
@@ -1156,7 +1156,7 @@ describe('generateDetail failure recovery', () => {
     assert.strictEqual(updatedTopic.done, false, 'first failure should not set done=true');
     assert.strictEqual(updatedTopic.detail, null, 'detail should be null when no previous content exists');
     assert.ok(updatedTopic.lastError, 'should record error');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -1168,7 +1168,7 @@ describe('Interactive mode - edge cases', () => {
   // "跳过" test removed — state machine no longer tracks step skipping
 
   it('continueInteractiveDetail should handle empty feedback gracefully', async () => {
-    const plan = store.createPlan('empty-fb-test');
+    const plan = await store.createPlan('empty-fb-test');
     await store.addTopics(plan.id, ['空反馈测试']);
     const p = store.getPlan(plan.id);
 
@@ -1180,13 +1180,13 @@ describe('Interactive mode - edge cases', () => {
     assert.ok(result.content, 'should still return content');
     assert.strictEqual(result.session.transcript.length, 3, 'should have 3 entries');
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   // "stepwise mode without stateMachine" test removed — state machine no longer exists
 
   it('should persist interactive session across multiple restarts', async () => {
-    const plan = store.createPlan('persist-test');
+    const plan = await store.createPlan('persist-test');
     await store.addTopics(plan.id, ['持久化测试']);
     const p = store.getPlan(plan.id);
 
@@ -1213,14 +1213,14 @@ describe('Interactive mode - edge cases', () => {
     // transcript: [assistant1, tool1, assistant2]
     assert.strictEqual(sessionAfterContinue.transcript.length, 3);
 
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('startInteractiveDetail should support all modes and return correct mode', async () => {
     // This supplements the existing all-modes test with additional assertions
     const modes = ['stepwise', 'realtime', 'challenge', 'scaffold'];
     for (const mode of modes) {
-      const plan = store.createPlan(`mode-${mode}-test`);
+      const plan = await store.createPlan(`mode-${mode}-test`);
       await store.addTopics(plan.id, [`${mode}模式测试`]);
       const p = store.getPlan(plan.id);
       const provider = mode === 'stepwise'
@@ -1230,12 +1230,12 @@ describe('Interactive mode - edge cases', () => {
       assert.strictEqual(result.session.mode, mode);
       assert.strictEqual(result.session.finished, false);
       assert.ok(result.content.includes(mode) || result.content.length > 0);
-      store.deletePlan(plan.id);
+      await store.deletePlan(plan.id);
     }
   });
 
   it('continueInteractiveDetail should work with exercise mode (scaffold)', async () => {
-    const plan = store.createPlan('scaffold-continue');
+    const plan = await store.createPlan('scaffold-continue');
     await store.addTopics(plan.id, ['脚手架继续测试']);
     const p = store.getPlan(plan.id);
     const provider = createStreamMockProvider('子问题1：什么是变量？');
@@ -1245,7 +1245,7 @@ describe('Interactive mode - edge cases', () => {
     assert.ok(result.content, 'should return next content');
     assert.strictEqual(result.session.mode, 'scaffold');
     assert.strictEqual(result.session.transcript.length, 3);
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -1255,7 +1255,7 @@ describe('Interactive mode - edge cases', () => {
 
 describe('Feynman mode', () => {
   it('startInteractiveDetail should support feynman mode', async () => {
-    const plan = store.createPlan('feynman-test');
+    const plan = await store.createPlan('feynman-test');
     await store.addTopics(plan.id, ['费曼测试']);
     const p = store.getPlan(plan.id);
     const provider = createStreamMockProvider('好的，我准备好了！请你开始讲解吧。');
@@ -1263,11 +1263,11 @@ describe('Feynman mode', () => {
     assert.strictEqual(result.session.mode, 'feynman');
     assert.ok(result.content, 'should return welcome content');
     assert.strictEqual(result.session.finished, false);
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('continueInteractiveDetail should work with feynman mode', async () => {
-    const plan = store.createPlan('feynman-continue');
+    const plan = await store.createPlan('feynman-continue');
     await store.addTopics(plan.id, ['费曼继续测试']);
     const p = store.getPlan(plan.id);
     const provider1 = createStreamMockProvider('好的，请开始讲解「费曼继续测试」。');
@@ -1279,7 +1279,7 @@ describe('Feynman mode', () => {
     assert.ok(r2.content, 'should return follow-up question');
     assert.strictEqual(r2.session.transcript.length, 3);
     assert.strictEqual(r2.session.mode, 'feynman');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
@@ -1296,7 +1296,7 @@ describe('generateQuickQuiz', () => {
       ],
     };
     const provider = createMockProvider(JSON.stringify(mockResult));
-    const plan = store.createPlan('quiz-test');
+    const plan = await store.createPlan('quiz-test');
     await store.addTopics(plan.id, ['变量', '函数', '循环']);
     const p = store.getPlan(plan.id);
     // Mark two as done with detail
@@ -1308,28 +1308,28 @@ describe('generateQuickQuiz', () => {
     assert.ok(result, 'should return result');
     assert.ok(Array.isArray(result.questions), 'questions should be an array');
     assert.strictEqual(result.topicCount, 2, 'should count topics');
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle empty plan gracefully', async () => {
     const provider = createMockProvider('{}');
-    const plan = store.createPlan('quiz-empty');
+    const plan = await store.createPlan('quiz-empty');
     const p = store.getPlan(plan.id);
     const result = await generateQuickQuiz(provider, p, 'mock-model');
     assert.ok(Array.isArray(result.questions));
     assert.strictEqual(result.questions.length, 0);
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 
   it('should handle malformed AI response gracefully', async () => {
     const provider = createMockProvider('不是JSON');
-    const plan = store.createPlan('quiz-malformed');
+    const plan = await store.createPlan('quiz-malformed');
     await store.addTopics(plan.id, ['测试']);
     const p = store.getPlan(plan.id);
     const result = await generateQuickQuiz(provider, p, 'mock-model');
     assert.ok(Array.isArray(result.questions));
     assert.strictEqual(result.questions.length, 0);
-    store.deletePlan(plan.id);
+    await store.deletePlan(plan.id);
   });
 });
 
