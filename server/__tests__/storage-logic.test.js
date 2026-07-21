@@ -149,7 +149,8 @@ describe('index operations', () => {
     writeAtomic(fp, JSON.stringify(plan), { backup: true });
     tmpFiles.push(fp);
 
-    const idx = readIndex();
+    const originalIdx = readIndex();
+    const idx = originalIdx.slice();
     idx.push({ id: testId, name: 'Before', createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: 0 });
     await writeIndex(idx);
     await updateIndex(testId, { name: 'After' });
@@ -158,6 +159,10 @@ describe('index operations', () => {
     const entry = afterIdx.find(e => e.id === testId);
     assert.ok(entry, 'entry should exist in index');
     assert.strictEqual(entry.name, 'After');
+
+    // Restore the index to its original state so this test does not leave an
+    // orphan index entry (which would break global consistency checks).
+    await writeIndex(originalIdx);
   });
 
   it('readIndex handles large index', () => {

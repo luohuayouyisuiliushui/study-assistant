@@ -38,9 +38,10 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
     const provider = getProvider(req);
     const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
     const imageModel = req.body?.imageModel || '';
+    const imageBaseUrl = req.body?.imageBaseUrl || '';
     if (imageApiKey) {
       // Generate text + illustration
-      await generateDetailWithImage(provider, plan, req.params.topicId, imageApiKey, provider.model, imageModel, explainStyle);
+      await generateDetailWithImage(provider, plan, req.params.topicId, imageApiKey, provider.model, imageModel, explainStyle, imageBaseUrl);
     } else {
       await generateDetail(provider, plan, req.params.topicId, provider.model, explainStyle);
     }
@@ -103,9 +104,10 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
       const provider = getProvider(req);
       const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
       const imageModel = req.body?.imageModel || '';
+      const imageBaseUrl = req.body?.imageBaseUrl || '';
       await generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle);
       if (imageApiKey) {
-        generateTopicImage(topic, imageApiKey, imageModel).then(imageUrl => {
+        generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl).then(imageUrl => {
           if (imageUrl) store.updateTopic(plan.id, topic.id, { imageUrl }).catch(() => {});
         }).catch(() => {});
       }
@@ -140,7 +142,8 @@ router.post('/plans/:planId/image/:topicId', async (req, res) => {
 
   try {
     const imageModel = req.body?.imageModel || '';
-    const imageUrl = await generateTopicImage(topic, imageApiKey, imageModel);
+    const imageBaseUrl = req.body?.imageBaseUrl || '';
+    const imageUrl = await generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl);
     if (!imageUrl) {
       return res.status(502).json({ error: '图片生成失败，API 未返回有效图片 URL' });
     }

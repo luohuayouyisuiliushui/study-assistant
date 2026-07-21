@@ -295,3 +295,13 @@
   --text-muted: var(--muted-foreground);
   --shadow: 0 1px 3px rgba(0,0,0,.3);
 }
+
+
+/* Sticky navigation bar enter animation */
+@keyframes stickyNavIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sticky-nav-enter {
+  animation: stickyNavIn 200ms ease-out;
+}

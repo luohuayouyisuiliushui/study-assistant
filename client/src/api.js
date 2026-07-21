@@ -120,7 +120,7 @@ const api = {
   // ─── Generation & Q&A ───
   async generateDetail(planId, topicId) {
     const settings = getApiSettings();
-    let body = settings.imageApiKey ? { imageApiKey: settings.imageApiKey, imageModel: settings.imageModel } : undefined;
+    let body = settings.imageApiKey ? { imageApiKey: settings.imageApiKey, imageModel: settings.imageModel, imageBaseUrl: settings.imageBaseUrl || '' } : undefined;
     if (settings.explainStyle) {
       body = { ...(body || {}), explainStyle: settings.explainStyle };
     }
@@ -241,7 +241,7 @@ const api = {
   // ─── TTS (imageApiKey only, no text channel) ───
   async textToSpeech(text) {
     const settings = getApiSettings();
-    if (!settings.imageApiKey) throw new Error('请先在设置中配置图片 API Key（硅基流动）');
+    if (!settings.imageApiKey) throw new Error('请先在设置中配置图片 API Key');
     const res = await fetch(`${API_BASE}/learn/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -268,6 +268,7 @@ const api = {
     const body = {};
     if (settings.imageApiKey) body.imageApiKey = settings.imageApiKey;
     if (settings.imageModel) body.imageModel = settings.imageModel;
+    if (settings.imageBaseUrl) body.imageBaseUrl = settings.imageBaseUrl;
     return request(`${API_BASE}/learn/plans/${planId}/image/${topicId}`, {
       method: 'POST',
       body,
@@ -366,6 +367,17 @@ const api = {
       method: 'POST',
       body: JSON.stringify({ apiKey, baseURL, model }),
     });
+  },
+
+  // ─── Server-side Settings ───
+  async saveEnvKey(apiKey, baseURL, model) {
+    return request(`${API_BASE}/settings/env-key`, {
+      method: 'POST',
+      body: JSON.stringify({ apiKey, baseURL, model }),
+    });
+  },
+  async checkEnvKey() {
+    return request(`${API_BASE}/settings/env-key`);
   },
 
   // ─── Fact-Check ───

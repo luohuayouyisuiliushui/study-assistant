@@ -1,5 +1,5 @@
 /**
- * Interactive teaching engine — stepwise, realtime, scaffold, challenge, and error detection.
+ * Interactive teaching engine — stepwise, realtime, scaffold, challenge, feynman, stepwise-challenge, realtime-challenge, and error detection.
  *
  * Uses shared Provider infrastructure from learn-engine.js (resolveProvider).
  */
@@ -12,6 +12,8 @@ import {
   STABLE_INTERACTIVE_CHALLENGE_SYSTEM_PROMPT,
   STABLE_INTERACTIVE_SCAFFOLD_SYSTEM_PROMPT,
   STABLE_INTERACTIVE_FEYNMAN_SYSTEM_PROMPT,
+  STABLE_INTERACTIVE_STEPWISE_CHALLENGE_PROMPT,
+  STABLE_INTERACTIVE_REALTIME_CHALLENGE_PROMPT,
   STABLE_TEACHING_ERROR_EXAM_PROMPT, MISCONCEPTION_TAXONOMY,
   buildDeterministicContext,
 } from './learn-prompts.js';
@@ -92,6 +94,18 @@ function _getInteractivePrompt(mode) {
 }
 
 /**
+ * Track explicit interactive mode usage count on a topic.
+ * Updates topic.interactiveModeUsage with { count, lastUsedAt } per mode.
+ */
+function _trackModeUsage(topic, mode) {
+  if (!topic || !mode) return;
+  const usage = topic.interactiveModeUsage || {};
+  const existing = usage[mode] || { count: 0 };
+  usage[mode] = { count: existing.count + 1, lastUsedAt: Date.now() };
+  topic.interactiveModeUsage = usage;
+}
+
+/**
  * Build a compact transcript string from the interactive session.
  * Used only for non-stepwise modes (realtime, challenge, scaffold).
  */
@@ -168,7 +182,12 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
     };
 
     topic.interactiveSession = session;
-    await updateTopic(plan.id, topicId, { interactiveSession: session });
+    // Atomically persist session + mode usage
+    _trackModeUsage(topic, mode);
+    await updateTopic(plan.id, topicId, {
+      interactiveSession: session,
+      interactiveModeUsage: topic.interactiveModeUsage,
+    });
 
     return { content: result.content || '', tool_calls: result.tool_calls || null, session, finished: session.finished };
   }
@@ -192,7 +211,12 @@ export async function startInteractiveDetail(providerOrConfig, plan, topicId, mo
   };
 
   topic.interactiveSession = session;
-  await updateTopic(plan.id, topicId, { interactiveSession: session });
+  // Atomically persist session + mode usage
+  _trackModeUsage(topic, mode);
+  await updateTopic(plan.id, topicId, {
+    interactiveSession: session,
+    interactiveModeUsage: topic.interactiveModeUsage,
+  });
 
   return { content: fullContent, session, finished: session.finished };
 }
@@ -433,7 +457,11 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
       };
 
       topic.interactiveSession = session;
-      await updateTopic(plan.id, topicId, { interactiveSession: session });
+      _trackModeUsage(topic, mode);
+      await updateTopic(plan.id, topicId, {
+        interactiveSession: session,
+        interactiveModeUsage: topic.interactiveModeUsage,
+      });
 
       if (onDone) onDone({ content: result.content || '', tool_calls: result.tool_calls || null, session, finished: session.finished });
       return { content: result.content || '', tool_calls: result.tool_calls || null, session };
@@ -467,7 +495,11 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
     };
 
     topic.interactiveSession = session;
-    await updateTopic(plan.id, topicId, { interactiveSession: session });
+    _trackModeUsage(topic, mode);
+    await updateTopic(plan.id, topicId, {
+      interactiveSession: session,
+      interactiveModeUsage: topic.interactiveModeUsage,
+    });
 
     if (onDone) onDone({ content: fullContent, session, finished: session.finished });
     return { content: fullContent, session };

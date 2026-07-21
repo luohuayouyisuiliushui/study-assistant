@@ -9,12 +9,10 @@ import SettingsModal from './components/SettingsModal'
 import ThemeSwitcher from './components/ThemeSwitcher'
 import api from './api'
 import { PlanProvider, usePlan } from '#/lib/plan-context.jsx'
+import { loadSettings } from '#/lib/settings-storage'
 
 function loadApiSettings() {
-  try {
-    const raw = localStorage.getItem('textbook-maker-settings')
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
+  return loadSettings()
 }
 
 function PlanViewWrapper({ onGenerate }) {
@@ -57,11 +55,15 @@ function TopicDetailWrapper({ onSelectTopic }) {
   const { currentPlan, setCurrentPlan, refreshPlan } = usePlan()
   const navigate = useNavigate()
 
+  useEffect(() => {
+    if (planId) refreshPlan(planId)
+  }, [planId, refreshPlan])
+
   const topic = currentPlan?.topics.find(t => t.id === topicId) || null
 
   const handleBack = useCallback(() => {
-    navigate(`/plan/${planId}`, { replace: true })
-  }, [navigate, planId])
+    navigate(-1)
+  }, [navigate])
 
   const handleRefresh = useCallback((plan) => {
     setCurrentPlan(plan)
@@ -175,7 +177,7 @@ function AppContent() {
             <TopicDetailWrapper
               onSelectTopic={(id) => {
                 const match = location.pathname.match(/^\/plan\/([^/]+)/)
-                if (match) navigate(`/plan/${match[1]}/topic/${id}`, { replace: true })
+                if (match) navigate(`/plan/${match[1]}/topic/${id}`)
               }}
             />
           } />

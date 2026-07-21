@@ -6,15 +6,18 @@
  */
 
 export {
-  listPlans, getPlan, createPlan, createPlanWithPhases,
+  listPlans, scanStoredPlans, pruneMissingPlanIndexEntries,
+  getPlan, createPlan, createPlanWithPhases,
   deletePlan, permanentlyDeletePlan, deletePlansByIds,
   trashPlan, listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
   getTopicChildren, getTopicPrerequisites, getTopicDescendants,
   buildKnowledgeGraph, extractRelationsFromDetail, buildInferredEdges, buildEnhancedKnowledgeGraph,
   addTopics, updateTopic, updateTopicTime, reorderTopics, removeTopic,
+  writePlan,
   addHistory, getTopicHistory,
   parseExercisesFromDetail, extractWeakPoints, getTopicsNeedingReview, buildLearningProfile,
   addExamPaper, getExamPapers, updateExamResults, deleteExamPaper,
   recordTeachingErrors, saveCoreAnalysis, writeFlag, readFlags, clearFlag,
   saveQuickQuizResults,
+  appendGenerationFeedback,
 } from './store/crud.js';

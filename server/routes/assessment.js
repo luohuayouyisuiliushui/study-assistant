@@ -7,6 +7,7 @@ import { getEngineCacheDiagnostics, createProviderFromConfig,
 import { analyzePlanAdaptive, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
+import { refreshDataFlywheel } from './flywheel.js';
 import AgentDispatcher from '../engine/agent-dispatcher.js';
 
 const router = Router();
@@ -330,6 +331,8 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
     topic.feynmanInsights = insights;
     await store.updateTopic(req.params.planId, req.params.topicId, { feynmanInsights: insights });
     res.json(insights);
+    // Flywheel: Feynman analysis adds behavioral evidence
+    refreshDataFlywheel('feynman-analyze');
   } catch (err) {
     console.error('[feynman-analyze]', err);
     res.status(500).json({ error: err.message });

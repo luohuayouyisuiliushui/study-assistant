@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, RefreshCw, Sparkles, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Target, Clock, FileQuestion } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Sparkles, AlertCircle, ChevronDown, ChevronUp, TrendingUp, BookOpen, Target, Clock, FileQuestion, CalendarDays, CheckCircle2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Button } from '#/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card';
@@ -186,6 +186,50 @@ export default function UserProfile({ onBack }) {
           )}
         </CardContent>
       </Card>
+
+      {summary.todayStats && (
+        <Card className="shadow-sm border-0">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 text-primary" />今日答题情况
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
+              <StatCard value={summary.todayStats.total} label="答题数" icon={FileQuestion} />
+              <StatCard value={summary.todayStats.correct} label="正确数" icon={CheckCircle2} />
+              <StatCard value={summary.todayStats.total > 0 ? summary.todayStats.rate + '%' : '-'} label="正确率" icon={TrendingUp} />
+            </div>
+            {summary.todayStats.total > 0 && (
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="p-2.5 rounded-lg bg-muted/40">
+                  <div className="text-lg font-semibold">{summary.todayStats.exercises.total}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    练习 ({summary.todayStats.exercises.total > 0 ? Math.round((summary.todayStats.exercises.correct / summary.todayStats.exercises.total) * 100) + '%' : '-'})
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-muted/40">
+                  <div className="text-lg font-semibold">{summary.todayStats.exams.total}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    试卷 ({summary.todayStats.exams.total > 0 ? Math.round((summary.todayStats.exams.correct / summary.todayStats.exams.total) * 100) + '%' : '-'})
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-lg bg-muted/40">
+                  <div className="text-lg font-semibold">{summary.todayStats.quizzes.total}</div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    快问 ({summary.todayStats.quizzes.total > 0 ? Math.round((summary.todayStats.quizzes.correct / summary.todayStats.quizzes.total) * 100) + '%' : '-'})
+                  </div>
+                </div>
+              </div>
+            )}
+            {summary.weekStats && summary.weekStats.total > 0 && (
+              <div className="text-xs text-muted-foreground pt-1 border-t">
+                本周累计答题 <span className="font-medium text-foreground">{summary.weekStats.total}</span> 题，正确率 <span className="font-medium text-foreground">{summary.weekStats.rate}%</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {summary.timeDistribution && summary.timeDistribution.last7Days && (
         <Card className="shadow-sm border-0">

@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { answerFollowUp, answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics } from '../engine/learn-engine.js';
+import { answerFollowUp, answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics, inferTopicRelations } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
 import { AdaptivePromptInjector, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
+import { refreshDataFlywheel } from './flywheel.js';
 
 const router = Router();
 
@@ -384,6 +385,48 @@ router.post('/plans/import', async (req, res) => {
 });
 
 /**
+ * POST /api/learn/plans/:planId/infer-relations
+ * Trigger AI inference of topic relationships for a plan.
+ * Fire-and-forget: responds immediately, inference runs in background.
+ * Idempotent: skips if relations have already been inferred.
+ */
+router.post('/plans/:planId/infer-relations', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  // Already inferred or has existing relationships?
+  if (plan.relationsInferredAt) {
+    return res.json({ status: 'already_inferred', inferredAt: plan.relationsInferredAt });
+  }
+
+  // Check if any topic already has relationship data (e.g. from AI import)
+  const hasAnyRelations = plan.topics.some(t =>
+    (t.prerequisites && t.prerequisites.length > 0) ||
+    (t.relatedTopics && t.relatedTopics.length > 0) ||
+    t.parentId
+  );
+  if (hasAnyRelations) {
+    // Mark as inferred to avoid re-checking
+    await store.writePlan(plan.id, (p) => { p.relationsInferredAt = Date.now(); });
+    return res.json({ status: 'already_populated' });
+  }
+
+  // Respond immediately — inference runs in background
+  res.json({ status: 'inferring' });
+
+  try {
+    const provider = getProvider(req);
+    await inferTopicRelations(provider, plan, getModel(req));
+
+    // Mark plan as inferred
+    await store.writePlan(plan.id, (p) => { p.relationsInferredAt = Date.now(); });
+    console.log(`[infer-relations] Completed for plan ${plan.id} (${plan.name})`);
+  } catch (err) {
+    console.error(`[infer-relations] Failed for plan ${plan.id}:`, err.message);
+  }
+});
+
+/**
  * GET /api/learn/plans/:id/graph
  * Get knowledge graph data (nodes + edges) for visualization.
  * Query params:
@@ -605,22 +648,56 @@ router.post('/plans/:planId/quick-quiz', async (req, res) => {
 
 /**
  * POST /api/learn/plans/:planId/quick-quiz/submit
- * Save quick quiz results for persistence and profile feedback.
+ * Save quick quiz results. Await save before flywheel refresh.
  */
-router.post('/plans/:planId/quick-quiz/submit', (req, res) => {
+router.post('/plans/:planId/quick-quiz/submit', async (req, res) => {
   const plan = store.getPlan(req.params.planId);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
     const { questions, results } = req.body;
-    if (!questions || !results) {
-      return res.status(400).json({ error: '缺少 questions 或 results' });
+    if (!Array.isArray(questions) || !Array.isArray(results)) {
+      return res.status(400).json({ error: 'questions 和 results 必须是数组' });
     }
-    store.saveQuickQuizResults(req.params.planId, { questions, results });
+    await store.saveQuickQuizResults(req.params.planId, { questions, results });
+    // Flywheel best-effort after successful save
+    try { refreshDataFlywheel('quick-quiz'); } catch {}
     res.json({ success: true });
   } catch (err) {
     console.error('[quick-quiz-submit]', err);
     res.status(500).json({ error: '保存测验结果失败: ' + (err.message || err) });
+  }
+});
+
+/**
+ * POST /api/learn/plans/:planId/topic/:topicId/feedback
+ * Submit generation quality feedback for a topic.
+ * Body: { reason: string, mode: string }
+ * Stores last 20 entries (old→new order), await persist before response.
+ */
+router.post('/plans/:planId/topic/:topicId/feedback', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const VALID_MODES = ['detail', 'stepwise', 'realtime', 'feynman', 'challenge', 'stepwise-challenge', 'realtime-challenge', 'scaffold'];
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+  const mode = typeof req.body?.mode === 'string' ? req.body.mode.trim().slice(0, 64) : '';
+  if (!reason || !mode) {
+    return res.status(400).json({ error: '请提供非空的 reason 和 mode 参数' });
+  }
+  if (!VALID_MODES.includes(mode)) {
+    return res.status(400).json({ error: `mode 必须是: ${VALID_MODES.join(', ')}` });
+  }
+
+  try {
+    const entry = { reason, mode, timestamp: Date.now() };
+    const result = await store.appendGenerationFeedback(req.params.planId, req.params.topicId, entry, 20);
+    res.json({ success: true, total: result.total });
+  } catch (err) {
+    console.error('[topic-feedback]', err);
+    res.status(500).json({ error: '保存反馈失败' });
   }
 });
 

@@ -638,14 +638,16 @@ export function buildImagePrompt(topic) {
  * Generate an illustration for a knowledge point using SiliconFlow API.
  * Calls the text-to-image model, downloads the result, and saves it to server/data/images/.
  * @param {object} topic - The topic object (must have id and title)
- * @param {string} imageApiKey - SiliconFlow API key
+ * @param {string} imageApiKey - Image generation API key
  * @param {string} [model] - Image generation model (default: FLUX.1-dev)
+ * @param {string} [imageBaseUrl] - Custom API base URL (default: SiliconFlow)
  * @returns {Promise<string|null>} The local URL path to the saved image, or null on failure
  */
-export async function generateTopicImage(topic, imageApiKey, model) {
+export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl) {
   if (!topic?.id || !topic?.title || !imageApiKey) return null;
 
   const imageModel = model || 'black-forest-labs/FLUX.1-pro';
+  const baseUrl = imageBaseUrl || 'https://api.siliconflow.cn/v1';
 
   // Build a structured prompt based on the topic title
   const prompt = buildImagePrompt(topic);
@@ -656,7 +658,7 @@ export async function generateTopicImage(topic, imageApiKey, model) {
   try {
     const client = new OpenAI({
       apiKey: imageApiKey,
-      baseURL: 'https://api.siliconflow.cn/v1',
+      baseURL: baseUrl,
       maxRetries: 2,
       timeout: 60_000,
     });
@@ -707,14 +709,14 @@ export async function generateTopicImage(topic, imageApiKey, model) {
 /**
  * Generate a detail + illustration for a topic (combines text and image generation).
  */
-export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel, explainStyle) {
+export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel, explainStyle, imageBaseUrl) {
   // First generate the text detail
   const content = await generateDetail(providerOrConfig, plan, topicId, model, explainStyle);
 
   // Then generate an illustration (fire-and-forget on the image, don't block)
   const topic = plan.topics.find(t => t.id === topicId);
   if (topic && imageApiKey) {
-    generateTopicImage(topic, imageApiKey, imageModel).then(imageUrl => {
+    generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl).then(imageUrl => {
       if (imageUrl && topic) {
         updateTopic(plan.id, topicId, { imageUrl });
       }

@@ -21,7 +21,7 @@
   --warning-light-bg: #fefce8;
 }
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
 
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 :focus:not(:focus-visible) { outline: none; }

@@ -42,12 +42,12 @@ type: `feat` / `fix` / `refactor` / `docs` / `chore`
 ## 项目架构
 
 ```
-study-assistant (monorepo, v1.7.0)
+study-assistant (monorepo, v1.9.1)
 ├── server/   Express 5 + OpenAI SDK  |  端口 3001
 ├── client/   React 19 + Vite 8      |  端口 5173 (dev)
 ```
 
-**后端没有数据库**，所有数据存 `server/data/` 下的 JSON 文件（原子写入 + 双层备份）。**没有 TypeScript**，整个项目是纯 JS/JSX。
+**后端没有数据库**，所有数据存 `server/data/` 下的 JSON 文件（原子写入 + 双层备份）。**应用代码没有 TypeScript**，前后端是纯 JS/JSX；Windows 启动与诊断入口使用 PowerShell/CMD。
 
 关键模块层级：
 ```

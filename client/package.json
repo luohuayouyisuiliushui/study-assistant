@@ -1,7 +1,7 @@
 {
-  "name": "textbook-maker-client",
+  "name": "study-assistant-client",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.10.0",
   "type": "module",
   "imports": {
     "#/*": "./src/*"

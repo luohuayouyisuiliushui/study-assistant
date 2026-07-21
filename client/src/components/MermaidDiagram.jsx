@@ -2,14 +2,42 @@ import { useEffect, useRef, useState } from 'react';
 
 /**
  * Renders a Mermaid diagram from its source code.
+ * Uses IntersectionObserver to lazy-render only when scrolled into view.
  * Uses mermaid.render() to produce SVG safely — no innerHTML injection from user input.
  */
 export default function MermaidDiagram({ code }) {
   const containerRef = useRef(null);
+  const [visible, setVisible] = useState(false);
   const [svg, setSvg] = useState('');
   const [error, setError] = useState(null);
 
+  // Lazy load: observe when element enters viewport
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    // If IntersectionObserver is not available, render immediately
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' } // start loading 200px before it enters viewport
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Render diagram when visible
+  useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
 
     (async () => {
@@ -39,7 +67,7 @@ export default function MermaidDiagram({ code }) {
     })();
 
     return () => { cancelled = true; };
-  }, [code]);
+  }, [code, visible]);
 
   if (error) {
     // Extract a short, readable error description
@@ -75,8 +103,20 @@ export default function MermaidDiagram({ code }) {
     );
   }
 
+  if (!visible) {
+    return (
+      <div
+        className="mermaid-container mermaid-placeholder"
+        ref={containerRef}
+        style={{ minHeight: '60px' }}
+      >
+        <div className="mermaid-loading">滚动到可视区域后渲染图表</div>
+      </div>
+    );
+  }
+
   if (!svg) {
-    return <div className="mermaid-loading">渲染图表中...</div>;
+    return <div className="mermaid-loading" ref={containerRef}>渲染图表中...</div>;
   }
 
   return (

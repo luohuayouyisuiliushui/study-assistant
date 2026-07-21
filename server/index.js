@@ -16,6 +16,7 @@ import exportRouter from './routes/export.js';
 import assessmentRouter from './routes/assessment.js';
 import contentRouter from './routes/content.js';
 import userProfileRouter from './routes/user-profile.js';
+import settingsRouter from './routes/settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -47,6 +48,7 @@ app.use('/api/learn', assessmentRouter);
 app.use('/api/learn', contentRouter);
 app.use('/api/learn', learnRouter);
 app.use('/api/user-profile', userProfileRouter);
+app.use('/api/settings', settingsRouter);
 
 // Serve generated images
 app.use('/images', express.static(IMAGES_DIR));

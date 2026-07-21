@@ -29,6 +29,7 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
 
   // Image generation
   const [imageApiKey, setImageApiKey] = useState(saved.imageApiKey || '');
+  const [imageBaseUrl, setImageBaseUrl] = useState(saved.imageBaseUrl || 'https://api.siliconflow.cn/v1');
   const [imageModel, setImageModel] = useState(saved.imageModel || 'black-forest-labs/FLUX.1-pro');
   const [showImageKey, setShowImageKey] = useState(false);
 
@@ -37,6 +38,11 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
 
   // Explanation style preference
   const [explainStyle, setExplainStyle] = useState(saved.explainStyle || 'colloquial');
+
+  // Server-side persistence
+  const [saveToServer, setSaveToServer] = useState(false);
+  const [savingServer, setSavingServer] = useState(false);
+  const [serverSaveResult, setServerSaveResult] = useState(null);
 
   const handleTestConnection = async () => {
     if (!apiKey) return;
@@ -62,15 +68,29 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
     } finally { setEconomyTesting(false); }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const settings = {
       apiKey, baseURL, model,
       economyApiKey, economyBaseURL, economyModel,
-      imageApiKey, imageModel,
+      imageApiKey, imageBaseUrl, imageModel,
       routingMode,
       explainStyle,
     };
     saveSettings(settings);
+
+    if (saveToServer && apiKey) {
+      setSavingServer(true);
+      setServerSaveResult(null);
+      try {
+        await api.saveEnvKey(apiKey, baseURL, model);
+        setServerSaveResult('ok');
+      } catch (err) {
+        setServerSaveResult(err.message);
+      } finally {
+        setSavingServer(false);
+      }
+    }
+
     onSave(settings);
     onClose();
   };
@@ -215,18 +235,23 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
              */}
             <div className='flex flex-col gap-4'>
               <h3 className='text-sm font-semibold text-foreground flex items-center gap-1.5'>
-                <Sparkles className='h-4 w-4' />插图生成（硅基流动）
+                <Sparkles className='h-4 w-4' />插图生成
               </h3>
 
               <div className='flex flex-col gap-1.5'>
-                <Label>生图 API Key</Label>
+                <Label>接口地址 (Base URL)</Label>
+                <Input value={imageBaseUrl} onChange={e => setImageBaseUrl(e.target.value)} placeholder='https://api.siliconflow.cn/v1' />
+                <p className='text-xs text-muted-foreground mt-1'>兼容 OpenAI 图片 API 的地址，默认使用硅基流动</p>
+              </div>
+
+              <div className='flex flex-col gap-1.5'>
+                <Label>API Key</Label>
                 <div className='relative'>
                   <Input type={showImageKey ? 'text' : 'password'} value={imageApiKey} onChange={e => setImageApiKey(e.target.value)} placeholder='sk-...' className='pr-8' />
                   <button onClick={() => setShowImageKey(!showImageKey)} className='absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground' type='button'>
                     {showImageKey ? <EyeOff className='h-4 w-4' /> : <Eye className='h-4 w-4' />}
                   </button>
                 </div>
-                <p className='text-xs text-muted-foreground mt-1'>使用硅基流动（SiliconFlow）API Key，用于为知识点生成配图</p>
               </div>
 
               <div className='flex flex-col gap-1.5'>
@@ -261,6 +286,27 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
           )}
 
           <Separator className='mt-6' />
+
+          {/*
+           * ─── Server-side Persistence ───
+           */}
+          <label className='flex items-start gap-2.5 rounded-lg border border-muted p-3 cursor-pointer hover:bg-muted/30 transition-colors'>
+            <input type='checkbox' checked={saveToServer} onChange={e => setSaveToServer(e.target.checked)} className='mt-0.5' />
+            <div>
+              <div className='text-sm font-medium'>同时保存到服务端</div>
+              <div className='text-xs text-muted-foreground mt-0.5'>将 API Key 写入 <code className='bg-muted px-1 rounded'>server/.env.local</code>，重启服务端后不丢失。API Key 不会被 Git 追踪。</div>
+            </div>
+          </label>
+          {serverSaveResult === 'ok' && (
+            <div className='flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200 px-3.5 py-2.5 text-sm'>
+              <CheckCircle2 className='h-4 w-4 shrink-0' />已保存到服务端
+            </div>
+          )}
+          {serverSaveResult && serverSaveResult !== 'ok' && (
+            <div className='flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200 px-3.5 py-2.5 text-sm'>
+              <XCircle className='h-4 w-4 shrink-0' />保存到服务端失败：{serverSaveResult}
+            </div>
+          )}
 
           {/*
            * ─── Actions ───

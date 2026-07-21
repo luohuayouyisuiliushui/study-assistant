@@ -1,500 +1,175 @@
 /**
  * User Profile — cross-plan learning analysis and learner persona builder.
- *
- * Aggregates data from all learning plans, then uses AI to generate a
- * structured user profile (learner type, strengths, weaknesses, trends,
- * recommendations) persisted to a single JSON file.
- *
- * Data file: server/data/learn/user-profile.json
  */
-
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { hasTestPlanMarker } from './store/test-plan-marker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data', 'learn');
 const PROFILE_FILE = path.join(DATA_DIR, 'user-profile.json');
 
-// ─── Prompt ───
+const ALLOWED_MODES = new Set(['stepwise','challenge','scaffold','realtime','debate','socratic','analogy']);
 
-const USER_PROFILE_PROMPT = `你是一位资深学习分析顾问，擅长构建学习者画像。
-你需要根据用户所有学习计划的聚合数据，构建一个结构化的用户画像。
-
-## 输入数据结构说明
-
-输入数据包含用户所有学习计划的聚合信息，分为以下几个部分：
-
-### 1. 跨计划概览
-- 计划数量、知识点总数、完成总数、总体完成率
-- 每个计划的名称、完成率、知识点数
-- 总学习时长、总提问数
-
-### 2. 薄弱点聚合（来自所有计划）
-- 所有被 AI 标记为薄弱的知识点列表
-- 每个薄弱点来自哪个计划
-
-### 3. 练习与考试统计
-- 各计划的练习题正确率
-- 各计划的考试成绩分布
-
-### 4. 提问模式分析
-- 每个知识点的问题数量
-- 问题内容样本
-
-### 5. 费曼学习法数据
-- 费曼学习法使用次数
-- 各次的教学质量评级（excellent/good/fair/needsWork）
-- 常见遗漏内容（作为教材缺了什么）
-- 常见讲解亮点
-- 学生遗留问题的数量
-
-## 输出格式
-
-请严格按照以下 JSON 结构输出（不要添加额外说明文字，直接输出 JSON）：
-
-\`\`\`json
-{
-  "learnerPersona": {
-    "type": ["深度思考型", "实践应用型"],
-    "summary": "用一段话总结用户的学习者画像，结合具体数据佐证",
-    "confidence": 0.85
-  },
-  "strengths": [
-    {
-      "domain": "领域名称",
-      "topics": ["知识点1", "知识点2"],
-      "evidence": "具体数据证据",
-      "masteryLevel": 0.9
-    }
-  ],
-  "weaknesses": [
-    {
-      "domain": "领域名称",
-      "topics": ["知识点1", "知识点2"],
-      "evidence": "具体数据证据",
-      "masteryLevel": 0.3,
-      "frequency": "high|medium|low",
-      "suggestedAction": "建议的学习方法"
-    }
-  ],
-  "crossPlanWeakPoints": ["在所有计划中反复出现的薄弱概念"],
-  "learningPatterns": {
-    "preferredModes": { "stepwise": 0, "challenge": 0, "scaffold": 0 },
-    "questionStyle": "描述用户的提问风格",
-    "avgQuestionsPerTopic": 0,
-    "timeDistribution": "分散/集中学习",
-    "completionTrend": "描述完成趋势"
-  },
-  "recommendations": [
-    "第1条具体建议",
-    "第2条具体建议",
-    "第3条具体建议"
-  ],
-  "aiAnalysis": "## 📊 跨计划整体进度\\n...（完整 Markdown 分析报告）"
-}
-\`\`\`
-
-## 学习者类型说明（可多类型组合）
-- **深度思考型**：喜欢问"为什么"，追根溯源，不满足于表面答案
-- **实践应用型**：关注"怎么用"，频繁要求代码示例和实际场景
-- **类比联想型**：喜欢找关联，问"这和XX有什么区别"
-- **谨慎确认型**：需要反复确认理解是否正确
-- **目标驱动型**：直奔主题，问"核心是什么"
-- **视觉感知型**：偏好图表和可视化展示
-
-## 注意事项
-- 所有结论必须有具体数据支撑，不要空洞描述
-- masteryLevel 0~1 之间，基于完成率、练习正确率、提问质量综合判断
-- frequency 表示薄弱点出现的频繁程度
-- recommendations 要具体可执行，引用教育心理学原则
-- aiAnalysis 是用 Markdown 格式写的完整分析报告，包含：整体进度、掌握较好领域、需要加强领域、学习行为分析、学习者画像总结、个性化建议`;
-// ─── Data aggregation ───
-
-/**
- * Load all plans from the store index.
- */
 function loadAllPlans() {
   const indexFile = path.join(DATA_DIR, 'plans.json');
   if (!fs.existsSync(indexFile)) return [];
   try {
     const idx = JSON.parse(fs.readFileSync(indexFile, 'utf-8'));
+    const entries = Array.isArray(idx) ? idx : Object.values(idx);
     const plans = [];
-    for (const entry of (idx || [])) {
-      const planFile = path.join(DATA_DIR, 'plans', `${entry.id}.json`);
-      if (fs.existsSync(planFile)) {
-        try {
-          const plan = JSON.parse(fs.readFileSync(planFile, 'utf-8'));
-          plans.push(plan);
-        } catch { console.warn('[user-profile] 跳过损坏的计划文件:', planFile); }
-      }
+    for (const entry of entries) {
+      const id = entry.id || entry;
+      const planDir = path.join(DATA_DIR, 'plans');
+      const planFile = path.join(planDir, id + '.json');
+      if (fs.existsSync(planFile)) plans.push(JSON.parse(fs.readFileSync(planFile, 'utf-8')));
     }
     return plans;
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-/**
- * Aggregate cross-plan data into a structured summary.
- * No AI calls — pure computation.
- */
-export function aggregateAllPlans() {
-  const plans = loadAllPlans();
-  if (plans.length === 0) {
-    return null;
-  }
-
-  let totalTopics = 0;
-  let totalDone = 0;
-  let totalQuestions = 0;
-  let totalTime = 0;
-  let allWeakPoints = []; // { topic, plan, weakPoints[] }
-  let allExercises = [];  // { topic, plan, exercises[] }
-  let allExamResults = []; // { plan, exam, results[] }
-  let modeCounts = { stepwise: 0, challenge: 0, scaffold: 0 };
+// ─── aggregateAllPlans / aggregatePlans ───
+export function aggregateAllPlans() { return aggregatePlans(loadAllPlans()); }
+export function aggregatePlans(plans) {
+  const real = (plans || []).filter(p => !hasTestPlanMarker(p));
+  if (real.length === 0) return null;
+  return _aggregate(real);
+}
+function _aggregate(plans) {
+  let totalTopics = 0, totalDone = 0, totalQuestions = 0, totalTime = 0;
+  let allWeakPoints = [], allExercises = [], allExamResults = [], allQuizResults = [];
+  let modeCounts = {};
   let feynmanData = { sessionCount: 0, teachingQualities: [], commonGaps: [], commonStrengths: [], sparklingCount: 0, lingeringCount: 0 };
-  let allTimeLogs = []; // { date, seconds, plan, topic }
+  let allTimeLogs = [];
 
   const planSummaries = plans.map(plan => {
-    const doneCount = plan.topics.filter(t => t.done && !t.lastError).length;
-    totalTopics += plan.topics.length;
-    totalDone += doneCount;
-    totalQuestions += (plan.history || []).filter(h => h.role === 'user').length;
+    const topics = Array.isArray(plan.topics) ? plan.topics : [];
+    const doneCount = topics.filter(t => t.done && !t.lastError).length;
+    totalTopics += topics.length; totalDone += doneCount;
+    totalQuestions += (Array.isArray(plan.history) ? plan.history.filter(h => h && h.role === 'user') : []).length;
 
-    // Time tracking
-    for (const t of plan.topics) {
-      totalTime += t.timeSpent || 0;
-      // Collect daily time logs
-      if (t.timeLog && t.timeLog.length > 0) {
-        for (const entry of t.timeLog) {
-          allTimeLogs.push({ date: entry.date, seconds: entry.seconds, plan: plan.name, topic: t.title });
+    for (const t of topics) {
+      const ts = t.timeSpent;
+      if (typeof ts === 'number' && Number.isFinite(ts) && ts >= 0) totalTime += ts;
+      if (Array.isArray(t.timeLog)) {
+        for (const e of t.timeLog) {
+          if (_validDate(e && e.date) && _validSec(e && e.seconds)) allTimeLogs.push({ date: e.date, seconds: e.seconds, plan: plan.name, topic: t.title });
         }
       }
-      // Feynman data
       if (t.feynmanInsights) {
         feynmanData.sessionCount++;
         if (t.feynmanInsights.teachingQuality) feynmanData.teachingQualities.push(t.feynmanInsights.teachingQuality);
-        if (t.feynmanInsights.gaps) feynmanData.commonGaps.push(...t.feynmanInsights.gaps);
-        if (t.feynmanInsights.strengths) feynmanData.commonStrengths.push(...t.feynmanInsights.strengths);
-        if (t.feynmanInsights.sparklingExplanations) feynmanData.sparklingCount += t.feynmanInsights.sparklingExplanations.length;
-        if (t.feynmanInsights.lingeringQuestions) feynmanData.lingeringCount += t.feynmanInsights.lingeringQuestions.length;
+        if (Array.isArray(t.feynmanInsights.gaps)) feynmanData.commonGaps.push(...t.feynmanInsights.gaps.filter(Boolean));
+        if (Array.isArray(t.feynmanInsights.strengths)) feynmanData.commonStrengths.push(...t.feynmanInsights.strengths.filter(Boolean));
+        if (Array.isArray(t.feynmanInsights.sparklingExplanations)) feynmanData.sparklingCount += t.feynmanInsights.sparklingExplanations.length;
+        if (Array.isArray(t.feynmanInsights.lingeringQuestions)) feynmanData.lingeringCount += t.feynmanInsights.lingeringQuestions.length;
       }
     }
-
-    // Weak points
-    for (const t of plan.topics) {
-      if (t.weakPoints && t.weakPoints.length > 0) {
-        allWeakPoints.push({
-          topic: t.title,
-          plan: plan.name,
-          weakPoints: t.weakPoints,
-        });
-      }
-      if (t.exercises && t.exercises.length > 0) {
-        allExercises.push({
-          topic: t.title,
-          plan: plan.name,
-          exercises: t.exercises,
-        });
+    for (const t of topics) {
+      if (Array.isArray(t.weakPoints) && t.weakPoints.length > 0) allWeakPoints.push({ topic: t.title, plan: plan.name, weakPoints: t.weakPoints.filter(Boolean) });
+      if (Array.isArray(t.exercises) && t.exercises.length > 0) allExercises.push({ topic: t.title, plan: plan.name, exercises: t.exercises });
+    }
+    if (Array.isArray(plan.examPapers)) {
+      for (const exam of plan.examPapers) {
+        if (Array.isArray(exam.results) && exam.results.length > 0) allExamResults.push({ plan: plan.name, exam: exam.title || exam.id, results: exam.results, gradedAt: exam.gradedAt || exam.createdAt });
       }
     }
-
-    // Exam results
-    for (const exam of (plan.examPapers || [])) {
-      if (exam.results && exam.results.length > 0) {
-        allExamResults.push({
-          plan: plan.name,
-          exam: exam.title || exam.id,
-          results: exam.results,
-        });
+    if (Array.isArray(plan.quickQuizHistory)) {
+      for (const qr of plan.quickQuizHistory) {
+        if (Array.isArray(qr.results)) allQuizResults.push({ results: qr.results, createdAt: qr.createdAt });
       }
     }
-
-    // Interactive mode preferences (inferred from history — heuristic, may overcount
-    // as mode keywords like '分段'/'挑战'/'脚手架' can appear in explanations too)
-    const history = plan.history || [];
-    for (const h of history) {
-      if (h.role === 'ai' && h.content) {
-        if (h.content.includes('stepwise') || h.content.includes('分段')) modeCounts.stepwise++;
-        if (h.content.includes('challenge') || h.content.includes('挑战')) modeCounts.challenge++;
-        if (h.content.includes('scaffold') || h.content.includes('脚手架')) modeCounts.scaffold++;
+    for (const t of topics) {
+      const usage = t.interactiveModeUsage || {};
+      let hasValid = false;
+      for (const [m, d] of Object.entries(usage)) {
+        if (!ALLOWED_MODES.has(m)) continue;
+        const cnt = (typeof d?.count === 'number' && Number.isFinite(d.count) && d.count >= 0) ? Math.floor(d.count) : 0;
+        if (cnt > 0) { modeCounts[m] = (modeCounts[m] || 0) + cnt; hasValid = true; }
+      }
+      if (!hasValid && t.interactiveSession && ALLOWED_MODES.has(t.interactiveSession.mode)) {
+        modeCounts[t.interactiveSession.mode] = (modeCounts[t.interactiveSession.mode] || 0) + 1;
       }
     }
-
-    return {
-      id: plan.id,
-      name: plan.name,
-      topicCount: plan.topics.length,
-      doneCount,
-      completionRate: plan.topics.length > 0
-        ? Math.round((doneCount / plan.topics.length) * 100)
-        : 0,
-      createdAt: plan.createdAt,
-      updatedAt: plan.updatedAt,
-    };
+    return { id: plan.id, name: plan.name, topicCount: topics.length, doneCount, completionRate: topics.length > 0 ? Math.round((doneCount / topics.length) * 100) : 0, createdAt: plan.createdAt, updatedAt: plan.updatedAt };
   });
 
-  // Exercise statistics
-  let totalExercises = 0;
-  let correctExercises = 0;
+  let tEx = 0, cEx = 0;
+  for (const e of allExercises) { for (const x of (e.exercises || [])) { if (x.correct === true || x.correct === false) { tEx++; if (x.correct) cEx++; } } }
+  let tExm = 0, cExm = 0;
+  for (const e of allExamResults) { for (const r of (e.results || [])) { if (r.correct === true || r.correct === false) { tExm++; if (r.correct) cExm++; } } }
+  let tQz = 0, cQz = 0;
+  for (const q of allQuizResults) { for (const r of (q.results || [])) { if (r.correct === true || r.correct === false) { tQz++; if (r.correct) cQz++; } } }
+
+  // ── Today / This week stats ──
+  const _nowTs = Date.now();
+  const _todayStart = new Date(); _todayStart.setHours(0,0,0,0);
+  const _todayMs = _todayStart.getTime();
+  const _weekStart = new Date(_todayStart); _weekStart.setDate(_weekStart.getDate() - 6);
+  const _weekMs = _weekStart.getTime();
+  let tdEx = 0, tdCEx = 0, wkEx = 0, wkCEx = 0;
+  let tdExm = 0, tdCExm = 0, wkExm = 0, wkCExm = 0;
+  let tdQz = 0, tdCQz = 0, wkQz = 0, wkCQz = 0;
   for (const e of allExercises) {
-    for (const ex of (e.exercises || [])) {
-      totalExercises++;
-      if (ex.correct) correctExercises++;
+    for (const x of (e.exercises || [])) {
+      if (x.correct !== true && x.correct !== false) continue;
+      const gt = x.gradedAt;
+      if (gt && gt >= _todayMs) { tdEx++; if (x.correct) tdCEx++; }
+      if (gt && gt >= _weekMs) { wkEx++; if (x.correct) wkCEx++; }
     }
   }
-
-  // Exam statistics
-  let totalExamQuestions = 0;
-  let correctExamQuestions = 0;
   for (const e of allExamResults) {
     for (const r of (e.results || [])) {
-      totalExamQuestions++;
-      if (r.correct) correctExamQuestions++;
+      if (r.correct !== true && r.correct !== false) continue;
+      const gt = e.gradedAt;
+      if (gt && gt >= _todayMs) { tdExm++; if (r.correct) tdCExm++; }
+      if (gt && gt >= _weekMs) { wkExm++; if (r.correct) wkCExm++; }
     }
   }
-
-  // Most frequent weak topics (cross-plan)
-  const weakTopicFreq = {};
-  for (const w of allWeakPoints) {
-    for (const wp of (w.weakPoints || [])) {
-      weakTopicFreq[wp] = (weakTopicFreq[wp] || 0) + 1;
+  for (const q of allQuizResults) {
+    for (const r of (q.results || [])) {
+      if (r.correct !== true && r.correct !== false) continue;
+      const ct = q.createdAt;
+      if (ct && ct >= _todayMs) { tdQz++; if (r.correct) tdCQz++; }
+      if (ct && ct >= _weekMs) { wkQz++; if (r.correct) wkCQz++; }
     }
   }
-  const sortedWeakPoints = Object.entries(weakTopicFreq)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([name, count]) => ({ name, count }));
+  const todayCombined = { total: tdEx + tdExm + tdQz, correct: tdCEx + tdCExm + tdCQz };
+  const weekCombined = { total: wkEx + wkExm + wkQz, correct: wkCEx + wkCExm + wkCQz };
 
-  // Time distribution aggregation
-  const dailyTimeMap = {};
-  for (const log of allTimeLogs) {
-    dailyTimeMap[log.date] = (dailyTimeMap[log.date] || 0) + log.seconds;
-  }
-  const sortedDays = Object.entries(dailyTimeMap)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([date, seconds]) => ({ date, seconds, hours: Math.round(seconds / 3600 * 10) / 10 }));
+  const wpFreq = {};
+  for (const w of allWeakPoints) { for (const wp of (w.weakPoints || [])) { if (typeof wp === 'string') wpFreq[wp] = (wpFreq[wp] || 0) + 1; } }
+  const sortedWp = Object.entries(wpFreq).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([n, c]) => ({ name: n, count: c }));
 
-  // Compute summary stats for different periods
+  const dailyMap = {};
+  for (const l of allTimeLogs) dailyMap[l.date] = (dailyMap[l.date] || 0) + l.seconds;
+  const sortedDays = Object.entries(dailyMap).sort((a, b) => a[0].localeCompare(b[0])).map(([d, s]) => ({ date: d, seconds: s, hours: Math.round(s / 3600 * 10) / 10 }));
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const d7 = new Date(now); d7.setDate(d7.getDate() - 7);
-  const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
-  const d7Str = d7.toISOString().slice(0, 10);
-  const d30Str = d30.toISOString().slice(0, 10);
+  const today = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const d7 = new Date(now); d7.setDate(d7.getDate()-7);
+  const d30 = new Date(now); d30.setDate(d30.getDate()-30);
+  const d30S = d30.getFullYear()+'-'+String(d30.getMonth()+1).padStart(2,'0')+'-'+String(d30.getDate()).padStart(2,'0');
+  let t7 = 0, t30 = 0;
+  const l7 = [];
+  for (let i=6; i>=0; i--) { const d=new Date(now); d.setDate(d.getDate()-i); const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); const s=dailyMap[ds]||0; l7.push({date:ds,seconds:s,hours:Math.round(s/3600*10)/10}); t7+=s; }
+  for (const [d,s] of Object.entries(dailyMap)) { if (d>=d30S && d<=today) t30+=s; }
+  const activeDays = sortedDays.filter(d => d.seconds>0).length;
+  const avgDay = activeDays>0 ? Math.round(totalTime/activeDays) : 0;
+  const peak = sortedDays.reduce((m,d) => d.seconds > ((m&&m.seconds)||0) ? d : m, null);
 
-  let timeLast7Days = 0, timeLast30Days = 0;
-  const last7Days = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now); d.setDate(d.getDate() - i);
-    const ds = d.toISOString().slice(0, 10);
-    const secs = dailyTimeMap[ds] || 0;
-    last7Days.push({ date: ds, seconds: secs, hours: Math.round(secs / 3600 * 10) / 10 });
-    timeLast7Days += secs;
-  }
-  for (const [date, secs] of Object.entries(dailyTimeMap)) {
-    if (date >= d30Str) timeLast30Days += secs;
-  }
-
-  const activeDays = sortedDays.length;
-  const avgPerDay = activeDays > 0 ? Math.round(totalTime / activeDays) : 0;
-  const peakDay = sortedDays.reduce((max, d) => d.seconds > (max?.seconds || 0) ? d : max, null);
-
-  return {
-    planSummaries,
-    stats: {
-      totalPlans: plans.length,
-      totalTopics,
-      totalDone,
-      totalQuestions,
-      totalTimeSeconds: totalTime,
-      totalTimeHours: Math.round(totalTime / 3600 * 10) / 10,
-      overallCompletionRate: totalTopics > 0
-        ? Math.round((totalDone / totalTopics) * 100)
-        : 0,
-    },
-    exerciseStats: {
-      total: totalExercises,
-      correct: correctExercises,
-      rate: totalExercises > 0 ? Math.round((correctExercises / totalExercises) * 100) : 0,
-    },
-    examStats: {
-      total: totalExamQuestions,
-      correct: correctExamQuestions,
-      rate: totalExamQuestions > 0 ? Math.round((correctExamQuestions / totalExamQuestions) * 100) : 0,
-    },
-    weakPoints: allWeakPoints,
-    weakPointsSummary: sortedWeakPoints,
-    modeCounts,
-    feynmanData,
-    timeDistribution: {
-      daily: sortedDays,
-      last7Days,
-      summary: {
-        totalTimeSeconds: totalTime,
-        timeLast7Days,
-        timeLast30Days,
-        activeDays,
-        avgPerDaySeconds: avgPerDay,
-        avgPerDayHours: Math.round(avgPerDay / 3600 * 10) / 10,
-        peakDay: peakDay ? { date: peakDay.date, seconds: peakDay.seconds, hours: peakDay.hours } : null,
-      },
-    },
+  return { planSummaries,
+    stats: { totalPlans: plans.length, totalTopics, totalDone, totalQuestions, totalTimeSeconds: totalTime, totalTimeHours: Math.round(totalTime/3600*10)/10, overallCompletionRate: totalTopics>0 ? Math.round((totalDone/totalTopics)*100) : 0 },
+    exerciseStats: { total: tEx, correct: cEx, rate: tEx>0 ? Math.round((cEx/tEx)*100) : 0 },
+    examStats: { total: tExm, correct: cExm, rate: tExm>0 ? Math.round((cExm/tExm)*100) : 0 },
+    quickQuizStats: { total: tQz, correct: cQz, rate: tQz>0 ? Math.round((cQz/tQz)*100) : 0 },
+    todayStats: { total: todayCombined.total, correct: todayCombined.correct, rate: todayCombined.total > 0 ? Math.round((todayCombined.correct / todayCombined.total) * 100) : 0, exercises: { total: tdEx, correct: tdCEx }, exams: { total: tdExm, correct: tdCExm }, quizzes: { total: tdQz, correct: tdCQz } },
+    weekStats: { total: weekCombined.total, correct: weekCombined.correct, rate: weekCombined.total > 0 ? Math.round((weekCombined.correct / weekCombined.total) * 100) : 0, exercises: { total: wkEx, correct: wkCEx }, exams: { total: wkExm, correct: wkCExm }, quizzes: { total: wkQz, correct: wkCQz } },
+    weakPoints: allWeakPoints, weakPointsSummary: sortedWp, modeCounts, feynmanData,
+    timeDistribution: { daily: sortedDays, last7Days: l7, summary: { totalTimeSeconds: totalTime, timeLast7Days: t7, timeLast30Days: t30, activeDays, avgPerDaySeconds: avgDay, avgPerDayHours: Math.round(avgDay/3600*10)/10, peakDay: peak ? { date: peak.date, seconds: peak.seconds, hours: peak.hours } : null } },
   };
 }
-
-// ─── Profile read / write ───
-
-/**
- * Read the stored user profile, or null if not yet generated.
- */
-export function getUserProfile() {
-  if (!fs.existsSync(PROFILE_FILE)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf-8'));
-  } catch {
-    return null;
-  }
-}
-
-export function writeUserProfile(data) {
-  const tmp = PROFILE_FILE + '.tmp.' + process.pid;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-    try {
-      fs.renameSync(tmp, PROFILE_FILE);
-    } catch (renameErr) {
-      // Windows EPERM / cross-device link failure → fall back to copy + delete
-      fs.copyFileSync(tmp, PROFILE_FILE);
-      fs.unlinkSync(tmp);
-    }
-  } catch (writeErr) {
-    // If even the temp write failed, try direct write as last resort
-    console.error('[user-profile] Atomic write failed, attempting direct write:', writeErr.message);
-    fs.writeFileSync(PROFILE_FILE, JSON.stringify(data, null, 2), 'utf-8');
-    // Clean up temp file if it was created
-    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
-  }
-}
-
-/**
- * 规则驱动：根据练习+考试+问答模式反向更新画像的 masteryLevel 和 learnerPersona。
- * 这是数据飞轮的"回灌"环节：用户行为 → 画像数据 → 下次Prompt个性化。
- *
- * ⚠️ 未接入 AI——接入 AI 分析的是完整版 generateUserProfile()。
- * 但这个函数可以在用户每次做练习/答完题后增量更新画像，不需要AI调用。
- *
- * ⚠️ 这不会永久修改磁盘上的画像文件——只返回更新后的画像对象
- * 供 AdaptivePromptInjector 在下一次 generateDetail 中立即使用。
- *
- * @param {object|null} currentProfile - 当前画像 (或 null 表示基于活跃计划的初始画像)
- * @param {Array} allPlans - 所有学习计划 (来自 store)
- * @returns {object} 更新后的画像，下次生成时直接注入到提示中
- */
-export function profileUpdater(currentProfile, allPlans) {
-  const profile = currentProfile || _buildSkeletonProfile();
-  const now = Date.now();
-
-  // ── 1. 根据最新练习考试数据重新计算每种 masteryLevel ──
-  // 遍历所有计划的每个知识点，每个知识点得分根据：练习正确率 + 考试正确率
-  for (const plan of allPlans) {
-    if (!plan.topics) continue;
-    for (const t of plan.topics) {
-      if (!t.detail) continue;
-      const exercises = t.exercises || [];
-      if (exercises.length === 0) continue;
-      const correct = exercises.filter(e => e.correct === true).length;
-      const accuracy = correct / exercises.length;
-
-      // 将 accuracy 映射为 masteryLevel（0-1）
-      const mastery = Math.round(accuracy * 100) / 100;
-
-      // 找到画像中对应的 strength / weakness 条目
-      const concept = t.title;
-      const domain = _guessDomain(concept, plan.name);
-
-      _upsertMastery(profile, domain, concept, mastery, exercises.length);
-    }
-  }
-
-  // ── 2. 根据问答模式微调 personality 权重 ──
-  // 统计所有计划中的问答类型（为什么/怎么用/区别/我理解得对吗）
-  let totalQuestions = 0;
-  const questionTypes = { why: 0, how: 0, compare: 0, confirm: 0, apply: 0, deep: 0 };
-  for (const plan of allPlans) {
-    for (const h of (plan.history || [])) {
-      if (h.role !== 'user') continue;
-      totalQuestions++;
-      const q = (h.content || '').toLowerCase();
-      if (/为什么|why|原因是|原理|底层|背后/.test(q)) questionTypes.why++;
-      if (/怎么用|如何|怎么|示例|例子|代码|example|实践/.test(q)) questionTypes.how++;
-      if (/区别|对比|vs|versus|不同|比较|还是|差异/.test(q)) questionTypes.compare++;
-      if (/对吗|是不是|对吗|对吧|我的理解|确认/.test(q)) questionTypes.confirm++;
-      if (/应用|场景|实际|项目|生产|工作中/.test(q)) questionTypes.apply++;
-      if (/深入|追问|进一步|再问|还是不懂|换个角度/.test(q)) questionTypes.deep++;
-    }
-  }
-
-  if (totalQuestions > 0) {
-    const qt = questionTypes;
-    // 判断主导类型
-    const dominantType = Object.entries(qt).sort((a, b) => b[1] - a[1])[0][0];
-    const typeMap = { why: '深度思考型', how: '实践应用型', compare: '类比联想型', confirm: '谨慎确认型', apply: '目标驱动型', deep: '深度思考型' };
-    const learnedType = typeMap[dominantType];
-    if (learnedType && profile.learnerPersona) {
-      // 如果行为数据与历史画像类型冲突，更新置信度
-      if (!profile.learnerPersona.type.includes(learnedType)) {
-        profile.learnerPersona.type = [...new Set([...profile.learnerPersona.type, learnedType])];
-        profile.learnerPersona.evidenceFromBehavior = `用户在 ${totalQuestions} 个问题中，${dominantType} 类型占比最高（${qt[dominantType]}次）`;
-      }
-      // 置信度从数据量直接重算（避免持久化后多次调用累加膨胀）
-      const sampleBonus = Math.min(totalQuestions / 50, 0.1); // 最多加 0.1
-      const baseConfidence = 0.5;
-      profile.learnerPersona.confidence = Math.min(1, Math.round((baseConfidence + sampleBonus) * 100) / 100);
-    }
-  }
-
-  // ── 3. 根据练习正确率更新跨计划薄弱点列表 ──
-  const conceptAccuracies = {};
-  for (const plan of allPlans) {
-    for (const t of (plan.topics || [])) {
-      const exercises = t.exercises || [];
-      if (exercises.length === 0) continue;
-      const correct = exercises.filter(e => e.correct === true).length;
-      conceptAccuracies[t.title] = correct / exercises.length;
-    }
-  }
-  // accuracy < 0.5 且不在当前列表中 → 推入跨计划薄弱点
-  for (const [title, acc] of Object.entries(conceptAccuracies)) {
-    if (acc < 0.5 && !(profile.crossPlanWeakPoints || []).includes(title)) {
-      if (!profile.crossPlanWeakPoints) profile.crossPlanWeakPoints = [];
-      profile.crossPlanWeakPoints.push(title);
-    }
-  }
-
-  // ── 4. 打上时间戳 ──
-  profile._lastIncrementalUpdate = now;
-  if (!profile._totalIncrementalUpdates) profile._totalIncrementalUpdates = 0;
-  profile._totalIncrementalUpdates++;
-
-  return profile;
-}
-
-function _buildSkeletonProfile() {
-  return {
-    learnerPersona: { type: [], summary: '', confidence: 0.5 },
-    strengths: [],
-    weaknesses: [],
-    crossPlanWeakPoints: [],
-    learningPatterns: { preferredModes: { stepwise: 0, challenge: 0, scaffold: 0 }, questionStyle: '', avgQuestionsPerTopic: 0, timeDistribution: '', completionTrend: '' },
-    recommendations: [],
-    aiAnalysis: '',
-  };
-}
-
-function _guessDomain(title, planName) {
-  // 简短启发式——提取领域标签
+function _gd(title, planName) {
   const lower = title.toLowerCase();
   if (/协议|tcp|http|网络|socket|dns/.test(lower)) return '网络协议';
   if (/算法|排序|搜索|数据结构|tree|graph/.test(lower)) return '算法与数据结构';
@@ -504,88 +179,191 @@ function _guessDomain(title, planName) {
   if (/设计模式|架构|框架|模式/.test(lower)) return '软件设计';
   return planName || '通用';
 }
-
-function _upsertMastery(profile, domain, topic, mastery, sampleSize) {
-  if (!profile.strengths) profile.strengths = [];
-  if (!profile.weaknesses) profile.weaknesses = [];
-
-  // 检查 strengths 中是否已存在此 topic
-  const allEntries = [...profile.strengths, ...profile.weaknesses];
-  const existingDomain = allEntries.find(e => e.domain === domain);
-
-  const entry = {
-    domain,
-    topics: existingDomain ? [...new Set([...existingDomain.topics, topic])] : [topic],
-    evidence: `练习正确率 ${Math.round(mastery * 100)}%（${sampleSize}题）`,
-    masteryLevel: mastery,
-    lastUpdated: Date.now(),
-  };
-
-  if (mastery >= 0.7) {
-    // 掌握好的 → strengths
-    const idx = profile.strengths.findIndex(s => s.domain === domain);
-    if (idx >= 0) profile.strengths[idx] = entry;
-    else profile.strengths.push(entry);
-    // 从 weaknesses 中移除
-    profile.weaknesses = profile.weaknesses.filter(w => w.domain !== domain);
-  } else {
-    // 掌握不足 → weaknesses
-    const idx = profile.weaknesses.findIndex(w => w.domain === domain);
-    if (idx >= 0) profile.weaknesses[idx] = entry;
-    else profile.weaknesses.push(entry);
+function _san(s, maxLen) {
+  maxLen = maxLen || 120;
+  if (typeof s !== "string") return "";
+  s = s.replace(/```/g, "");
+  let r = "";
+  for (let i = 0; i < s.length; i++) {
+    const cc = s.charCodeAt(i);
+    if (cc < 32 && cc !== 9 && cc !== 10) continue;
+    if (cc === 10) { r += " "; continue; }
+    r += s[i];
   }
+  r = r.trim();
+  while (r.indexOf("  ") >= 0) r = r.replace("  ", " ");
+  return r.slice(0, maxLen);
+}
+function _validDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const p = s.split('-').map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  if (isNaN(d.getTime())) return false;
+  if (d.getUTCFullYear() !== p[0] || d.getUTCMonth() + 1 !== p[1] || d.getUTCDate() !== p[2]) return false;
+  const n = new Date();
+  const t = n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
+  return s <= t;
+}
+function _validSec(v) { return typeof v === 'number' && Number.isFinite(v) && v > 0; }
+
+// ─── Profile read/write ───
+export function getUserProfile() {
+  if (!fs.existsSync(PROFILE_FILE)) return null;
+  try { return JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf-8')); } catch { return null; }
+}
+export function writeUserProfile(data) {
+  const tmp = PROFILE_FILE + '.tmp.' + process.pid;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    try { fs.renameSync(tmp, PROFILE_FILE); } catch { fs.copyFileSync(tmp, PROFILE_FILE); fs.unlinkSync(tmp); }
+  } catch { fs.writeFileSync(PROFILE_FILE, JSON.stringify(data, null, 2), 'utf-8'); try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
 }
 
-/**
- * Generate (or regenerate) the user profile using AI.
- *
- * @param {object} provider - Provider instance from createProviderFromConfig
- * @param {string} [model='gpt-4o-mini']
- * @returns {object} The newly generated user profile
- */
-export async function generateUserProfile(provider, model = 'gpt-4o-mini') {
-  const aggregated = aggregateAllPlans();
-  if (!aggregated) {
-    throw new Error('没有学习计划数据，无法生成画像');
+// ─── hasBehaviorEvidence / hasAIProfile ───
+export function hasBehaviorEvidence(profile) {
+  if (!profile) return false;
+  if (profile.profileSource === 'behavior' || profile.profileSource === 'ai+behavior') return true;
+  if (typeof profile._lastIncrementalUpdate === 'number' && Number.isFinite(profile._lastIncrementalUpdate) && profile._lastIncrementalUpdate > 0) return true;
+  if ((profile.strengths || []).some(s => s.source === 'behavior')) return true;
+  if ((profile.weaknesses || []).some(w => w.source === 'behavior')) return true;
+  if ((profile.crossPlanWeakEvidence || []).some(e => e.source === 'behavior')) return true;
+  return false;
+}
+export function hasAIProfile(profile) {
+  if (!profile) return false;
+  return typeof profile.lastAnalyzedAt === 'number' && Number.isFinite(profile.lastAnalyzedAt) && profile.lastAnalyzedAt > 0;
+}
+
+export function profileUpdater(currentProfile, allPlans) {
+  const profile = currentProfile || { learnerPersona: { type: [], summary: '', confidence: 0.5 }, strengths: [], weaknesses: [], crossPlanWeakPoints: [], crossPlanWeakEvidence: [], learningPatterns: { preferredModes: {}, avgQuestionsPerTopic: 0, timeStats: {}, questionStyle: '', timeDistribution: '', completionTrend: '' }, recommendations: [], aiAnalysis: '' };
+  const now = Date.now();
+  const realPlans = (allPlans || []).filter(p => !hasTestPlanMarker(p));
+  if (realPlans.length === 0) { profile._lastIncrementalUpdate = now; profile._totalIncrementalUpdates = (profile._totalIncrementalUpdates || 0) + 1; return profile; }
+
+  // ── 1. Evidence collection ──
+  const topicEv = {};
+  const addEv = (title, ok) => { const k = (typeof title === 'string' ? title.trim() : ''); if (!k) return; if (!topicEv[k]) topicEv[k] = { correct: 0, attempts: 0 }; topicEv[k].attempts++; if (ok) topicEv[k].correct++; };
+
+  for (const plan of realPlans) {
+    const idMap = {};
+    for (const t of (plan.topics || [])) { if (t.id && t.title) idMap[t.id] = t.title; }
+    for (const t of (plan.topics || [])) {
+      for (const e of (t.exercises || [])) { if (e.correct === true || e.correct === false) addEv(t.title, e.correct === true); }
+    }
+    for (const exam of (plan.examPapers || [])) {
+      if (!Array.isArray(exam.results) || !Array.isArray(exam.questions)) continue;
+      for (const r of exam.results) {
+        if (r.correct !== true && r.correct !== false) continue;
+        const q = exam.questions[r.exerciseIndex];
+        let t = '';
+        if (q && q.topicId && idMap[q.topicId]) t = idMap[q.topicId]; else if (q && q.topicTitle) t = q.topicTitle; else if (q && q.conceptTag) t = q.conceptTag; else t = r.topicTitle || '';
+        addEv(t, r.correct === true);
+      }
+    }
+    for (const qr of (plan.quickQuizHistory || [])) {
+      if (!Array.isArray(qr.results) || !Array.isArray(qr.questions)) continue;
+      for (const r of qr.results) {
+        if (r.correct !== true && r.correct !== false) continue;
+        const q = qr.questions[r.exerciseIndex];
+        addEv((q && q.topicTitle) || (q && q.conceptTag) || '', r.correct === true);
+      }
+    }
   }
 
-  // Build the input for AI
+  // ── 2. Domain ──
+  const titlePlans = {};
+  for (const plan of realPlans) { const s = new Set(); for (const t of (plan.topics || [])) { if (t.title && !s.has(t.title)) { s.add(t.title); titlePlans[t.title] = (titlePlans[t.title] || 0) + 1; } } }
+  const td = {};
+  for (const plan of realPlans) { for (const t of (plan.topics || [])) { if (t.title && !td[t.title]) td[t.title] = _gd(t.title, plan.name); } }
+  for (const [ti, c] of Object.entries(titlePlans)) { if (c > 1) td[ti] = '通用'; }
+  const db = {};
+  for (const [ti, ev] of Object.entries(topicEv)) { const d = td[ti] || '通用'; if (!db[d]) db[d] = { correct: 0, attempts: 0, topics: [] }; db[d].correct += ev.correct; db[d].attempts += ev.attempts; db[d].topics.push(ti); }
+
+  // ── 3. Strength/weakness ──
+  const nb = [];
+  for (const [d, b] of Object.entries(db)) { const m = b.attempts > 0 ? Math.round((b.correct / b.attempts) * 100) / 100 : 0; nb.push({ domain: d, topics: b.topics, evidence: '练习/测验正确率 ' + Math.round(m * 100) + '%（' + b.attempts + '题）', masteryLevel: m, sampleSize: b.attempts, lastUpdated: now, source: 'behavior' }); }
+  profile.strengths = [...(profile.strengths || []).filter(s => s.source !== 'behavior'), ...nb.filter(b => b.masteryLevel >= 0.7)];
+  profile.weaknesses = [...(profile.weaknesses || []).filter(w => w.source !== 'behavior'), ...nb.filter(b => b.masteryLevel < 0.7)];
+
+  // ── 4. learningPatterns ──
+  const mc = {}; let tt = 0, tq = 0, tts = 0; const ds = {};
+  for (const plan of realPlans) {
+    tt += (plan.topics || []).length; tq += (Array.isArray(plan.history) ? plan.history.filter(h => h && h.role === 'user') : []).length;
+    for (const t of (plan.topics || [])) {
+      const ts = t.timeSpent; if (typeof ts === 'number' && Number.isFinite(ts) && ts >= 0) tts += ts;
+      const usage = t.interactiveModeUsage || {}; let hv = false;
+      for (const [m, d] of Object.entries(usage)) { if (!ALLOWED_MODES.has(m)) continue; const cnt = (typeof d?.count === 'number' && Number.isFinite(d.count) && d.count >= 0) ? Math.floor(d.count) : 0; if (cnt > 0) { mc[m] = (mc[m] || 0) + cnt; hv = true; } }
+      if (!hv && t.interactiveSession && ALLOWED_MODES.has(t.interactiveSession.mode)) mc[t.interactiveSession.mode] = (mc[t.interactiveSession.mode] || 0) + 1;
+      if (Array.isArray(t.timeLog)) { for (const e of t.timeLog) { if (_validDate(e && e.date) && _validSec(e && e.seconds)) ds[e.date] = (ds[e.date] || 0) + e.seconds; } }
+    }
+  }
+  const ad = Object.values(ds).filter(v => v > 0).length;
+  const avgD = ad > 0 ? Math.round(tts / ad) : 0;
+  const nms = Date.now(); const S7 = 7 * 86400000, S30 = 30 * 86400000; let l7 = 0, l30 = 0;
+  for (const [d, s] of Object.entries(ds)) { const age = nms - new Date(d).getTime(); if (age >= 0 && age <= S7) l7 += s; if (age >= 0 && age <= S30) l30 += s; }
+  const sm = Object.entries(mc).sort((a, b) => b[1] - a[1]); const pm = {}; for (const [m, c] of sm) pm[m] = c;
+  profile.learningPatterns = { preferredModes: pm, avgQuestionsPerTopic: tt > 0 ? Math.round((tq / tt) * 10) / 10 : 0, timeStats: { totalSeconds: tts, activeDays: ad, avgSecondsPerActiveDay: avgD, last7DaysSeconds: l7, last30DaysSeconds: l30 }, questionStyle: profile.learningPatterns?.questionStyle || '', timeDistribution: profile.learningPatterns?.timeDistribution || '', completionTrend: profile.learningPatterns?.completionTrend || '' };
+
+  // ── 5. Structured evidence ──
+  const acc = new Map();
+  for (const [ti, ev] of Object.entries(topicEv)) { const r = ev.correct / ev.attempts; if (r < 0.6) { const l = _san(ti); if (l) { if (!acc.has(l)) acc.set(l, { bh: null, wp: 0, fg: 0 }); acc.get(l).bh = { sampleSize: ev.attempts, masteryLevel: Math.round(r * 100) / 100 }; } } }
+  for (const plan of realPlans) { for (const t of (plan.topics || [])) { if (!Array.isArray(t.weakPoints)) continue; const te = topicEv[t.title]; if (!te || (te.correct / te.attempts) >= 0.7) continue; const seen = new Set(); for (const w of t.weakPoints) { const l = _san(w); if (!l || seen.has(l)) continue; seen.add(l); if (!acc.has(l)) acc.set(l, { bh: null, wp: 0, fg: 0 }); acc.get(l).wp++; } } }
+  for (const plan of realPlans) { for (const t of (plan.topics || [])) { const fi = t.feynmanInsights; if (!fi || (fi.teachingQuality !== 'fair' && fi.teachingQuality !== 'needsWork')) continue; const seen = new Set(); if (Array.isArray(fi.gaps) && fi.gaps.length > 0) { for (const g of fi.gaps) { const l = _san(g); if (!l || seen.has(l)) continue; seen.add(l); if (!acc.has(l)) acc.set(l, { bh: null, wp: 0, fg: 0 }); acc.get(l).fg++; } } else { const l = _san(t.title); if (l && !seen.has(l)) { seen.add(l); if (!acc.has(l)) acc.set(l, { bh: null, wp: 0, fg: 0 }); acc.get(l).fg++; } } } }
+  const mat = [];
+  for (const [label, entry] of acc) {
+    if (entry.bh) { const o = { label, source: 'behavior', sampleSize: entry.bh.sampleSize, masteryLevel: entry.bh.masteryLevel }; if (entry.wp > 0 || entry.fg > 0) { o.supportingSources = []; if (entry.wp > 0) o.supportingSources.push('weakPoint'); if (entry.fg > 0) o.supportingSources.push('feynmanGap'); } mat.push(o); }
+    else if (entry.wp > 0 || entry.fg > 0) { if (entry.wp >= entry.fg) mat.push({ label, source: 'weakPoint', sampleSize: entry.wp }); else mat.push({ label, source: 'feynmanGap', sampleSize: entry.fg }); }
+  }
+  mat.sort((a, b) => a.label.localeCompare(b.label));
+  const lim = mat.slice(0, 50);
+  profile.crossPlanWeakEvidence = lim;
+  profile.crossPlanWeakPoints = lim.map(e => e.label);
+
+  // ── 6. Persona ──
+  const M3 = 3, MR = 0.3; let tqa = 0; const qt = { why: 0, how: 0, compare: 0, confirm: 0, apply: 0, deep: 0 };
+  for (const plan of realPlans) { for (const h of (plan.history || [])) { if (!h || h.role !== 'user') continue; tqa++; const q = (h.content || '').toLowerCase(); if (/为什么|why|原因|原因是|原理|底层|背后/.test(q)) qt.why++; if (/怎么用|如何|怎么|示例|例子|代码|example|实践/.test(q)) qt.how++; if (/区别|对比|vs|versus|不同|比较|还是|差异/.test(q)) qt.compare++; if (/对吗|是不是|对吗|对吧|我的理解|确认/.test(q)) qt.confirm++; if (/应用|场景|实际|项目|生产|工作中/.test(q)) qt.apply++; if (/深入|追问|进一步|再问|还是不懂|换个角度/.test(q)) qt.deep++; } }
+  const dt = Object.entries(qt).sort((a, b) => b[1] - a[1])[0];
+  if (dt && dt[1] >= M3 && tqa > 0 && (dt[1] / tqa) >= MR) {
+    const tmap = { why: '深度思考型', how: '实践应用型', compare: '类比联想型', confirm: '谨慎确认型', apply: '目标驱动型', deep: '深度思考型' };
+    const lt = tmap[dt[0]];
+    if (lt && profile.learnerPersona) { if (!profile.learnerPersona.type.includes(lt)) profile.learnerPersona.type = [...new Set([...profile.learnerPersona.type, lt])]; const bonus = Math.min(tqa / 50, 0.1); profile.learnerPersona.confidence = Math.min(1, Math.round((0.5 + bonus) * 100) / 100); profile.learnerPersona.evidenceFromBehavior = '用户在 ' + tqa + ' 个问题中，' + dt[0] + ' 类型 ' + dt[1] + ' 次'; }
+  }
+
+  profile._lastIncrementalUpdate = now;
+  profile._totalIncrementalUpdates = (profile._totalIncrementalUpdates || 0) + 1;
+  return profile;
+}
+
+export async function generateUserProfile(provider, model = 'gpt-4o-mini', { plans: extPlans } = {}) {
+  const raw = extPlans !== undefined ? (Array.isArray(extPlans) ? extPlans : []) : loadAllPlans();
+  const realPlans = raw.filter(p => !hasTestPlanMarker(p));
+  const aggregated = aggregatePlans(realPlans);
+  if (!aggregated) throw new Error('没有学习计划数据，无法生成画像');
+
   const inputData = {
     planSummaries: aggregated.planSummaries,
     stats: aggregated.stats,
     exerciseStats: aggregated.exerciseStats,
     examStats: aggregated.examStats,
+    quickQuizStats: aggregated.quickQuizStats,
     weakPointsSummary: aggregated.weakPointsSummary,
     modeCounts: aggregated.modeCounts,
     feynmanStats: aggregated.feynmanData,
-    // Include detailed weak points with plan context
-    weakPointsByPlan: aggregated.weakPoints.map(w => ({
-      plan: w.plan,
-      topic: w.topic,
-      weakPoints: w.weakPoints,
-    })),
-    // Include recent exercise samples
-    exerciseSamples: aggregated.weakPoints.slice(0, 5).map(w => ({
-      plan: w.plan,
-      topic: w.topic,
-      exerciseCount: w.weakPoints?.length || 0,
-    })),
+    weakPointsByPlan: aggregated.weakPoints.map(w => ({ plan: w.plan, topic: w.topic, weakPoints: w.weakPoints })),
   };
 
+  const systemPrompt = '你是一个学习分析专家。请根据以下学习计划聚合数据，生成用户画像。只输出 JSON，不要其他文字。\n\nJSON 结构：{\n  "learnerPersona": { "type": ["类型1", "类型2"], "summary": "一句话总结", "confidence": 0.85 },\n  "strengths": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.9 }],\n  "weaknesses": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.3, "frequency": "high", "suggestedAction": "建议" }],\n  "crossPlanWeakPoints": ["薄弱概念"],\n  "learningPatterns": { "preferredModes": {}, "avgQuestionsPerTopic": 0, "questionStyle": "", "timeDistribution": "", "completionTrend": "" },\n  "recommendations": ["建议"],\n  "aiAnalysis": "Markdown 分析报告"\n}';
+
   const messages = [
-    { role: 'system', content: USER_PROFILE_PROMPT },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: '以下是我的所有学习计划聚合数据，请构建用户画像：\n\n```json\n' + JSON.stringify(inputData, null, 2) + '\n```' },
   ];
 
-  const result = await provider.complete(messages, {
-    maxTokens: 8192,
-    temperature: 0.7,
-  });
+  const result = await provider.complete(messages, { maxTokens: 16384, temperature: 0.7, responseFormat: { type: 'json_object' }, model });
+  if (!result || typeof result.content !== 'string' || !result.content.trim()) throw new Error('AI 返回内容为空');
 
-  // Parse JSON from AI response
   let profileData;
   try {
-    // Try to extract JSON from markdown code block
     const jsonMatch = result.content.match(/```(?:json)?\s*([\s\S]*?)```/);
     const jsonStr = jsonMatch ? jsonMatch[1].trim() : result.content.trim();
     profileData = JSON.parse(jsonStr);
@@ -593,65 +371,41 @@ export async function generateUserProfile(provider, model = 'gpt-4o-mini') {
     throw new Error('AI 返回 JSON 解析失败，请重试: ' + parseErr.message + '\n回复前 200 字符: ' + result.content.slice(0, 200));
   }
 
-  // Merge with computed stats
-  const profile = {
-    updatedAt: Date.now(),
-    lastAnalyzedAt: Date.now(),
-    planSummary: {
-      totalPlans: aggregated.stats.totalPlans,
-      totalTopics: aggregated.stats.totalTopics,
-      completedTopics: aggregated.stats.totalDone,
-      overallCompletionRate: aggregated.stats.overallCompletionRate,
-      totalLearningTime: aggregated.stats.totalTimeSeconds,
-      totalQuestions: aggregated.stats.totalQuestions,
-      plans: aggregated.planSummaries,
-    },
-    exerciseRate: aggregated.exerciseStats.rate,
-    examRate: aggregated.examStats.rate,
-    ...profileData,
-    // Override learningPatterns with computed data merged with AI data
-    learningPatterns: {
-      ...(profileData.learningPatterns || {}),
-      preferredModes: aggregated.modeCounts,
-      avgQuestionsPerTopic: aggregated.stats.totalTopics > 0
-        ? Math.round((aggregated.stats.totalQuestions / aggregated.stats.totalTopics) * 10) / 10
-        : 0,
-    },
-    // Keep raw weak points for reference
-    _rawWeakPoints: aggregated.weakPointsSummary,
-  };
-
-  writeUserProfile(profile);
-  return profile;
+  const analyzedAt = Date.now();
+  const finalProfile = mergeGeneratedProfile(profileData, aggregated, realPlans, analyzedAt);
+  writeUserProfile(finalProfile);
+  return finalProfile;
 }
 
-/**
- * Get a lightweight summary without triggering AI analysis.
- */
-export function getProfileSummary() {
-  const aggregated = aggregateAllPlans();
-  if (!aggregated) {
-    return { hasData: false, message: '还没有学习计划数据' };
-  }
+export function buildProfileSummary(aggregated, stored) {
+  if (!aggregated) return { hasData: false, message: '还没有学习计划数据' };
+  return { hasData: true, hasAIAnalysis: hasAIProfile(stored), hasBehaviorProfile: hasBehaviorEvidence(stored), lastAnalyzedAt: stored?.lastAnalyzedAt || null, stats: aggregated.stats, exerciseStats: aggregated.exerciseStats, examStats: aggregated.examStats, quickQuizStats: aggregated.quickQuizStats, todayStats: aggregated.todayStats, weekStats: aggregated.weekStats, weakPointsSummary: aggregated.weakPointsSummary, feynmanStats: aggregated.feynmanData, planSummaries: aggregated.planSummaries, modeCounts: aggregated.modeCounts, timeDistribution: aggregated.timeDistribution, learnerPersona: stored?.learnerPersona || null, strengths: stored?.strengths || null, weaknesses: stored?.weaknesses || null, recommendations: stored?.recommendations || null };
+}
 
-  const stored = getUserProfile();
+export function getProfileSummary() { return buildProfileSummary(aggregateAllPlans(), getUserProfile()); }
 
-  return {
-    hasData: true,
-    hasAIAnalysis: !!stored,
-    lastAnalyzedAt: stored?.lastAnalyzedAt || null,
-    stats: aggregated.stats,
-    exerciseStats: aggregated.exerciseStats,
-    examStats: aggregated.examStats,
-    weakPointsSummary: aggregated.weakPointsSummary,
-    feynmanStats: aggregated.feynmanData,
-    planSummaries: aggregated.planSummaries,
-    modeCounts: aggregated.modeCounts,
-    timeDistribution: aggregated.timeDistribution,
-    // Include AI persona if available
-    learnerPersona: stored?.learnerPersona || null,
-    strengths: stored?.strengths || null,
-    weaknesses: stored?.weaknesses || null,
-    recommendations: stored?.recommendations || null,
+export function mergeGeneratedProfile(profileData, aggregated, plans, analyzedAt) {
+  analyzedAt = (analyzedAt === undefined) ? Date.now() : analyzedAt;
+  const ca = (a) => Array.isArray(a) ? a.map(x => (x && typeof x === 'object' ? (Array.isArray(x) ? [...x] : { ...x }) : x)) : [];
+  const co = (o) => (o && typeof o === 'object' && !Array.isArray(o)) ? { ...o } : o;
+  const base = {
+    learnerPersona: co(profileData?.learnerPersona) || { type: [], summary: '', confidence: 0 },
+    strengths: ca(profileData?.strengths).map(s => ({ ...s, topics: [...(s.topics || [])] })),
+    weaknesses: ca(profileData?.weaknesses).map(w => ({ ...w, topics: [...(w.topics || [])] })),
+    crossPlanWeakPoints: ca(profileData?.crossPlanWeakPoints),
+    crossPlanWeakEvidence: ca(profileData?.crossPlanWeakEvidence).map(e => ({ ...e, supportingSources: [...(e.supportingSources || [])] })),
+    learningPatterns: co(profileData?.learningPatterns) || { preferredModes: {}, avgQuestionsPerTopic: 0, timeStats: {}, questionStyle: '', timeDistribution: '', completionTrend: '' },
+    recommendations: ca(profileData?.recommendations),
+    aiAnalysis: (typeof profileData?.aiAnalysis === 'string') ? profileData.aiAnalysis : '',
+    planSummary: aggregated ? { totalPlans: aggregated.stats.totalPlans, totalTopics: aggregated.stats.totalTopics, completedTopics: aggregated.stats.totalDone, overallCompletionRate: aggregated.stats.overallCompletionRate, totalLearningTime: aggregated.stats.totalTimeSeconds, totalQuestions: aggregated.stats.totalQuestions, plans: aggregated.planSummaries } : {},
+    exerciseRate: aggregated?.exerciseStats?.rate || 0, examRate: aggregated?.examStats?.rate || 0, quickQuizRate: aggregated?.quickQuizStats?.rate || 0, _rawWeakPoints: ca(aggregated?.weakPoints),
   };
+  const updated = profileUpdater(base, plans);
+  updated.lastAnalyzedAt = analyzedAt; updated.updatedAt = analyzedAt;
+  updated.profileSource = 'ai+behavior';
+  updated.planSummary = base.planSummary; updated.exerciseRate = base.exerciseRate; updated.examRate = base.examRate;
+  updated.quickQuizRate = base.quickQuizRate; updated._rawWeakPoints = base._rawWeakPoints;
+  if (base.aiAnalysis) updated.aiAnalysis = base.aiAnalysis;
+  if (base.recommendations.length > 0) updated.recommendations = base.recommendations;
+  return updated;
 }

@@ -403,6 +403,13 @@ export function formatConnectionError(err, baseURL, model) {
   if (err.status === 429) return '请求过于频繁，请稍后再试（429）';
   if (err.status === 500) return 'API 服务器内部错误（500），可能是中转站本身的问题';
 
+  // System-level network errors take priority — these carry an explicit err.code
+  // and should not be swallowed by the generic substring checks below.
+  if (err.code === 'ECONNREFUSED') return '无法连接到服务器，请检查 Base URL';
+  if (err.code === 'ENOTFOUND') return '域名解析失败，请检查 Base URL 是否正确';
+  if (err.code === 'ECONNRESET') return '连接被重置，请检查 Base URL 和网络连接';
+  if (err.code === 'ETIMEDOUT') return '连接超时，请检查 Base URL 是否可达';
+
   // OpenAI SDK connection errors (instanceof-style check via constructor name)
   const isConnErr = err.constructor?.name === 'APIConnectionError' ||
     err.constructor?.name === 'APIConnectionTimeoutError';
@@ -416,11 +423,6 @@ export function formatConnectionError(err, baseURL, model) {
     }
     return '无法连接到 AI 服务，请检查 Base URL 是否正确、网络是否畅通';
   }
-
-  if (err.code === 'ECONNREFUSED') return '无法连接到服务器，请检查 Base URL';
-  if (err.code === 'ENOTFOUND') return '域名解析失败，请检查 Base URL 是否正确';
-  if (err.code === 'ECONNRESET') return '连接被重置，请检查 Base URL 和网络连接';
-  if (err.code === 'ETIMEDOUT' || msg.includes('timeout')) return '连接超时，请检查 Base URL 是否可达';
 
   if (msg.includes('incorrect api key') || msg.includes('invalid api key')) return 'API Key 不正确';
   if (msg.includes('auth') || msg.includes('unauthorized')) return '认证失败，请检查 API Key 是否正确';
