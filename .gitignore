@@ -24,8 +24,15 @@ reasonix.toml
 # AI 会话文件
 .mimocode/
 
-# 项目上下文（AI 提示词，不公开）
-项目上下文.md
+# AI 辅助文件（项目开发规范，不对外公开）
+AGENTS.md
+CONTEXT.md
+ROADMAP.md
+TEMP_PROBLEMS.md
+
+# 内部学习笔记
+前后端技术栈.md
+docs/Linux-网络编程核心.md
 
 # 临时文件
 tmp_query.py

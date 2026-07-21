@@ -1,0 +1,4 @@
+# Log directory — stderr redirects, runtime diagnostics
+# Keep this directory tracked so it exists on fresh clones
+*
+!.gitkeep
