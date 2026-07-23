@@ -56,6 +56,8 @@
 | 资源评分持久化 | 对隔离计划调用 PATCH 评分 `{ "rating": 1 }`；随后 GET 返回 `userRating: 1` | 通过 |
 | 服务端测试数据清理 | 导入、失败场景和评分夹具均精确删除；没有残留已登记的 E2E 垃圾箱条目 | 通过 |
 | Service Worker 离线评分 | 独立 Chromium 中 Service Worker 已控制页面；评分 PATCH 入队 1 项，服务端不可用时保留；同源 `3002` 隔离服务恢复后重放清空队列并持久化 `userRating: 1` | 通过 |
+| 真实讲解生成 | 隔离计划主题“二加二”通过 `gpt-5.6-terra` 调用 generate 路由；持久化 Detail 长度 2247 字符，无 `lastError` | 通过 |
+| 真实互动教学 | 同一主题以 `stepwise` 模式调用 interactive-start；返回 `content`、`session` 和 `finished` 字段 | 通过 |
 
 ## 依赖审计
 
@@ -72,6 +74,8 @@
 | `2f610b15-acac-4bc4-8311-39c02835e1b4` | 评分端到端隔离计划 | 是 | 已精确永久删除 |
 | `04bb7c1f-649f-4d45-bf47-eee228ea55b8` | Bundle 导入端到端计划 | 是 | 已从垃圾箱精确永久删除 |
 | `f4d1451d-7a46-450e-94e5-2921a1c7be63` | 失败场景端到端计划 | 是 | 已从垃圾箱精确永久删除 |
+| `f4e0b858-3bc4-46db-b85c-900815bd6155` | Service Worker 成功重放隔离计划 | 是 | 已精确永久删除 |
+| `e865a036-d789-4675-9171-4dca75461867` | 真实讲解与互动教学隔离计划 | 是 | 已精确永久删除 |
 
 所有创建物均以唯一计划 ID 登记、逐条验证后删除；未执行通配符或递归清理。全量测试在清理流程后仍通过。
 
@@ -79,12 +83,12 @@
 
 - 开始时已确认分支为 `codex/fix-audit-findings`。`git pull --rebase` 因工作区已有暂存及未暂存改动被 Git 拒绝，未执行 stash、reset、restore 或清理。
 - 工作区原本包含大量修改和未跟踪文件。收尾只新增 `MODULES.md`、`FINAL_REPORT.md`，并在归档完成后更新 `TODO.md`；未覆盖其他已有改动。
-- `README.md` 是已有未提交改动，标题仍为 `v1.12.0`，三个 package manifest 已是 `1.12.1`。为保护该用户/同事改动，本轮未修改 README；这是可见版本文案不一致的遗留低风险。
+- `README.md` 的已有内容完整保留；仅同步标题版本至当前 `1.12.4`，与三个 package manifest 一致。
 - Reasonix 在当前会话中不可用，因此按流程降级为 PowerShell、git、npm、Node 和 Vite 本地工具；未产生可用的 Reasonix 成本记录。
 
 ## 文档同步与剩余建议
 
-- README 已描述 Bundle 数据包还原和相关导出能力，因此本轮功能文档无需另行扩写；唯一发现的版本标题不一致见上节。
-- 建议使用已授权可调用 Chat Completions 的模型运行真实生成/互动流程烟测；本轮提供的代理凭据可读取模型目录，但没有上述候选模型的调用权限。
+- README 已描述 Bundle 数据包还原和相关导出能力，且版本标题已同步至 `1.12.4`。
+- 已使用 `gpt-5.6-terra` 完成真实生成与互动教学烟测；TTS 仍需提供具备语音能力的图像/语音 Provider。
 - 已完成 Chromium 离线入队、失败保留和成功重放验证；建议将该浏览器场景固化为常规 Playwright 回归，并覆盖 Service Worker 更新提示。
 - oxlint 虽然退出码为 0，但保留既有 warning。后续应单独建任务逐步收敛，避免将无关格式或警告清理混入功能修复。
