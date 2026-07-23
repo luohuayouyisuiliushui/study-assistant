@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal, Undo2 } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal, Undo2 } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
 import RegenerateDialog from './RegenerateDialog';
-import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
+import { ContentArea } from './TopicDetailShared.jsx';
 import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
@@ -13,6 +13,7 @@ import MistakePanel from './MistakePanel.jsx';
 import QAPanel from './QAPanel.jsx';
 import ActionMenu from './ActionMenu.jsx';
 import { loadSettings } from '#/lib/settings-storage';
+import useSpeechRecognition from '../hooks/useSpeechRecognition.js';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -181,9 +182,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [interactiveStateMachine, setInteractiveStateMachine] = useState(null);
   const interactiveBusyRef = useRef(false);
 
-  const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef(null);
-  const [voiceSupported, setVoiceSupported] = useState(true);
+  const { supported: voiceSupported, isRecording, error: voiceError, toggleRecording, stopRecording } = useSpeechRecognition();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -255,17 +254,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   // Memoize expensive computed values
   const strippedDetailMemo = useMemo(() => stripExerciseSection(localDetail), [localDetail]);
   const parsedExercisesMemo = useMemo(() => parseExercisesFromMarkdown(localDetail), [localDetail]);
-
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) setVoiceSupported(false);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch {} }
-    };
-  }, []);
 
   // Load previous session history for display (don't auto-enter interactive mode)
   const [prevSessionData, setPrevSessionData] = useState(null);
@@ -692,6 +680,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   const handleComplete = async () => {
+    stopRecording();
     setRevealLoading(true);
     try {
       const recognized = foundErrorsInput.split(/[\n;；,，]+/).map(s => s.trim()).filter(Boolean);
@@ -907,6 +896,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const handleStartInteractive = async (mode) => {
     if (interactiveBusyRef.current) return;
+    stopRecording();
     setSearchParams({ mode }, { replace: false });
 
     // Check if there's an existing session to resume
@@ -940,11 +930,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const handleSendInteractiveFeedback = async () => {
     const feedback = interactiveInput.trim();
     if (!feedback || interactiveBusyRef.current) return;
+    stopRecording();
     await handleContinueInteractive(feedback);
   };
 
   const handleQuickAction = async (action) => {
     if (interactiveBusyRef.current) return;
+    stopRecording();
     await handleContinueInteractive(action);
   };
 
@@ -964,6 +956,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   const handleExitInteractive = () => {
+    stopRecording();
     const wasFeynman = interactiveMode === 'feynman';
     const currentPlanId = plan?.id; const currentTopicId = topic?.id;
     // Check if user actually explained something (more than just the AI's initial greeting)
@@ -997,23 +990,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   const handleVoiceInput = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { alert('您的浏览器不支持语音输入，请使用 Chrome 或 Edge'); return; }
-    if (isRecording) { if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} } setIsRecording(false); return; }
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'zh-CN'; recognition.continuous = false; recognition.interimResults = true; recognition.maxAlternatives = 1;
-    let finalTranscript = '';
-    recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) { if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript; }
-      const latestTranscript = Array.from(event.results).map(r => r[0].transcript).join('');
-      setInteractiveInput(latestTranscript);
-    };
-    recognition.onend = () => {
-      setIsRecording(false);
-      if (finalTranscript.trim()) setInteractiveInput(finalTranscript.trim());
-    };
-    recognition.onerror = (event) => { console.error('Speech recognition error:', event.error); setIsRecording(false); if (event.error === 'not-allowed') alert('语音输入需要麦克风权限，请在浏览器设置中允许'); };
-    recognitionRef.current = recognition; recognition.start(); setIsRecording(true);
+    toggleRecording(interactiveInput, setInteractiveInput);
   };
 
   return (
@@ -1370,6 +1347,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           interactiveStateMachine={interactiveStateMachine}
           isRecording={isRecording}
           voiceSupported={voiceSupported}
+          voiceError={voiceError}
           onInputChange={setInteractiveInput}
           onQuickAction={handleQuickAction}
           onSendFeedback={handleSendInteractiveFeedback}
@@ -1571,7 +1549,15 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
             <div className='space-y-1.5'>
               <label className='text-sm text-muted-foreground' htmlFor='found-errors-input'>你在讲解中发现了哪些错误？（选填，每行一条，点"学完了"后会核对）</label>
-              <textarea id='found-errors-input' className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' rows={2} placeholder='例如：边界条件应该是 <= 而不是 <' value={foundErrorsInput} onChange={e => setFoundErrorsInput(e.target.value)} />
+              <div className='flex gap-2'>
+                <textarea id='found-errors-input' className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' rows={2} placeholder='例如：边界条件应该是 <= 而不是 <' value={foundErrorsInput} onChange={e => setFoundErrorsInput(e.target.value)} />
+                {voiceSupported && (
+                  <Button type='button' variant='outline' size='icon' onClick={() => toggleRecording(foundErrorsInput, setFoundErrorsInput)} title={isRecording ? '点击停止录音' : '语音输入'} aria-label={isRecording ? '停止语音输入' : '开始语音输入'} className={isRecording ? 'bg-red-100 text-red-600 dark:bg-red-900' : ''}>
+                    <Mic className='h-4 w-4' />
+                  </Button>
+                )}
+              </div>
+              {voiceError && <p className='text-xs text-destructive' role='alert'>{voiceError}</p>}
             </div>
 
             {factCheckData && (

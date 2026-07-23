@@ -201,9 +201,8 @@ function _validDate(s) {
   const d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
   if (isNaN(d.getTime())) return false;
   if (d.getUTCFullYear() !== p[0] || d.getUTCMonth() + 1 !== p[1] || d.getUTCDate() !== p[2]) return false;
-  const n = new Date();
-  const t = n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
-  return s <= t;
+  // Time logs are written with toISOString(), so compare against the same UTC day.
+  return s <= new Date().toISOString().slice(0, 10);
 }
 function _validSec(v) { return typeof v === 'number' && Number.isFinite(v) && v > 0; }
 

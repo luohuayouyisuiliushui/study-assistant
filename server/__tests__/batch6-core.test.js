@@ -10,8 +10,14 @@ import { aggregatePlans, profileUpdater, getProfileSummary, hasBehaviorEvidence,
 import { AdaptivePromptInjector, MIN_BEHAVIOR_SAMPLES } from '../engine/adaptive-engine.js';
 
 // ─── Helper ───
-function yesterday() { const d = new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
-function tomorrow() { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); }
+function relativeUtcDate(days) {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function yesterday() { return relativeUtcDate(-1); }
+function tomorrow() { return relativeUtcDate(1); }
 
 // ═══════════════════════════════════════════════════════════
 //  aggregatePlans

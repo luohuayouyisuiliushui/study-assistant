@@ -1,15 +1,18 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Button } from '#/components/ui/button';
-import { SendHorizonal } from 'lucide-react';
+import { Mic, SendHorizonal } from 'lucide-react';
 import { QaMessages } from './TopicDetailShared.jsx';
+import useSpeechRecognition from '../hooks/useSpeechRecognition.js';
 
 export default function QAPanel({ qaList, onAsk, loading, scrollToRound, setHoveredRound, hoveredRound }) {
   const [input, setInput] = useState('');
   const inputRef = useRef(null);
+  const { supported: voiceSupported, isRecording, error: voiceError, toggleRecording, stopRecording } = useSpeechRecognition();
 
   const handleSubmit = () => {
     const q = input.trim();
     if (!q || loading) return;
+    stopRecording();
     onAsk(q);
     setInput('');
   };
@@ -43,10 +46,16 @@ export default function QAPanel({ qaList, onAsk, loading, scrollToRound, setHove
       <div className='p-4'>
         <form onSubmit={e => { e.preventDefault(); handleSubmit(); }} className='flex gap-2'>
           <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }} placeholder='输入你的追问...（Shift+Enter 换行，Enter 发送）' disabled={loading} rows={1} onInput={e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none' />
+          {voiceSupported && (
+            <Button type='button' variant='outline' size='icon' onClick={() => toggleRecording(input, setInput)} disabled={loading} title={isRecording ? '点击停止录音' : '语音输入'} aria-label={isRecording ? '停止语音输入' : '开始语音输入'} className={isRecording ? 'bg-red-100 text-red-600 dark:bg-red-900' : ''}>
+              <Mic className='h-4 w-4' />
+            </Button>
+          )}
           <Button type='button' onClick={handleSubmit} disabled={!input.trim() || loading} size='icon'>
             {loading ? <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' /> : <SendHorizonal className='h-4 w-4' />}
           </Button>
         </form>
+        {voiceError && <p className='mt-2 text-xs text-destructive' role='alert'>{voiceError}</p>}
       </div>
     </div>
   );

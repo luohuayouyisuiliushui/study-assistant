@@ -16,7 +16,7 @@ const MODE_LABELS = {
 export default function InteractivePanel({
   interactiveMode, interactiveSections, streamingContent,
   interactiveLoading, interactiveFinished, interactiveInput,
-  interactiveStateMachine, isRecording, voiceSupported,
+  interactiveStateMachine, isRecording, voiceSupported, voiceError,
   onInputChange, onQuickAction, onSendFeedback, onVoiceInput,
   onExit, onRegenerate,
 }) {
@@ -36,6 +36,7 @@ export default function InteractivePanel({
           </Button>
         )}
       </div>
+      {voiceError && <p className='text-xs text-destructive' role='alert'>{voiceError}</p>}
 
       {(interactiveMode === 'stepwise' || interactiveMode === 'stepwise-challenge') && interactiveStateMachine && (
         <div className='text-xs text-muted-foreground'>
@@ -80,7 +81,7 @@ export default function InteractivePanel({
               <div className='flex gap-2'>
                 <textarea ref={interactiveInputRef} value={interactiveInput} onChange={e => onInputChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSendFeedback(); } }} placeholder='输入你的讲解或回答...（Enter 发送）' rows={2} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' />
                 {voiceSupported && (
-                  <Button variant='outline' size='icon' onClick={onVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
+                  <Button variant='outline' size='icon' onClick={onVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} aria-label={isRecording ? '停止语音输入' : '开始语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
                     <Mic className='h-4 w-4' />
                   </Button>
                 )}
@@ -104,7 +105,7 @@ export default function InteractivePanel({
               <div className='flex gap-2'>
                 <textarea ref={interactiveInputRef} value={interactiveInput} onChange={e => onInputChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSendFeedback(); } }} placeholder='输入你的问题或反馈...（Enter 发送）' rows={2} className='flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring' />
                 {voiceSupported && (
-                  <Button variant='outline' size='icon' onClick={onVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
+                  <Button variant='outline' size='icon' onClick={onVoiceInput} disabled={interactiveLoading} title={isRecording ? '点击停止录音' : '语音输入'} aria-label={isRecording ? '停止语音输入' : '开始语音输入'} className={isRecording ? 'bg-red-100 dark:bg-red-900 text-red-600' : ''}>
                     <Mic className='h-4 w-4' />
                   </Button>
                 )}
