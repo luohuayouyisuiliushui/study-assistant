@@ -58,6 +58,7 @@
 | Service Worker 离线评分 | 独立 Chromium 中 Service Worker 已控制页面；评分 PATCH 入队 1 项，服务端不可用时保留；同源 `3002` 隔离服务恢复后重放清空队列并持久化 `userRating: 1` | 通过 |
 | 真实讲解生成 | 隔离计划主题“二加二”通过 `gpt-5.6-terra` 调用 generate 路由；持久化 Detail 长度 2247 字符，无 `lastError` | 通过 |
 | 真实互动教学 | 同一主题以 `stepwise` 模式调用 interactive-start；返回 `content`、`session` 和 `finished` 字段 | 通过 |
+| 真实 SSE 互动教学 | 隔离主题调用 interactive-start-sse；返回 `200 text/event-stream` 与 1 个 `data:` 事件 | 通过 |
 
 ## 依赖审计
 
@@ -76,6 +77,7 @@
 | `f4d1451d-7a46-450e-94e5-2921a1c7be63` | 失败场景端到端计划 | 是 | 已从垃圾箱精确永久删除 |
 | `f4e0b858-3bc4-46db-b85c-900815bd6155` | Service Worker 成功重放隔离计划 | 是 | 已精确永久删除 |
 | `e865a036-d789-4675-9171-4dca75461867` | 真实讲解与互动教学隔离计划 | 是 | 已精确永久删除 |
+| `e9da65f5-803a-45ce-bc11-31402335bb86` | 真实 SSE 互动教学隔离计划 | 是 | 已精确永久删除 |
 
 所有创建物均以唯一计划 ID 登记、逐条验证后删除；未执行通配符或递归清理。全量测试在清理流程后仍通过。
 
@@ -89,6 +91,6 @@
 ## 文档同步与剩余建议
 
 - README 已描述 Bundle 数据包还原和相关导出能力，且版本标题已同步至 `1.12.4`。
-- 已使用 `gpt-5.6-terra` 完成真实生成与互动教学烟测；TTS 仍需提供具备语音能力的图像/语音 Provider。
+- 已使用 `gpt-5.6-terra` 完成真实生成、互动教学和 SSE 互动教学烟测；TTS 仍需提供具备语音能力的图像/语音 Provider。
 - 已完成 Chromium 离线入队、失败保留和成功重放验证；建议将该浏览器场景固化为常规 Playwright 回归，并覆盖 Service Worker 更新提示。
 - oxlint 虽然退出码为 0，但保留既有 warning。后续应单独建任务逐步收敛，避免将无关格式或警告清理混入功能修复。
