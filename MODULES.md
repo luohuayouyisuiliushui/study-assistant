@@ -39,7 +39,7 @@
 - **入口与依赖：** Vite 入口为 `main.jsx`；依赖 React、React Router、后端 `/api/*` 路由和浏览器的 Service Worker API；测试在 `client/src/test/`。
 - **① 结构：** 应用壳与 API 边界清晰；Service Worker 注册保持在入口层，符合发布静态资源边界。
 - **② 逻辑与协议：** `api.js` 统一处理请求及离线评分消息；请求键优先级和 JSON 契约由服务端约束。错误会向调用组件传播。
-- **③ 测试：** Client 全套 16 文件、114 测试通过；具体 UI/API 调用由 PlanList、TopicDetail、Profile 等组件测试覆盖。
+- **③ 测试：** Client 全套 17 文件、118 测试通过；具体 UI/API 调用由 PlanList、TopicDetail、Profile 和 QAPanel 测试覆盖。
 - **④ 依赖与副作用：** 依赖 React/Vite/Router；网络请求、`sessionStorage` 与 Service Worker 为主要副作用。客户端生产依赖审计为 0 漏洞。
 - **⑤ 异味与可维护性：** `api.js` 是集中契约层，需继续避免把页面状态逻辑放入其中。
 - **⑥ 风险与改进点：** 中：真实离线重放需浏览器多轮场景回归；低：API 错误文案可逐步统一。无需为本轮新增 TODO。
@@ -49,8 +49,8 @@
 - **路径与职责：** `client/src/components/PlanList.jsx`、`PlanView.jsx`、`TopicDetail.jsx`、学习内容面板及相邻测试；承担计划创建/导入、筛选排序、内容学习、资源评分与导出入口。
 - **入口与依赖：** 由 `App.jsx` 路由渲染；依赖 `api.js`、Dialog/ActionMenu、Markdown 和图表组件。
 - **① 结构：** 计划列表、计划视图和知识点详情分层明确；Bundle 导入和排序均落在对应交互组件。
-- **② 逻辑与协议：** Bundle 成功响应使用 `plan` 契约；资源评分支持历史字符串与数字写入，失败可见；排序不改变持久化顺序。
-- **③ 测试：** `PlanList.test.jsx`、`PlanView.test.jsx`、`TopicDetail.test.jsx` 及 Client 全套均通过。
+- **② 逻辑与协议：** Bundle 成功响应使用 `plan` 契约；资源评分支持历史字符串与数字写入，失败可见；排序不改变持久化顺序。TopicDetail 复用浏览器语音识别，将转写追加到互动或错误反馈文本。
+- **③ 测试：** `PlanList.test.jsx`、`PlanView.test.jsx`、`TopicDetail.test.jsx`、`QAPanel.test.jsx` 及 Client 全套均通过。
 - **④ 依赖与副作用：** 主要副作用为计划 API、文件读取、`sessionStorage`；没有直接访问服务端数据目录。
 - **⑤ 异味与可维护性：** `TopicDetail.jsx` 职责密度较高，后续功能增长时适合按资源、反馈、操作菜单拆分。
 - **⑥ 风险与改进点：** 中：大型详情组件的回归成本；低：Bundle 非法文件的用户提示需持续保持与后端校验一致。
@@ -59,9 +59,9 @@
 
 - **路径与职责：** `ExamPaperModal.jsx`、`InteractivePanel.jsx`、`TodayReview.jsx`、`MistakePanel.jsx`、`ExercisePanel.jsx`、`QAPanel.jsx` 及测试；提供考试、纠错、间隔复习和互动教学。
 - **入口与依赖：** 从 PlanView/TopicDetail 发起，依赖评估与内容 API、通用确认弹窗。
-- **① 结构：** 业务流程按用户任务切分，确认类操作复用 `ConfirmDialog`。
-- **② 逻辑与协议：** 评分、复习和错题状态由服务端引擎作权威判定；客户端显示 SM-2 与掌握度结果。
-- **③ 测试：** `ExamPaperModal.test.jsx`、`TodayReview.test.jsx`、`MistakePanel.test.jsx` 和全套 Client 测试通过。
+- **① 结构：** 业务流程按用户任务切分，确认类操作复用 `ConfirmDialog`；`useSpeechRecognition.js` 让互动与追问共享浏览器识别生命周期。
+- **② 逻辑与协议：** 评分、复习和错题状态由服务端引擎作权威判定；客户端显示 SM-2 与掌握度结果。语音识别仅在支持的浏览器显示，权限、设备和网络错误以内联文本呈现，录音会在发送、切换或退出时停止。
+- **③ 测试：** `ExamPaperModal.test.jsx`、`TodayReview.test.jsx`、`MistakePanel.test.jsx`、`QAPanel.test.jsx` 和全套 Client 测试通过。
 - **④ 依赖与副作用：** 调用评估/复习 API；含用户可见的状态写入与确认操作。
 - **⑤ 异味与可维护性：** 交互流程状态较多，新增模式应沿用现有面板状态机而非复制请求逻辑。
 - **⑥ 风险与改进点：** 中：真实 AI 驱动互动模式需要有 Key 的集成回归；低：无。
@@ -126,11 +126,11 @@
 - **路径与职责：** `export-engine.js`、`html-exporter.js`、`user-profile.js`、`routes/export.js`、`routes/flywheel.js`；导出多种格式、维护用户画像并汇总反馈偏好。
 - **入口与依赖：** 导出菜单、用户画像页和计划 API；依赖 store 的 `readJSON`/`writeAtomic` 与浏览器下载。
 - **① 结构：** 导出与画像职责已独立；画像改为复用存储基础设施，消除单独的非原子写路径。
-- **② 逻辑与协议：** 画像主文件损坏时可读备份；资源评分进入推荐偏好；Bundle 为可恢复的完整数据契约。
-- **③ 测试：** `user-profile.test.js`、`export-engine.test.js`、`html-exporter.test.js` 与 Client HTML 导出测试通过。
+- **② 逻辑与协议：** 画像主文件损坏时可读备份；资源评分进入推荐偏好；Bundle 为可恢复的完整数据契约。学习时长由 `toISOString()` 写入，用户画像对日志日期也按 UTC 日界过滤，避免东八区零点后的未来日期误判。
+- **③ 测试：** `user-profile.test.js`、`batch6-core.test.js`、`export-engine.test.js`、`html-exporter.test.js` 与 Client HTML 导出测试通过。
 - **④ 依赖与副作用：** 持久化画像/计划、产生下载内容；生产依赖审计为 0 漏洞。
 - **⑤ 异味与可维护性：** 导出格式随产品扩展，应保持每种格式用途说明和契约测试。
-- **⑥ 风险与改进点：** 低：README 当前标题仍为 `v1.12.0`，而三个 package manifest 是 `1.12.1`；README 已有用户未提交改动，本轮未覆盖它。
+- **⑥ 风险与改进点：** 低：README 标题已与根目录、Server 和 Client manifest 的 `1.13.0` 同步。
 
 ### 10. 测试、脚本与开发工具 [已评估]
 
@@ -138,11 +138,11 @@
 - **入口与依赖：** npm scripts；依赖 Node test runner、Vitest/jsdom、oxlint、PowerShell。
 - **① 结构：** Server 测试串行运行以保护 JSON 文件；清理脚本在 pre/post test 钩子执行。
 - **② 逻辑与协议：** 清理脚本基于受保护计划和显式测试命名；数据完整性脚本只检测或由 `--fix` 明确修复。
-- **③ 测试：** Server 602/602、Client 114/114、生产构建和数据完整性检查均通过。
+- **③ 测试：** Server 603/603、Client 118/118、生产构建和数据完整性检查均通过。
 - **④ 依赖与副作用：** 清理脚本会修改测试数据与备份；本轮端到端创建物已按唯一 ID 清除。三个 manifest 的生产依赖 audit 均为 0 漏洞。
 - **⑤ 异味与可维护性：** oxlint 通过但保留既有警告；应渐进处理，不应为消警而扩大本轮范围。
 - **⑥ 风险与改进点：** 低：为离线 Service Worker 增加浏览器自动化回归可降低手动验证负担。
 
 ## 冻结结论
 
-本轮冻结 TODO 的 10 个缺陷均已实施和验证，未发现需要重新打开的产品任务。剩余风险为 TTS 的授权模型回归；这些均已在最终报告归档，未扩大为本轮产品改动。
+本轮冻结 TODO 的 10 个缺陷均已实施和验证，后续会话已补充浏览器语音输入和 UTC 日期边界修复，未发现需要重新打开的产品任务。TTS 接口保留；其对应授权模型的真实回归仍应在具备语音能力的 Provider 下单独执行。

@@ -85,12 +85,27 @@
 
 - 开始时已确认分支为 `codex/fix-audit-findings`。`git pull --rebase` 因工作区已有暂存及未暂存改动被 Git 拒绝，未执行 stash、reset、restore 或清理。
 - 工作区原本包含大量修改和未跟踪文件。收尾只新增 `MODULES.md`、`FINAL_REPORT.md`，并在归档完成后更新 `TODO.md`；未覆盖其他已有改动。
-- `README.md` 的已有内容完整保留；仅同步标题版本至当前 `1.12.4`，与三个 package manifest 一致。
+- `README.md` 的已有内容完整保留；后续 `v1.13.0` 语音输入更新已将标题与三个 package manifest 同步。
 - Reasonix 在当前会话中不可用，因此按流程降级为 PowerShell、git、npm、Node 和 Vite 本地工具；未产生可用的 Reasonix 成本记录。
 
 ## 文档同步与剩余建议
 
-- README 已描述 Bundle 数据包还原和相关导出能力，且版本标题已同步至 `1.12.4`。
+- README 已描述 Bundle 数据包还原和相关导出能力，且版本标题已同步至 `1.13.0`。
 - 已使用 `gpt-5.6-terra` 完成真实生成、互动教学和 SSE 互动教学烟测；TTS 仍需提供具备语音能力的图像/语音 Provider。
 - 已完成 Chromium 离线入队、失败保留和成功重放验证；建议将该浏览器场景固化为常规 Playwright 回归，并覆盖 Service Worker 更新提示。
 - oxlint 虽然退出码为 0，但保留既有 warning。后续应单独建任务逐步收敛，避免将无关格式或警告清理混入功能修复。
+
+## 2026-07-24 后续会话补充
+
+本节记录冻结收尾之后的独立功能会话，不改变上文 10 项冻结任务的范围或验收结论。
+
+| 项目 | 改动 | 验证 |
+|---|---|---|
+| 浏览器语音转文字 | 新增 `useSpeechRecognition.js`，在互动教学、扩展追问和错误反馈输入框提供中文语音转文字；识别结果追加到已有文本，权限/设备/网络问题以内联提示呈现，发送或切换流程会停止识别。 | `QAPanel.test.jsx` 覆盖转写追加、停止、无浏览器支持和权限错误。 |
+| TTS 保留 | 未删除或改动现有 TTS 路由和 API；本次仅增加用户语音转文字。 | 代码审查确认内容路由与 API 仍保持原有接口。 |
+| 学习时长日期边界 | `user-profile.js` 改为使用 UTC 日期过滤 `timeLog`，与 `toISOString()` 写入规则一致；测试辅助函数也改为生成 UTC 相对日期。 | `batch6-core.test.js` 定向通过；此前东八区零点后出现的未来日期误判已被覆盖。 |
+| 版本 | 根目录、Server 和 Client manifest/lockfile 同步为 `1.13.0`。 | 包清单检查通过。 |
+
+后续会话验证结果：Server 全套 603/603（188 suites）、Client 全套 118/118（17 文件）、Client 生产构建、Server/Client lint 和 `npm run check:data --prefix server` 均退出成功。lint 仅保留既有非阻塞 warning。
+
+功能提交为 `af39ef7`（`feat(voice-input): 新增浏览器语音转文字输入`）。`git pull --rebase` 与 `git push` 均因本机代理无法连接 GitHub 而失败；本地分支当时领先远端一个提交。详细会话记录见 [docs/session-2026-07-24-voice-input.md](docs/session-2026-07-24-voice-input.md)。
