@@ -10,7 +10,30 @@ import {
   computeRequestHash,
   extractUsage,
   assessPrefixStability,
+  createOpenAICompatibleFetch,
 } from '../engine/provider.js';
+
+describe('createOpenAICompatibleFetch', () => {
+  it('removes the SDK User-Agent while preserving request headers', async () => {
+    let receivedInit;
+    const compatibleFetch = createOpenAICompatibleFetch(async (_url, init) => {
+      receivedInit = init;
+      return new Response('ok');
+    });
+
+    await compatibleFetch('https://relay.example/v1/chat/completions', {
+      headers: {
+        Authorization: 'Bearer test-key',
+        'Content-Type': 'application/json',
+        'User-Agent': 'OpenAI/JS 6.45.0',
+      },
+    });
+
+    assert.equal(receivedInit.headers.get('user-agent'), null);
+    assert.equal(receivedInit.headers.get('authorization'), 'Bearer test-key');
+    assert.equal(receivedInit.headers.get('content-type'), 'application/json');
+  });
+});
 
 // ═══════════════════════════════════════════════════════════
 // isUnsupportedParameterError — detects relay-unsupported params

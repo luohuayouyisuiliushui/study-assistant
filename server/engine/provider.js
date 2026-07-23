@@ -64,6 +64,15 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+export function createOpenAICompatibleFetch(fetchImpl = globalThis.fetch) {
+  return async (url, init = {}) => {
+    const headers = new Headers(init.headers);
+    // Some OpenAI-compatible relays reject the SDK's branded User-Agent.
+    headers.delete('user-agent');
+    return fetchImpl(url, { ...init, headers });
+  };
+}
+
 // ─── Cache Key Computation ───
 
 /**
@@ -558,6 +567,7 @@ export class Provider {
     this._client = new OpenAI({
       apiKey: this._apiKey,
       baseURL: this._baseURL,
+      fetch: createOpenAICompatibleFetch(),
       maxRetries: 0, // We handle retry ourselves
       timeout: 30_000,
     });

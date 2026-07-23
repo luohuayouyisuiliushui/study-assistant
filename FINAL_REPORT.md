@@ -42,9 +42,9 @@
 | Client lint | `npm run lint`（在 `client/`） | 退出码 0；存在既有 warning | 通过（非阻塞 warning） |
 | 数据完整性 | `npm run check:data`（在 `server/`） | 退出码 0 | 通过 |
 | JS 语法检查 | `node --check`（已改 Server 文件） | 退出码 0 | 通过 |
-| 外部 Provider 烟测（收尾后） | 临时环境变量 + 项目 `Provider`；模型目录认证成功，但 `gpt-4o-mini`、`gpt-5.4-mini`、`claude-haiku-4-5` 的 Chat Completions 均返回 403 | [环境阻塞：代理模型权限] |
+| 外部 Provider 烟测（收尾后） | 原始请求与 SDK 请求对比确认代理拒绝 SDK `User-Agent`；Provider 删除该头后，使用临时凭据与 `gpt-5.6-terra` 的连接和最小 Chat Completion 均成功 | 通过；未写入任何凭据 |
 
-可计算自动化测试共 716/716 通过（Server 602 + Client 114），通过率 100%。真实 AI Provider 调用属于外部凭据和网络场景，不将未新增执行的烟测计入该统计。
+可计算自动化测试共 717/717 通过（Server 603 + Client 114），通过率 100%。外部 Provider 烟测另行通过，不计入该统计。
 
 ## 端到端验证结果
 
