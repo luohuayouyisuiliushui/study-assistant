@@ -42,6 +42,7 @@
 | Client lint | `npm run lint`（在 `client/`） | 退出码 0；存在既有 warning | 通过（非阻塞 warning） |
 | 数据完整性 | `npm run check:data`（在 `server/`） | 退出码 0 | 通过 |
 | JS 语法检查 | `node --check`（已改 Server 文件） | 退出码 0 | 通过 |
+| 外部 Provider 烟测（收尾后） | 临时环境变量 + 项目 `Provider`；模型目录认证成功，但 `gpt-4o-mini`、`gpt-5.4-mini`、`claude-haiku-4-5` 的 Chat Completions 均返回 403 | [环境阻塞：代理模型权限] |
 
 可计算自动化测试共 716/716 通过（Server 602 + Client 114），通过率 100%。真实 AI Provider 调用属于外部凭据和网络场景，不将未新增执行的烟测计入该统计。
 
@@ -84,6 +85,6 @@
 ## 文档同步与剩余建议
 
 - README 已描述 Bundle 数据包还原和相关导出能力，因此本轮功能文档无需另行扩写；唯一发现的版本标题不一致见上节。
-- 建议在拥有隔离 OpenAI Key 时运行一次真实生成/互动流程烟测。
+- 建议使用已授权可调用 Chat Completions 的模型运行真实生成/互动流程烟测；本轮提供的代理凭据可读取模型目录，但没有上述候选模型的调用权限。
 - 已完成 Chromium 离线入队与失败重放保留验证；建议以 Playwright 等浏览器自动化继续覆盖网络恢复后的成功重放和 Service Worker 更新提示。
 - oxlint 虽然退出码为 0，但保留既有 warning。后续应单独建任务逐步收敛，避免将无关格式或警告清理混入功能修复。
