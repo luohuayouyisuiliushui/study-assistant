@@ -27,7 +27,7 @@
 | Dialog 焦点与 Escape | 回归 | 打开、Tab/Shift+Tab、Escape、关闭；焦点进入、圈定并恢复 | `npx vitest run client/src/test/Dialog.test.jsx` | [已有，已执行] |
 | PlanView 排序 | 正常/边界 | 待复习、低掌握度、最近访问和空结果 | `npx vitest run client/src/test/PlanView.test.jsx` | [已有，已执行] |
 | 计划级弹窗与操作菜单 | 回归 | Escape、模态语义、菜单方向键和关闭后焦点 | Client Vitest 全套 | [已有，已执行] |
-| 评分离线重放 | 集成 | 网络失败的评分写入队列，恢复后安全重放；仅缓存 GET | Service Worker 静态走读和评分隔离接口验证 | [仅手动，已执行] |
+| 评分离线重放 | 集成 | 网络失败的评分写入队列，恢复后安全重放；仅缓存 GET | Chromium + 同源隔离服务验证入队、失败保留、成功重放和评分持久化 | [已执行] |
 | 用户画像备份恢复 | 集成 | 主文件损坏时从备份读取；写入使用原子替换 | `node --test server/__tests__/user-profile.test.js` | [已有，已执行] |
 | 真实 AI Provider | 集成/外部 | 已授权模型下的连接和最小 Chat Completion | 临时凭据 + 项目 `Provider` | [已执行] |
 
@@ -145,4 +145,4 @@
 
 ## 冻结结论
 
-本轮冻结 TODO 的 10 个缺陷均已实施和验证，未发现需要重新打开的产品任务。剩余风险为完整 AI 讲解、流式和 TTS 的授权模型回归、真实浏览器网络恢复重放，以及 README 与 package 版本标题的既有不一致；这些均已在最终报告归档，未扩大为本轮产品改动。
+本轮冻结 TODO 的 10 个缺陷均已实施和验证，未发现需要重新打开的产品任务。剩余风险为完整 AI 讲解、流式和 TTS 的授权模型回归，以及 README 与 package 版本标题的既有不一致；这些均已在最终报告归档，未扩大为本轮产品改动。

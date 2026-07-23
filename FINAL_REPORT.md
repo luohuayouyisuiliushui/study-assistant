@@ -26,7 +26,7 @@
 | P2-01 生成反馈闭环 | `learn-prompts.js` 接受受控反馈参数；`learn-engine.js` 仅传入最近五条 `detail` 模式反馈。 | `learn-engine.test.js` 验证过滤与单次注入；真实 OpenAI 调用仍需外部 Key。 |
 | P2-02 通用 Dialog 可访问性 | `client/src/components/ui/dialog.jsx` 与 `use-modal-accessibility.js` 实现模态语义、初始焦点、焦点圈定、Escape 和恢复。 | `Dialog.test.jsx` 通过。 |
 | P2-03 PlanView 学习优先级排序 | `PlanView.jsx` 增加待复习、低掌握度、最近访问排序，保持筛选与组件切换行为。 | `PlanView.test.jsx` 通过。 |
-| P1-05 离线队列与动态读取 | `api.js` 在安全评分失败时向 Service Worker 排队；`sw.js` 用路径匹配缓存安全 GET，并只重放允许写入。 | 评分持久化隔离验证通过；独立 Chromium 预览确认 Service Worker 接管页面、评分进入队列，离线重放失败后队列仍保留。 |
+| P1-05 离线队列与动态读取 | `api.js` 在安全评分失败时向 Service Worker 排队；`sw.js` 用路径匹配缓存安全 GET，并只重放允许写入。 | Chromium 验证了接管页面、评分入队、离线失败保留，以及可用服务端上的成功重放和评分持久化。 |
 | P2-04 计划级弹窗键盘支持 | `KnowledgeGraphModal.jsx`、`MindMapModal.jsx`、`ExamPaperModal.jsx` 复用模态可访问性能力。 | Client 全套通过；Escape/模态语义包含在回归范围。 |
 | P2-05 更多操作菜单键盘支持 | `ActionMenu.jsx` 提供菜单角色、展开状态、方向键导航、Escape 和触发元素焦点恢复。 | 菜单角色导出测试与 Client 全套通过。 |
 
@@ -55,7 +55,7 @@
 | Bundle 数据包导入 | POST `/api/learn/plans/import/bundle` 返回 `plan.id`；首个主题标题为 `bundle-topic` | 通过 |
 | 资源评分持久化 | 对隔离计划调用 PATCH 评分 `{ "rating": 1 }`；随后 GET 返回 `userRating: 1` | 通过 |
 | 服务端测试数据清理 | 导入、失败场景和评分夹具均精确删除；没有残留已登记的 E2E 垃圾箱条目 | 通过 |
-| Service Worker 离线评分 | 独立 `5174` 预览中 Service Worker 已控制页面；评分 PATCH 入队 1 项，后端不可用时重放后保留 1 项 | 通过 |
+| Service Worker 离线评分 | 独立 Chromium 中 Service Worker 已控制页面；评分 PATCH 入队 1 项，服务端不可用时保留；同源 `3002` 隔离服务恢复后重放清空队列并持久化 `userRating: 1` | 通过 |
 
 ## 依赖审计
 
@@ -86,5 +86,5 @@
 
 - README 已描述 Bundle 数据包还原和相关导出能力，因此本轮功能文档无需另行扩写；唯一发现的版本标题不一致见上节。
 - 建议使用已授权可调用 Chat Completions 的模型运行真实生成/互动流程烟测；本轮提供的代理凭据可读取模型目录，但没有上述候选模型的调用权限。
-- 已完成 Chromium 离线入队与失败重放保留验证；建议以 Playwright 等浏览器自动化继续覆盖网络恢复后的成功重放和 Service Worker 更新提示。
+- 已完成 Chromium 离线入队、失败保留和成功重放验证；建议将该浏览器场景固化为常规 Playwright 回归，并覆盖 Service Worker 更新提示。
 - oxlint 虽然退出码为 0，但保留既有 warning。后续应单独建任务逐步收敛，避免将无关格式或警告清理混入功能修复。
