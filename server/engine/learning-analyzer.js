@@ -5,7 +5,7 @@
 
 import { Provider } from './provider.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
-import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory, addHistory, updateTopic, saveCoreAnalysis } from './learn-store.js';
+import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory, addHistory, updateTopic, saveCoreAnalysis, saveExerciseResults, saveReviewResults, saveReviewSession, getPlan } from './learn-store.js';
 import {
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, FEYNMAN_ANALYSIS_PROMPT,
@@ -247,17 +247,57 @@ export async function analyzeCoreTopics(provider, plan, model = 'gpt-4o-mini', {
  * Generate a concise review for an already-learned knowledge point.
  * Focuses on weak points and provides targeted practice.
  */
-export async function generateReview(providerOrConfig, plan, topicId, model = 'gpt-4o-mini') {
+export async function generateReview(providerOrConfig, plan, topicId, model = 'gpt-4o-mini', {
+  now = Date.now(),
+  mistakeId = null,
+} = {}) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
+  const repairMistake = mistakeId === null
+    ? null
+    : (topic.mistakes || []).find(mistake => mistake.id === mistakeId);
+  if (mistakeId !== null && !repairMistake) {
+    const error = new Error('错题不存在');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (repairMistake && !['open', 'repairing'].includes(repairMistake.status)) {
+    const error = new Error('该错题当前不可修复');
+    error.statusCode = 409;
+    throw error;
+  }
   if (!topic.detail) throw new Error('该知识点还没有讲解内容，无法生成复习');
 
   const provider = resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
 
-  // Build review context
-  const weakPointsList = (topic.weakPoints && topic.weakPoints.length > 0)
-    ? topic.weakPoints.join('、')
-    : '无明确薄弱点（进行全面回顾）';
+  // Build weak-point context from new MistakeRecord data (preferred over legacy weakPoints).
+  // Sort active mistakes by severity then recurrence so the prompt focuses on the worst first.
+  const SEV = { high: 3, medium: 2, low: 1 };
+  const activeMistakes = (topic.mistakes || [])
+    .filter(m => m.status === 'open' || m.status === 'repairing')
+    .sort((a, b) =>
+      (SEV[b.severity] || 0) - (SEV[a.severity] || 0) ||
+      (b.occurrenceCount || 0) - (a.occurrenceCount || 0)
+    );
+
+  const weakPointsList = activeMistakes.length > 0
+    ? activeMistakes.map(m => {
+        const sevLabel = m.severity === 'high' ? '高' : m.severity === 'medium' ? '中' : '低';
+        const stateLabel = m.status === 'repairing' ? '修复中待验证' : '未解决';
+        return `${m.conceptLabel}（严重程度:${sevLabel}，出错 ${m.occurrenceCount} 次，${stateLabel}）`;
+      }).join('\n  - ')
+    : (topic.weakPoints && topic.weakPoints.length > 0)
+      ? topic.weakPoints.join('、')
+      : '无明确薄弱点（进行全面回顾）';
+
+  // Mastery level context — lets the prompt calibrate depth of review.
+  const masteryStatusMap = {
+    unassessed: '未评估', learning: '学习中', needsWork: '需加强',
+    developing: '进步中', mastered: '已掌握',
+  };
+  const masteryInfo = topic.mastery
+    ? `掌握度 ${Math.round((topic.mastery.level || 0) * 100)}%（${masteryStatusMap[topic.mastery.status] || topic.mastery.status}，共 ${topic.mastery.sampleSize || 0} 次评估）`
+    : '掌握度：暂无评估数据';
 
   // Collect exam errors for this topic
   let examErrorsText = '';
@@ -291,18 +331,33 @@ export async function generateReview(providerOrConfig, plan, topicId, model = 'g
   }
   const recentQa = pairs.slice(-5).map(p => `用户问: ${p.q}\n助手答: ${p.a.slice(0, 200)}`).join('\n\n');
 
-  const context = [
-    '=== 复习上下文 ===',
-    examErrorsText,
-    '知识点: ' + topic.title,
-    '薄弱点: ' + weakPointsList,
-    '',
-    '=== 原讲解内容 ===',
-    topic.detail.slice(0, 8000), // trim to fit context window
-    '',
-    '=== 近期追问记录 ===',
-    recentQa || '无追问记录',
-  ].join('\n');
+  const context = repairMistake
+    ? [
+        '=== 单一错题修复 ===',
+        '知识点: ' + topic.title,
+        '目标概念: ' + repairMistake.conceptLabel,
+        '复发次数: ' + repairMistake.occurrenceCount,
+        '要求: 只讲解并练习目标概念，不扩展到其他薄弱点。',
+        `要求: 每道练习的关联概念必须写为「${repairMistake.conceptLabel}」。`,
+        '',
+        '=== 原讲解内容 ===',
+        topic.detail.slice(0, 8000),
+      ].join('\n')
+    : [
+        '=== 复习上下文 ===',
+        examErrorsText,
+        '知识点: ' + topic.title,
+        masteryInfo,
+        activeMistakes.length > 0
+          ? '活跃错题（按严重程度排序）:\n  - ' + weakPointsList
+          : '薄弱点: ' + weakPointsList,
+        '',
+        '=== 原讲解内容 ===',
+        topic.detail.slice(0, 8000), // trim to fit context window
+        '',
+        '=== 近期追问记录 ===',
+        recentQa || '无追问记录',
+      ].join('\n');
 
   const messages = [
     { role: 'system', content: STABLE_REVIEW_SYSTEM_PROMPT },
@@ -311,14 +366,16 @@ export async function generateReview(providerOrConfig, plan, topicId, model = 'g
 
   const result = await provider.complete(messages, { maxTokens: 4096, temperature: 0.5 });
   const reviewContent = result.content || '';
-
-  // Save review to topic
-  await updateTopic(plan.id, topicId, {
-    reviewGenerated: reviewContent,
-    reviewUpdatedAt: Date.now(),
-  });
-  topic.reviewGenerated = reviewContent;
-  topic.reviewUpdatedAt = Date.now();
+  const parsedExercises = parseExercisesFromDetail(reviewContent);
+  const exercises = repairMistake
+    ? parsedExercises.map(exercise => ({ ...exercise, conceptTag: repairMistake.conceptLabel }))
+    : parsedExercises;
+  await saveReviewSession(plan.id, topicId, {
+    kind: repairMistake ? 'repair' : 'review',
+    mistakeId: repairMistake?.id || null,
+    content: reviewContent,
+    exercises,
+  }, { now });
 
   return reviewContent;
 }
@@ -331,26 +388,74 @@ export async function generateReview(providerOrConfig, plan, topicId, model = 'g
  * @param {Array} userAnswers - [{ exerciseIndex, userAnswer }, ...]
  * @returns {Array} Graded results
  */
-export async function gradeExercises(providerOrConfig, plan, topicId, userAnswers) {
+export async function gradeExercises(providerOrConfig, plan, topicId, userAnswers, assessment = {}) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
+
+  const context = assessment.context ?? 'exercise';
+  if (!['exercise', 'review', 'repair'].includes(context)) {
+    throw new TypeError('context must be exercise, review, or repair');
+  }
+
+  // Idempotency check (exercise context only, per scope): if this attemptRef was
+  // already committed and its grading payload was persisted, return the saved
+  // payload immediately without calling the provider. Reads the store cache
+  // directly so retries see the latest persisted state even with a stale `plan`.
+  if (context === 'exercise' && typeof assessment.attemptRef === 'string') {
+    const freshTopic = getPlan(plan.id)?.topics.find(candidate => candidate.id === topicId);
+    const cached = freshTopic?.lastExerciseGrading;
+    if (cached && cached.attemptRef === assessment.attemptRef.trim() && Array.isArray(cached.results)) {
+      return cached.results;
+    }
+  }
+
+  let exercises;
+  if (context === 'review' || context === 'repair') {
+    const session = topic.reviewSession;
+    const expectedKind = context;
+    if (!session || session.id !== assessment.sessionId || session.kind !== expectedKind) {
+      const error = new Error('复习会话已过期，请重新生成');
+      error.statusCode = 409;
+      error.code = 'STALE_REVIEW_SESSION';
+      throw error;
+    }
+    if (!Array.isArray(session.exercises) || session.exercises.length === 0) {
+      const error = new Error('复习会话没有可评分练习，请重新生成');
+      error.statusCode = 422;
+      error.code = 'EMPTY_REVIEW_EXERCISES';
+      throw error;
+    }
+    if (context === 'repair') {
+      const mistakeId = typeof assessment.mistakeId === 'string' ? assessment.mistakeId.trim() : '';
+      const mistake = (topic.mistakes || []).find(candidate => candidate.id === mistakeId);
+      if (session.mistakeId !== mistakeId || !mistake || !['open', 'repairing'].includes(mistake.status)) {
+        const error = new Error('错题修复会话已失效，请重新开始修复');
+        error.statusCode = 409;
+        error.code = 'STALE_REPAIR_MISTAKE';
+        throw error;
+      }
+    }
+    exercises = structuredClone(session.exercises);
+  }
 
   const provider = resolveProvider(providerOrConfig);
 
   // Get exercises from topic or parse from detail
-  let exercises = topic.exercises || [];
-  if (exercises.length === 0 && topic.detail) {
-    exercises = parseExercisesFromDetail(topic.detail);
-  }
-  // Merge any existing persisted user answers back (defensive: handles edge case
-  // where topic.exercises was empty but user had prior partial submissions)
-  if (topic.exercises && topic.exercises.length > 0) {
-    for (const existing of topic.exercises) {
-      if (existing.userAnswer !== null || existing.correct !== null) {
-        const match = exercises.find(e => e.id === existing.id);
-        if (match) {
-          if (existing.userAnswer !== null) match.userAnswer = existing.userAnswer;
-          if (existing.correct !== null) match.correct = existing.correct;
+  if (!exercises) {
+    exercises = structuredClone(topic.exercises || []);
+    if (exercises.length === 0 && topic.detail) {
+      exercises = parseExercisesFromDetail(topic.detail);
+    }
+    // Merge any existing persisted user answers back (defensive: handles edge case
+    // where topic.exercises was empty but user had prior partial submissions)
+    if (topic.exercises && topic.exercises.length > 0) {
+      for (const existing of topic.exercises) {
+        if (existing.userAnswer !== null || existing.correct !== null) {
+          const match = exercises.find(e => e.id === existing.id);
+          if (match) {
+            if (existing.userAnswer !== null) match.userAnswer = existing.userAnswer;
+            if (existing.correct !== null) match.correct = existing.correct;
+          }
         }
       }
     }
@@ -387,7 +492,7 @@ export async function gradeExercises(providerOrConfig, plan, topicId, userAnswer
     throw new Error('AI 评分结果格式错误');
   }
 
-  // Update topic exercises with user answers and grading
+  // Update topic exercises with user answers and grading.
   if (gradingResults.results && Array.isArray(gradingResults.results)) {
     for (const grade of gradingResults.results) {
       const idx = grade.exerciseIndex;
@@ -397,8 +502,17 @@ export async function gradeExercises(providerOrConfig, plan, topicId, userAnswer
         exercises[idx].gradedAt = Date.now();
       }
     }
-    await updateTopic(plan.id, topicId, { exercises });
-    topic.exercises = exercises;
+    if (context === 'review' || context === 'repair') {
+      await saveReviewResults(plan.id, topicId, gradingResults.results, {
+        ...assessment,
+        context,
+      });
+    } else if (assessment.attemptRef !== undefined) {
+      await saveExerciseResults(plan.id, topicId, exercises, gradingResults.results, assessment);
+    } else {
+      await updateTopic(plan.id, topicId, { exercises });
+      topic.exercises = exercises;
+    }
   }
 
   return gradingResults.results || [];

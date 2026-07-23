@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Download, Brain } from 'lucide-react';
 import { Button } from '#/components/ui/button';
+import { useModalAccessibility } from './ui/use-modal-accessibility';
 
 function buildTree(plan) {
   const phaseMap = {};
@@ -60,6 +61,7 @@ function treeToMarkdown(nodes, depth = 1) {
 export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   const svgRef = useRef(null);
   const mmRef = useRef(null);
+  const dialogRef = useModalAccessibility(onClose);
   const [error, setError] = useState(null);
   const [topicIdMap, setTopicIdMap] = useState({});
 
@@ -162,7 +164,7 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
 
   return (
     <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
-      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} data-dialog-root role='dialog' aria-modal='true' aria-label={`思维导图：${plan.name}`} tabIndex={-1} className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
         <div className='flex items-center justify-between border-b px-4 py-2.5'>
           <span className='flex items-center gap-2 text-sm font-medium'>
             <Brain className='h-4 w-4 text-primary' />
@@ -172,7 +174,7 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
             <Button variant='ghost' size='sm' onClick={handleExportXMind} title='导出 XMind 兼容格式'>
               <Download className='h-3.5 w-3.5 mr-1' />导出
             </Button>
-            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
+            <Button variant='ghost' size='icon' onClick={onClose} aria-label='关闭思维导图'><X className='h-4 w-4' /></Button>
           </div>
         </div>
         <div className='flex-1 overflow-auto p-4'>

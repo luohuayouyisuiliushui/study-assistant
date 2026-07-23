@@ -309,6 +309,41 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
           )}
 
           {/*
+           * ─── Offline / Online Boundary ───
+           */}
+          <div className='rounded-lg border border-border bg-muted/30 p-4 flex flex-col gap-3'>
+            <h3 className='text-sm font-semibold flex items-center gap-1.5'>
+              <span className='text-base leading-none'>📶</span>无网络 / 无 API Key 时可用的功能
+            </h3>
+            <div className='grid grid-cols-2 gap-2 text-xs'>
+              <div className='flex flex-col gap-1.5'>
+                <div className='font-medium text-green-700 dark:text-green-400 flex items-center gap-1'>
+                  <span className='inline-block w-2 h-2 rounded-full bg-green-500'></span>无需联网
+                </div>
+                <ul className='space-y-0.5 text-muted-foreground pl-3'>
+                  <li>📚 浏览已有知识点与笔记</li>
+                  <li>🔁 错题复习（SM-2 调度）</li>
+                  <li>✅ 标记完成 / 记录学习时长</li>
+                  <li>📤 导出 MD / HTML / Anki / JSON</li>
+                  <li>🗂️ 回收站管理</li>
+                </ul>
+              </div>
+              <div className='flex flex-col gap-1.5'>
+                <div className='font-medium text-amber-700 dark:text-amber-400 flex items-center gap-1'>
+                  <span className='inline-block w-2 h-2 rounded-full bg-amber-500'></span>需要 API Key
+                </div>
+                <ul className='space-y-0.5 text-muted-foreground pl-3'>
+                  <li>✨ AI 生成学习内容（Detail）</li>
+                  <li>💬 互动讲解 / Feynman 模式</li>
+                  <li>📊 学习分析 / 薄弱点诊断</li>
+                  <li>👤 学习者画像更新</li>
+                  <li>🖼️ 题图生成（TTS / 配图）</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          {/*
            * ─── Actions ───
            */}
           <div className='flex items-center justify-end gap-2 pt-4 border-t'>

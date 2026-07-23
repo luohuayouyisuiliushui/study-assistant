@@ -1,12 +1,12 @@
 {
   "name": "study-assistant-server",
-  "version": "1.10.0",
+  "version": "1.12.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
-    "test": "node --test --test-concurrency=1 --test-force-exit \"__tests__/*.test.js\"",
+    "test": "node --test --test-concurrency=1 \"__tests__/*.test.js\"",
     "pretest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
     "posttest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
     "clean:testdata": "node scripts/clean-test-plans.js",

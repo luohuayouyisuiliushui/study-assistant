@@ -486,10 +486,10 @@ export function buildDeterministicContext(plan, topicId, generationFeedback, exp
  * Returns: [system_msg, context_msg] — BOTH are stable when state hasn't changed.
  * The caller appends the actual user question/message AFTER these.
  */
-export function buildDetailMessages(plan, topicId, question, explainStyle) {
+export function buildDetailMessages(plan, topicId, question, explainStyle, generationFeedback = []) {
   const messages = [
     { role: 'system', content: STABLE_DETAIL_SYSTEM_PROMPT },
-    { role: 'user', content: buildDeterministicContext(plan, topicId, undefined, explainStyle) },
+    { role: 'user', content: buildDeterministicContext(plan, topicId, generationFeedback, explainStyle) },
   ];
 
   // The actual question comes AFTER the stable prefix

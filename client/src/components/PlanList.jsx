@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { detectEncoding } from '../utils/encoding';
 import api from '../api';
+import TodayReview from './TodayReview';
 import { Button } from '#/components/ui/button';
 import { Card, CardContent } from '#/components/ui/card';
 import { Badge } from '#/components/ui/badge';
@@ -12,6 +13,7 @@ import {
   BookOpen,
   Clock3,
   FileText,
+  KeyRound,
   Layers3,
   Plus,
   RotateCcw,
@@ -20,6 +22,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 
 const getTopicCount = (plan) => plan.topicCount ?? plan.topics?.length ?? 0;
 
@@ -32,7 +35,7 @@ function formatPlanDate(timestamp) {
   }
 }
 
-export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete }) {
+export default function PlanList({ plans, onCreate, onImport, onImportBundle, onSelect, onDelete, onOpenReview, hasApiKey = true, onOpenSettings }) {
   const [mode, setMode] = useState('manual');
   const [newName, setNewName] = useState('');
   const [importText, setImportText] = useState('');
@@ -42,6 +45,10 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
   const [trashPlans, setTrashPlans] = useState([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const bundleInputRef = useRef(null);
+  const [confirmPermanentDelete, setConfirmPermanentDelete] = useState(null); // { id, name }
+  const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
+  const [confirmMoveToTrash, setConfirmMoveToTrash] = useState(null); // { id, name }
 
   useEffect(() => {
     api.listTrash().then(d => setTrashPlans(d.plans || [])).catch(() => {});
@@ -91,6 +98,25 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
     e.target.value = '';
   };
 
+  const handleBundleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || importing || !onImportBundle) return;
+
+    setImporting(true);
+    try {
+      const bundle = JSON.parse(await file.text());
+      if (!bundle || typeof bundle !== 'object' || !bundle.plan) {
+        throw new Error('请选择由本应用导出的有效计划数据包');
+      }
+      await onImportBundle(bundle);
+    } catch (err) {
+      alert('导入计划数据包失败: ' + (err?.message || '文件不是有效 JSON'));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const openTrash = async () => {
     setTrashOpen(true);
     setTrashLoading(true);
@@ -113,7 +139,10 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
   };
 
   const handlePermanentDelete = async (id, name) => {
-    if (!confirm(`确定要永久删除计划「${name}」吗？此操作不可撤销。`)) return;
+    setConfirmPermanentDelete({ id, name });
+  };
+
+  const doPermanentDelete = async (id) => {
     try {
       await api.permanentlyDeleteTrash(id);
       setTrashPlans(prev => prev.filter(p => p.id !== id));
@@ -122,7 +151,10 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
 
   const handleEmptyTrash = async () => {
     if (trashPlans.length === 0) return;
-    if (!confirm(`确定要一键清空回收站吗？（共 ${trashPlans.length} 个计划，此操作不可撤销）`)) return;
+    setConfirmEmptyTrash(true);
+  };
+
+  const doEmptyTrash = async () => {
     try {
       await api.emptyTrash();
       setTrashPlans([]);
@@ -175,6 +207,8 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
         </div>
       </section>
 
+      <TodayReview onOpen={onOpenReview} />
+
       <section className="creation-panel" aria-labelledby="create-plan-title">
         <div className="creation-panel__heading">
           <div>
@@ -226,6 +260,10 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
                   <Upload className="h-4 w-4 mr-1.5" />选择 TXT / Markdown
                 </Button>
                 <input ref={fileInputRef} type="file" accept=".txt,.md" onChange={handleFile} hidden />
+                <Button variant="outline" onClick={() => bundleInputRef.current?.click()} disabled={importing}>
+                  <Layers3 className="h-4 w-4 mr-1.5" />恢复计划数据包
+                </Button>
+                <input ref={bundleInputRef} type="file" accept=".json,application/json" onChange={handleBundleFile} hidden />
                 <span className="import-create-form__hint"><FileText className="h-3.5 w-3.5" />文件仅在本地读取后发送给当前服务</span>
               </div>
             </div>
@@ -263,9 +301,24 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
 
         {plans.length === 0 && !searchQuery.trim() && (
           <div className="plans-empty-state">
-            <span><BookOpen className="h-7 w-7" /></span>
-            <h4>还没有学习计划</h4>
-            <p>在上方输入一个主题，或粘贴资料让 AI 帮你完成第一次拆解。</p>
+            {!hasApiKey ? (
+              <>
+                <span><KeyRound className="h-7 w-7 text-amber-500" /></span>
+                <h4>先配置 API Key，再开始学习</h4>
+                <p>需要一个 OpenAI / DeepSeek / SiliconFlow 等兼容 OpenAI 协议的 API Key，AI 才能生成讲解和批改练习。</p>
+                {onOpenSettings && (
+                  <Button size="sm" className="mt-2" onClick={onOpenSettings}>
+                    <KeyRound className="h-3.5 w-3.5 mr-1.5" />前往设置填写 API Key
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                <span><BookOpen className="h-7 w-7" /></span>
+                <h4>还没有学习计划</h4>
+                <p>在上方输入一个主题，或粘贴资料让 AI 帮你完成第一次拆解。</p>
+              </>
+            )}
           </div>
         )}
         {searchQuery.trim() && filteredPlans.length === 0 && (
@@ -300,7 +353,7 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
                           title="移入回收站"
                           onClick={e => {
                             e.stopPropagation();
-                            if (confirm('确定将计划「' + plan.name + '」移入回收站吗？可在30天内恢复。')) onDelete(plan.id);
+                            setConfirmMoveToTrash({ id: plan.id, name: plan.name });
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -368,6 +421,33 @@ export default function PlanList({ plans, onCreate, onImport, onSelect, onDelete
           </DialogContent>
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={!!confirmPermanentDelete}
+        onClose={() => setConfirmPermanentDelete(null)}
+        onConfirm={() => { const id = confirmPermanentDelete?.id; setConfirmPermanentDelete(null); if (id) doPermanentDelete(id); }}
+        title='永久删除计划'
+        description={`确定要永久删除计划「${confirmPermanentDelete?.name || ''}」吗？此操作不可撤销，无法恢复。`}
+        confirmLabel='永久删除'
+        destructive
+      />
+      <ConfirmDialog
+        open={confirmEmptyTrash}
+        onClose={() => setConfirmEmptyTrash(false)}
+        onConfirm={() => { setConfirmEmptyTrash(false); doEmptyTrash(); }}
+        title='清空回收站'
+        description={`确定要一键清空回收站吗？（共 ${trashPlans.length} 个计划）此操作不可撤销。`}
+        confirmLabel='清空'
+        destructive
+      />
+      <ConfirmDialog
+        open={!!confirmMoveToTrash}
+        onClose={() => setConfirmMoveToTrash(null)}
+        onConfirm={() => { const id = confirmMoveToTrash?.id; setConfirmMoveToTrash(null); if (id) onDelete(id); }}
+        title='移入回收站'
+        description={`确定将计划「${confirmMoveToTrash?.name || ''}」移入回收站吗？可在 30 天内恢复。`}
+        confirmLabel='移入回收站'
+      />
     </div>
   );
 }

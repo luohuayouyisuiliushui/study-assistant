@@ -238,9 +238,9 @@ describe('extractWeakPoints', () => {
 // ═══════════════════════════════════════════════════════════
 
 describe('getTopicsNeedingReview', () => {
-  it('should return topics with weak points', () => {
+  it('should return due topics while preserving weak-point details', () => {
     const topics = [
-      { id: 't1', title: 'A', done: true, weakPoints: ['指针'], exercises: [], detail: 'abc' },
+      { id: 't1', title: 'A', done: true, weakPoints: ['指针'], exercises: [], detail: 'abc', mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
       { id: 't2', title: 'B', done: true, weakPoints: [], exercises: [], detail: 'abc' },
       { id: 't3', title: 'C', done: false, weakPoints: [], exercises: [], detail: 'abc' },
     ];
@@ -250,10 +250,10 @@ describe('getTopicsNeedingReview', () => {
     assert.strictEqual(needs[0].title, 'A');
   });
 
-  it('should return topics with exercise errors', () => {
+  it('should preserve exercise-error details for a due topic', () => {
     const topics = [
       { id: 't1', title: 'A', done: true, weakPoints: [],
-        exercises: [{ correct: true }, { correct: false }], detail: 'abc' },
+        exercises: [{ correct: true }, { correct: false }], detail: 'abc', mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
       { id: 't2', title: 'B', done: true, weakPoints: [],
         exercises: [{ correct: true }], detail: 'abc' },
     ];
@@ -265,7 +265,7 @@ describe('getTopicsNeedingReview', () => {
     assert.strictEqual(needs[0].lastErrorCount, 1);
   });
 
-  it('should return empty for all-correct topics with no weak points', () => {
+  it('should return empty for topics without a due schedule', () => {
     const topics = [
       { id: 't1', title: 'A', done: true, weakPoints: [],
         exercises: [{ correct: true }], detail: 'abc' },
@@ -274,9 +274,9 @@ describe('getTopicsNeedingReview', () => {
     assert.deepStrictEqual(getTopicsNeedingReview(plan), []);
   });
 
-  it('should skip undoned topics even with weak points', () => {
+  it('should skip unlearned topics even when their schedule is due', () => {
     const topics = [
-      { id: 't1', title: 'A', done: false, weakPoints: ['指针'], exercises: [], detail: null },
+      { id: 't1', title: 'A', done: false, weakPoints: ['指针'], exercises: [], detail: null, mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
     ];
     const plan = makePlan(topics);
     assert.deepStrictEqual(getTopicsNeedingReview(plan), []);

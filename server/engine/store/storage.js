@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { migrateDataDirectory } from '../../migrations/data-version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // storage.js lives in store/ subdirectory, need two levels up to reach server/
@@ -18,12 +19,22 @@ const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
 const TRASH_TTL_DAYS = 30;
 const BACKUP_DIR = path.join(DATA, '.backups-v2');
 
-function ensureDir() {
-  fs.mkdirSync(path.join(DATA, 'plans'), { recursive: true });
-  fs.mkdirSync(TRASH_DIR, { recursive: true });
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+function ensureStorageDirectories(dataDir) {
+  fs.mkdirSync(path.join(dataDir, 'plans'), { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'trash'), { recursive: true });
+  fs.mkdirSync(path.join(dataDir, '.backups-v2'), { recursive: true });
 }
-ensureDir();
+
+export function initializeStorageDirectory(dataDir = DATA, { now = Date.now() } = {}) {
+  ensureStorageDirectories(dataDir);
+  return migrateDataDirectory({ dataDir, now });
+}
+
+// Node's test runner imports the Store in many isolated test files. Those
+// processes migrate only their explicit fixtures, never the user's live data.
+export const storageMigrationResult = process.env.NODE_TEST_CONTEXT
+  ? null
+  : initializeStorageDirectory();
 
 // ── Startup cleanup: remove orphaned .tmp.* files from crashed processes ──
 function cleanupOrphanedTempFiles() {

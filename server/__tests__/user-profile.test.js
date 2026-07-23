@@ -9,10 +9,17 @@ import path from 'node:path';
 import { aggregatePlans, profileUpdater, getProfileSummary, getUserProfile, generateUserProfile, mergeGeneratedProfile } from '../engine/user-profile.js';
 
 const PROFILE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'learn', 'user-profile.json');
+const PROFILE_BAK_FILE = PROFILE_FILE + '.bak';
+const PROFILE_V2_BAK_FILE = path.join(path.dirname(PROFILE_FILE), '.backups-v2', 'user-profile.json');
 let originalProfileBuffer = null, profileExisted = false;
 
-function snapshotProfileFile() {
-  return fs.existsSync(PROFILE_FILE) ? { exists: true, bytes: fs.readFileSync(PROFILE_FILE) } : { exists: false, bytes: null };
+function snapshotProfileFile(filePath = PROFILE_FILE) {
+  return fs.existsSync(filePath) ? { exists: true, bytes: fs.readFileSync(filePath) } : { exists: false, bytes: null };
+}
+const snapshotProfileFileAt = snapshotProfileFile;
+function restoreProfileFile(filePath, snapshot) {
+  if (snapshot.exists) fs.writeFileSync(filePath, snapshot.bytes);
+  else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 function assertProfileUnchanged(snap) {
   assert.equal(fs.existsSync(PROFILE_FILE), snap.exists);
@@ -47,11 +54,32 @@ describe('getProfileSummary shape', () => { it('has expected fields', () => { co
 describe('getUserProfile', () => {
   it('no file -> null', () => { if (fs.existsSync(PROFILE_FILE)) { const b = fs.readFileSync(PROFILE_FILE); fs.unlinkSync(PROFILE_FILE); try { assert.equal(getUserProfile(), null); } finally { fs.writeFileSync(PROFILE_FILE, b); } } else assert.equal(getUserProfile(), null); });
   it('valid JSON parsed', () => { fs.writeFileSync(PROFILE_FILE, JSON.stringify({test:true})); try { assert.ok(getUserProfile().test); } finally { if (originalProfileBuffer) fs.writeFileSync(PROFILE_FILE, originalProfileBuffer); else if (fs.existsSync(PROFILE_FILE)) fs.unlinkSync(PROFILE_FILE); } });
-  it('corrupt JSON -> null', () => {
-    const bak = fs.existsSync(PROFILE_FILE) ? fs.readFileSync(PROFILE_FILE) : null;
+  it('corrupt JSON without backups -> null', () => {
+    const profile = snapshotProfileFile();
+    const bak = snapshotProfileFileAt(PROFILE_BAK_FILE);
+    const v2Bak = snapshotProfileFileAt(PROFILE_V2_BAK_FILE);
+    if (bak.exists) fs.unlinkSync(PROFILE_BAK_FILE);
+    if (v2Bak.exists) fs.unlinkSync(PROFILE_V2_BAK_FILE);
     fs.writeFileSync(PROFILE_FILE, '{bad');
     try { assert.equal(getUserProfile(), null); }
-    finally { if (bak) fs.writeFileSync(PROFILE_FILE, bak); else if (fs.existsSync(PROFILE_FILE)) fs.unlinkSync(PROFILE_FILE); }
+    finally {
+      restoreProfileFile(PROFILE_FILE, profile);
+      restoreProfileFile(PROFILE_BAK_FILE, bak);
+      restoreProfileFile(PROFILE_V2_BAK_FILE, v2Bak);
+    }
+  });
+  it('corrupt JSON recovers from backup', () => {
+    const profile = snapshotProfileFile();
+    const bak = snapshotProfileFileAt(PROFILE_BAK_FILE);
+    const v2Bak = snapshotProfileFileAt(PROFILE_V2_BAK_FILE);
+    fs.writeFileSync(PROFILE_BAK_FILE, JSON.stringify({ restored: true }));
+    fs.writeFileSync(PROFILE_FILE, '{bad');
+    try { assert.deepEqual(getUserProfile(), { restored: true }); }
+    finally {
+      restoreProfileFile(PROFILE_FILE, profile);
+      restoreProfileFile(PROFILE_BAK_FILE, bak);
+      restoreProfileFile(PROFILE_V2_BAK_FILE, v2Bak);
+    }
   });
 });
 

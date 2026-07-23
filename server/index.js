@@ -43,6 +43,7 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 // API routes
+app.use('/api/export', exportRouter);
 app.use('/api/learn', exportRouter);
 app.use('/api/learn', assessmentRouter);
 app.use('/api/learn', contentRouter);

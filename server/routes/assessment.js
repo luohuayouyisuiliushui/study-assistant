@@ -1,16 +1,29 @@
+import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
 import { getEngineCacheDiagnostics, createProviderFromConfig,
   generateExamStream, generateExam, gradeExam, generateExamPractice,
   analyzeFeynmanSession, factCheckDetail, autoFixUncertainClaims,
   applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
-import { analyzePlanAdaptive, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { analyzePlanAdaptive, dataFlywheelUpdate, AdaptivePromptInjector } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
 import { refreshDataFlywheel } from './flywheel.js';
 import AgentDispatcher from '../engine/agent-dispatcher.js';
 
 const router = Router();
+
+function readAttemptRef(body) {
+  if (typeof body?.attemptRef !== 'string') return null;
+  const attemptRef = body.attemptRef.trim();
+  return attemptRef.length >= 8 && attemptRef.length <= 128 ? attemptRef : null;
+}
+
+function assessmentErrorStatus(error) {
+  return error instanceof TypeError || error instanceof RangeError || /Topic not found/.test(error.message)
+    ? 400
+    : 500;
+}
 // ═══════════════════════════════════════════════════════
 
 /**
@@ -58,25 +71,32 @@ router.post('/plans/:planId/exam/:examId/submit', async (req, res) => {
   if (!answers || !Array.isArray(answers) || answers.length === 0) {
     return res.status(400).json({ error: '请提供试卷答案' });
   }
+  const attemptRef = readAttemptRef(req.body);
+  if (!attemptRef) return res.status(400).json({ error: 'attemptRef 必须是 8..128 字符' });
 
   const plan = store.getPlan(req.params.planId);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
     const provider = getProvider(req);
-    const results = await gradeExam(provider, plan, req.params.examId, answers);
+    const results = await gradeExam(provider, plan, req.params.examId, answers, {
+      attemptRef,
+      observedAt: Date.now(),
+    });
 
     // ── Data flywheel: update user profile with latest exam results ──
-    try {
-      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
-      dataFlywheelUpdate(allPlans);
-    } catch (fwErr) {
-      console.warn('[flywheel] exam submit update failed (non-fatal):', fwErr.message);
-    }
+    setImmediate(() => {
+      try {
+        const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+        dataFlywheelUpdate(allPlans);
+      } catch (fwErr) {
+        console.warn('[flywheel] exam submit update failed (non-fatal):', fwErr.message);
+      }
+    });
 
     res.json({ results });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(assessmentErrorStatus(err)).json({ error: err.message });
   }
 });
 
@@ -328,8 +348,16 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
   try {
     const provider = getProvider(req);
     const insights = await analyzeFeynmanSession(provider, session.transcript, topic.title);
-    topic.feynmanInsights = insights;
-    await store.updateTopic(req.params.planId, req.params.topicId, { feynmanInsights: insights });
+    const transcriptDigest = createHash('sha256')
+      .update(JSON.stringify(session.transcript.map(message => ({
+        role: message.role,
+        content: message.content,
+      }))), 'utf8')
+      .digest('hex');
+    await store.saveFeynmanResults(req.params.planId, req.params.topicId, insights, {
+      attemptRef: transcriptDigest,
+      observedAt: Date.now(),
+    });
     res.json(insights);
     // Flywheel: Feynman analysis adds behavioral evidence
     refreshDataFlywheel('feynman-analyze');

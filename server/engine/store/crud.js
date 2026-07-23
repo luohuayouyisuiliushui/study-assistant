@@ -14,6 +14,29 @@ import {
   getCachedPlan, invalidatePlanCache,
 } from './storage.js';
 import { markPlanForTestCleanup } from './test-plan-marker.js';
+import { CURRENT_PLAN_DATA_VERSION } from '../../migrations/data-version.js';
+import {
+  createInitialTopicLearningState,
+  createMasteryEvidence,
+  applyMasteryEvidenceAttempt,
+  buildTodayReviewQueue as buildTodayReviewQueueFromPlans,
+  normalizeConceptTags,
+} from '../mastery-scheduler.js';
+import {
+  applyEvidenceToMistakeLedger,
+  dismissMistake,
+  getActiveMistakeEvidenceIds,
+  startMistakeRepair,
+} from '../mistake-ledger.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function ensureTopicLearningState(topic) {
+  const defaults = createInitialTopicLearningState({ done: topic.done === true });
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!Object.hasOwn(topic, key)) topic[key] = value;
+  }
+}
 
 // ─── Public API ───
 
@@ -86,6 +109,7 @@ export async function createPlan(name, options = {}) {
   const plan = {
     id,
     name,
+    dataVersion: CURRENT_PLAN_DATA_VERSION,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     topics: [],
@@ -427,6 +451,7 @@ function flattenTopics(phases, phasesById) {
         generationFeedback: [],
         prerequisites: [],
         relatedTopics: [],
+        ...createInitialTopicLearningState(),
       };
       topics.push(topic);
       titleToId[title] = id;
@@ -1030,6 +1055,7 @@ export function createPlanWithPhases(name, phases, relations, options = {}) {
   const plan = {
     id,
     name,
+    dataVersion: CURRENT_PLAN_DATA_VERSION,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     phases: sortedPhases,
@@ -1053,9 +1079,15 @@ export function writePlan(planId, fn) {
   return enqueueWrite(planId, () => {
     const plan = getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
-    fn(plan);
-    plan.updatedAt = Date.now();
-    writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+    const snapshot = structuredClone(plan);
+    try {
+      fn(plan);
+      plan.updatedAt = Date.now();
+      writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+    } catch (error) {
+      replacePlanContents(plan, snapshot);
+      throw error;
+    }
     updateIndex(planId, {
       topicCount: plan.topics.length,
       updatedAt: plan.updatedAt,
@@ -1088,6 +1120,7 @@ export function addTopics(planId, titles, options = {}) {
           parentId: options.parentId || null,
           prerequisites: [],
           relatedTopics: [],
+          ...createInitialTopicLearningState(),
         });
         existingTitles.add(title);
       }
@@ -1095,11 +1128,31 @@ export function addTopics(planId, titles, options = {}) {
   });
 }
 
-export function updateTopic(planId, topicId, updates) {
+export function updateTopic(planId, topicId, updates, { now = Date.now() } = {}) {
   return writePlan(planId, (plan) => {
     const topic = plan.topics.find(t => t.id === topicId);
     if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    ensureTopicLearningState(topic);
+    const wasDone = topic.done === true;
     Object.assign(topic, updates);
+
+    if (!wasDone && topic.done === true) {
+      if (!Number.isSafeInteger(now) || now < 0) {
+        throw new TypeError('now must be a non-negative epoch millisecond integer');
+      }
+      if (topic.reviewSchedule.dueAt === null) {
+        topic.reviewSchedule = {
+          ...topic.reviewSchedule,
+          dueAt: now + DAY_MS,
+        };
+      }
+      if (topic.masteryEvidence.length === 0) {
+        topic.mastery = {
+          ...topic.mastery,
+          status: 'learning',
+        };
+      }
+    }
   });
 }
 
@@ -1123,6 +1176,39 @@ export function updateTopicTime(planId, topicId, seconds) {
     } else {
       topic.timeLog.push({ date: today, seconds });
     }
+  });
+}
+
+/**
+ * Revert a topic's done=true mark back to done=false.
+ * Safe rules:
+ *   - Only reverts if topic.done === true (no-op otherwise).
+ *   - Resets reviewSchedule.dueAt to null ONLY when no mastery evidence exists,
+ *     preserving any scheduled review earned through actual assessment.
+ *   - Resets mastery.status to 'unassessed' ONLY when no mastery evidence exists.
+ *   - Never deletes existing masteryEvidence, mistakeRecords, or history.
+ */
+export function undoneTopic(planId, topicId) {
+  return writePlan(planId, (plan) => {
+    const topic = plan.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    if (!topic.done) return; // already not done, nothing to do
+    ensureTopicLearningState(topic);
+
+    topic.done = false;
+
+    const hasEvidence = Array.isArray(topic.masteryEvidence) && topic.masteryEvidence.length > 0;
+    if (!hasEvidence) {
+      // No real assessment has happened; safe to fully reset scheduling state
+      if (topic.reviewSchedule) {
+        topic.reviewSchedule = { ...topic.reviewSchedule, dueAt: null };
+      }
+      if (topic.mastery) {
+        topic.mastery = { ...topic.mastery, status: 'unassessed' };
+      }
+    }
+    // If evidence exists: keep mastery and reviewSchedule intact —
+    // user has done real work and we must not destroy it.
   });
 }
 
@@ -1290,38 +1376,37 @@ export function extractWeakPoints(analysisJson) {
  * @param {object} plan
  * @returns {Array} Topics needing review with weakPoints summary
  */
-export function getTopicsNeedingReview(plan) {
-  if (!plan || !plan.topics) return [];
-
-  // Collect topics with weak points from exam results
+export function getTopicsNeedingReview(plan, { now = Date.now() } = {}) {
+  if (!plan || !Array.isArray(plan.topics)) return [];
   const examWeakTopics = new Set();
-  if (plan.examPapers) {
-    for (const exam of plan.examPapers) {
-      if (!exam.results) continue;
-      for (const result of exam.results) {
-        if (result.correct === false) {
-          const question = exam.questions?.[result.exerciseIndex];
-          if (question?.topicId) {
-            examWeakTopics.add(question.topicId);
-          }
-        }
-      }
+  for (const exam of plan.examPapers || []) {
+    for (const result of exam.results || []) {
+      if (result.correct !== false) continue;
+      const question = exam.questions?.[result.exerciseIndex];
+      if (question?.topicId) examWeakTopics.add(question.topicId);
     }
   }
+  const queue = buildTodayReviewQueueFromPlans([plan], { now, limit: 100 });
+  return queue.items.map(item => {
+    const topic = plan.topics.find(candidate => candidate.id === item.topicId);
+    return {
+      id: topic.id,
+      title: topic.title,
+      weakPoints: topic.weakPoints || [],
+      hasExerciseErrors: topic.exercises ? topic.exercises.some(exercise => exercise.correct === false) : false,
+      lastErrorCount: topic.exercises ? topic.exercises.filter(exercise => exercise.correct === false).length : 0,
+      hasExamErrors: examWeakTopics.has(topic.id),
+      difficulty: topic.difficulty,
+      dueAt: item.dueAt,
+      priorityScore: item.priorityScore,
+      mastery: item.mastery,
+    };
+  });
+}
 
-  return plan.topics.filter(t => t.done && (
-    (t.weakPoints && t.weakPoints.length > 0) ||
-    (t.exercises && t.exercises.some(e => e.correct === false)) ||
-    examWeakTopics.has(t.id)
-  )).map(t => ({
-    id: t.id,
-    title: t.title,
-    weakPoints: t.weakPoints || [],
-    hasExerciseErrors: t.exercises ? t.exercises.some(e => e.correct === false) : false,
-    lastErrorCount: t.exercises ? t.exercises.filter(e => e.correct === false).length : 0,
-    hasExamErrors: examWeakTopics.has(t.id),
-    difficulty: t.difficulty,
-  }));
+export function getTodayReviewQueue({ now = Date.now(), limit = 20 } = {}) {
+  const plans = listPlans().map(entry => getPlan(entry.id)).filter(Boolean);
+  return buildTodayReviewQueueFromPlans(plans, { now, limit });
 }
 
 // ─── Notification flag (study-trace pending-checkin pattern) ───
@@ -1437,6 +1522,7 @@ export async function addExamPaper(planId, examData) {
     questions: examData.questions,
     results: null,
     gradedAt: null,
+    gradedAttemptRef: null,
   });
   plan.updatedAt = Date.now();
 
@@ -1464,7 +1550,10 @@ export function getExamPapers(planId) {
  * @param {string} examId
  * @param {Array} results - Grading results array
  */
-export async function updateExamResults(planId, examId, results) {
+export async function updateExamResults(planId, examId, results, options = {}) {
+  if (options.attemptRef !== undefined) {
+    return commitExamAssessment(planId, examId, results, options);
+  }
   const plan = getPlan(planId);
   if (!plan) throw new Error('计划不存在');
   if (!plan.examPapers) throw new Error('该计划没有试卷');
@@ -1518,7 +1607,10 @@ export function recordTeachingErrors(planId, topicId, errors) {
  * Save quick quiz results for a plan.
  * Stores each quiz attempt with questions, user answers, and correctness.
  */
-export function saveQuickQuizResults(planId, quizData) {
+export function saveQuickQuizResults(planId, quizData, options = {}) {
+  if (options.attemptRef !== undefined) {
+    return commitQuickQuizAssessment(planId, quizData, options);
+  }
   return writePlan(planId, (plan) => {
     if (!plan.quickQuizHistory) plan.quickQuizHistory = [];
     plan.quickQuizHistory.push({
@@ -1558,4 +1650,514 @@ export async function appendGenerationFeedback(planId, topicId, entry, limit = 2
     total = updated.length;
   });
   return { total };
+}
+
+// ═══════════════════════════════════════════════════════
+//  MASTERY EVIDENCE OUTCOMES
+// ═══════════════════════════════════════════════════════
+
+const P1_SOURCES = Object.freeze(['exercise', 'quickQuiz', 'exam', 'feynman', 'review', 'repair']);
+
+const FEYNMAN_QUALITY_MAP = Object.freeze({
+  excellent: { score: 0.90, quality: 4, confidence: 'medium' },
+  good: { score: 0.75, quality: 4, confidence: 'medium' },
+  fair: { score: 0.55, quality: 2, confidence: 'medium' },
+  needsWork: { score: 0.25, quality: 1, confidence: 'medium' },
+});
+
+/**
+ * Validate and normalize assessment outcome items before mutation.
+ * Throws on invalid input — no side effects.
+ * Each item must carry a stable itemRef (original question ID/index).
+ */
+function validateOutcomeItems(items, source) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new RangeError('items must be a non-empty array');
+  }
+
+  const configs = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item || typeof item !== 'object') {
+      throw new TypeError(`items[${i}] must be an object`);
+    }
+    if (typeof item.topicId !== 'string' || !item.topicId) {
+      throw new TypeError(`items[${i}].topicId must be a non-empty string`);
+    }
+    if (typeof item.itemRef !== 'string' || !item.itemRef) {
+      throw new TypeError(`items[${i}].itemRef must be a non-empty string`);
+    }
+
+    let score, quality, confidence, conceptTags;
+
+    if (source === 'feynman') {
+      const mapped = FEYNMAN_QUALITY_MAP[item.teachingQuality];
+      if (!mapped) {
+        throw new RangeError(
+          `items[${i}].teachingQuality must be one of: ${Object.keys(FEYNMAN_QUALITY_MAP).join(', ')}`
+        );
+      }
+      score = mapped.score;
+      quality = mapped.quality;
+      confidence = 'medium';
+    } else {
+      // Objective sources: exercise, quickQuiz, exam, review, repair
+      if (typeof item.correct !== 'boolean') {
+        throw new TypeError(`items[${i}].correct must be a boolean for source '${source}'`);
+      }
+      score = item.correct ? 1 : 0;
+      quality = item.correct ? 5 : 0;
+      confidence = 'high';
+    }
+
+    conceptTags = Array.isArray(item.conceptTags) ? item.conceptTags : [];
+    configs.push({
+      topicId: item.topicId,
+      itemRef: item.itemRef,
+      score,
+      quality,
+      confidence,
+      conceptTags,
+    });
+  }
+  return configs;
+}
+
+/**
+ * Apply assessment outcomes to Topic mastery/review schedule in a single
+ * serialized writePlan mutator. All validation occurs before any write.
+ *
+ * Rules:
+ * - source must be one of P1_SOURCES (exercise/quickQuiz/exam/feynman/review/repair)
+ * - observedAt must be a non-negative safe integer when provided; omitted defaults to Date.now()
+ * - Each item must carry a stable itemRef; sourceRef = `${attemptRef}:${itemRef}`
+ * - All next-state computations are completed before any Topic field assignment
+ *   to prevent partial cached mutation on failure.
+ *
+ * @param {string} planId
+ * @param {object} options
+ * @param {string} options.source - 'exercise'|'quickQuiz'|'exam'|'feynman'|'review'|'repair'
+ * @param {Array} options.items - Outcome items. Each: { topicId, itemRef, correct|teachingQuality, conceptTags? }
+ * @param {string} options.attemptRef - Unique attempt identifier (8-128 chars)
+ * @param {number} [options.observedAt] - Epoch ms; omitted -> Date.now(), invalid -> throws
+ * @returns {Promise<{results: Array, plan: object}>}
+ */
+function normalizeAssessmentClock(observedAt) {
+  if (observedAt === undefined) return Date.now();
+  if (!Number.isSafeInteger(observedAt) || observedAt < 0) {
+    throw new TypeError('observedAt must be a non-negative safe integer when provided');
+  }
+  return observedAt;
+}
+
+function normalizeAssessmentAttemptRef(attemptRef) {
+  if (typeof attemptRef !== 'string') throw new TypeError('attemptRef must be a string');
+  const normalized = attemptRef.trim();
+  if (normalized.length < 8 || normalized.length > 128) {
+    throw new RangeError('attemptRef must be 8-128 characters');
+  }
+  return normalized;
+}
+
+function computeMasteryOutcome(plan, { source, items, attemptRef, observedAt } = {}) {
+  if (!P1_SOURCES.includes(source)) {
+    throw new TypeError(`source must be one of: ${P1_SOURCES.join(', ')}`);
+  }
+  const normalizedAttemptRef = normalizeAssessmentAttemptRef(attemptRef);
+  const now = normalizeAssessmentClock(observedAt);
+  const configs = validateOutcomeItems(items, source);
+  const topicMap = new Map(plan.topics.map(topic => [topic.id, topic]));
+  const seenItemRefs = new Set();
+  const topicGroups = new Map();
+
+  for (const config of configs) {
+    if (!topicMap.has(config.topicId)) throw new Error(`Topic not found: ${config.topicId}`);
+    const itemKey = `${config.topicId}\0${config.itemRef}`;
+    if (seenItemRefs.has(itemKey)) throw new RangeError(`duplicate itemRef: ${config.itemRef}`);
+    seenItemRefs.add(itemKey);
+    if (!topicGroups.has(config.topicId)) topicGroups.set(config.topicId, []);
+    topicGroups.get(config.topicId).push(config);
+  }
+
+  const states = [];
+  for (const [topicId, groupItems] of topicGroups) {
+    const topic = topicMap.get(topicId);
+    const defaults = createInitialTopicLearningState({ done: topic.done === true });
+    const currentMistakes = topic.mistakes || defaults.mistakes;
+    const evidence = groupItems.map(config => createMasteryEvidence({
+      source,
+      attemptRef: normalizedAttemptRef,
+      sourceRef: `${normalizedAttemptRef}:${config.itemRef}`,
+      observedAt: now,
+      score: config.score,
+      quality: config.quality,
+      confidence: config.confidence,
+      conceptTags: normalizeConceptTags(config.conceptTags),
+    }));
+    const protectedEvidenceIds = [
+      ...getActiveMistakeEvidenceIds(currentMistakes),
+      ...evidence.filter(item => item.quality < 3).map(item => item.id),
+    ];
+    const result = applyMasteryEvidenceAttempt({
+      currentEvidence: topic.masteryEvidence || defaults.masteryEvidence,
+      reviewSchedule: topic.reviewSchedule || defaults.reviewSchedule,
+      evidence,
+      done: topic.done === true,
+      protectedEvidenceIds: [...new Set(protectedEvidenceIds)],
+      now,
+    });
+    const ledger = applyEvidenceToMistakeLedger(currentMistakes, result.insertedEvidence, {
+      topicTitle: topic.title,
+    });
+    states.push({ topicId, ...result, mistakes: ledger.mistakes });
+  }
+
+  return {
+    source,
+    attemptRef: normalizedAttemptRef,
+    observedAt: now,
+    inserted: states.some(state => state.inserted),
+    states,
+  };
+}
+
+function applyComputedMasteryOutcome(plan, outcome) {
+  const topicMap = new Map(plan.topics.map(topic => [topic.id, topic]));
+  for (const state of outcome.states) {
+    const topic = topicMap.get(state.topicId);
+    topic.masteryEvidence = state.masteryEvidence;
+    topic.mastery = state.mastery;
+    topic.reviewSchedule = state.reviewSchedule;
+    topic.mistakes = state.mistakes;
+  }
+}
+
+function replacePlanContents(target, source) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
+}
+
+async function commitAssessmentTransaction(planId, buildTransaction) {
+  let summary;
+  await writePlan(planId, persistedPlan => {
+    const workingPlan = structuredClone(persistedPlan);
+    const transaction = buildTransaction(workingPlan);
+    const outcome = transaction.outcome
+      ? computeMasteryOutcome(workingPlan, transaction.outcome)
+      : { inserted: false, states: [] };
+
+    transaction.applyResult?.(workingPlan, outcome);
+    applyComputedMasteryOutcome(workingPlan, outcome);
+    replacePlanContents(persistedPlan, workingPlan);
+    summary = outcome;
+  });
+
+  const plan = getPlan(planId);
+  return {
+    inserted: summary.inserted,
+    results: summary.states.map(state => ({
+      topicId: state.topicId,
+      inserted: state.inserted,
+      insertedCount: state.insertedEvidence.length,
+      aggregateQuality: state.aggregateQuality,
+      mastery: state.mastery,
+      reviewSchedule: state.reviewSchedule,
+      evidenceCount: state.masteryEvidence.length,
+    })),
+    plan,
+  };
+}
+
+function validateIndexedResults(questions, results) {
+  if (!Array.isArray(questions) || questions.length === 0) {
+    throw new RangeError('questions must be a non-empty array');
+  }
+  if (!Array.isArray(results) || results.length !== questions.length) {
+    throw new RangeError('results length must match questions length');
+  }
+  const seen = new Set();
+  return results.map((result, position) => {
+    if (!result || typeof result !== 'object') {
+      throw new TypeError(`results[${position}] must be an object`);
+    }
+    const index = result.exerciseIndex;
+    if (!Number.isInteger(index) || index < 0 || index >= questions.length) {
+      throw new RangeError(`results[${position}].exerciseIndex is out of range`);
+    }
+    if (seen.has(index)) throw new RangeError(`duplicate exerciseIndex: ${index}`);
+    if (typeof result.correct !== 'boolean') {
+      throw new TypeError(`results[${position}].correct must be a boolean`);
+    }
+    seen.add(index);
+    return { result, question: questions[index], index };
+  });
+}
+
+function questionItemRef(question, index) {
+  const value = question?.id ?? question?.questionId ?? index;
+  return `item-${String(value).trim()}`;
+}
+
+function assessmentContractError(message, statusCode, code) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function normalizeReviewSession(session, { now, sessionId }) {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) {
+    throw new TypeError('ReviewSession must be an object');
+  }
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new TypeError('now must be a non-negative epoch millisecond integer');
+  }
+  const id = typeof sessionId === 'string' ? sessionId.trim() : '';
+  if (id.length < 8 || id.length > 128) {
+    throw new RangeError('sessionId must contain 8..128 characters');
+  }
+  if (session.kind !== 'review' && session.kind !== 'repair') {
+    throw new TypeError('ReviewSession kind must be review or repair');
+  }
+  const content = typeof session.content === 'string' ? session.content.trim() : '';
+  if (!content) throw assessmentContractError('复习内容为空，请重新生成', 422, 'EMPTY_REVIEW_CONTENT');
+  if (!Array.isArray(session.exercises) || session.exercises.length === 0) {
+    throw assessmentContractError('复习未生成可评分练习，请重新生成', 422, 'EMPTY_REVIEW_EXERCISES');
+  }
+  for (const [index, exercise] of session.exercises.entries()) {
+    if (!exercise || typeof exercise !== 'object' || Array.isArray(exercise)) {
+      throw new TypeError(`ReviewSession exercises[${index}] must be an object`);
+    }
+  }
+
+  const mistakeId = session.mistakeId == null ? null : String(session.mistakeId).trim();
+  if (session.kind === 'review' && mistakeId !== null) {
+    throw new TypeError('ReviewSession review kind cannot reference a mistake');
+  }
+  if (session.kind === 'repair' && !mistakeId) {
+    throw new TypeError('ReviewSession repair kind requires mistakeId');
+  }
+
+  return {
+    id,
+    version: 1,
+    kind: session.kind,
+    mistakeId,
+    createdAt: now,
+    content,
+    exercises: structuredClone(session.exercises),
+  };
+}
+
+function requireAssessmentSession(topic, { sessionId, kind }) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+  const session = topic.reviewSession;
+  if (!session || session.id !== normalizedSessionId || session.kind !== kind) {
+    throw assessmentContractError('复习会话已过期，请重新生成', 409, 'STALE_REVIEW_SESSION');
+  }
+  if (!Array.isArray(session.exercises) || session.exercises.length === 0) {
+    throw assessmentContractError('复习会话没有可评分练习，请重新生成', 422, 'EMPTY_REVIEW_EXERCISES');
+  }
+  return session;
+}
+
+export async function saveReviewSession(planId, topicId, session, {
+  now = Date.now(),
+  sessionId = uuidv4(),
+} = {}) {
+  const normalized = normalizeReviewSession(session, { now, sessionId });
+  await writePlan(planId, persistedPlan => {
+    const workingPlan = structuredClone(persistedPlan);
+    const topic = workingPlan.topics.find(candidate => candidate.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    if (normalized.kind === 'repair') {
+      topic.mistakes = startMistakeRepair(topic.mistakes || [], normalized.mistakeId, {
+        now: normalized.createdAt,
+      }).mistakes;
+    }
+    topic.reviewSession = normalized;
+    topic.reviewGenerated = normalized.content;
+    topic.reviewUpdatedAt = normalized.createdAt;
+    replacePlanContents(persistedPlan, workingPlan);
+  });
+  return structuredClone(normalized);
+}
+
+export async function dismissTopicMistake(planId, topicId, mistakeId, reason, {
+  now = Date.now(),
+} = {}) {
+  let dismissed;
+  await writePlan(planId, persistedPlan => {
+    const workingPlan = structuredClone(persistedPlan);
+    const topic = workingPlan.topics.find(candidate => candidate.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    const transition = dismissMistake(topic.mistakes || [], mistakeId, reason, { now });
+    topic.mistakes = transition.mistakes;
+    if (topic.reviewSession?.kind === 'repair' && topic.reviewSession.mistakeId === transition.mistake.id) {
+      topic.reviewSession = null;
+    }
+    dismissed = transition.mistake;
+    replacePlanContents(persistedPlan, workingPlan);
+  });
+  return structuredClone(dismissed);
+}
+
+export function applyMasteryOutcome(planId, options) {
+  return commitAssessmentTransaction(planId, () => ({ outcome: options }));
+}
+
+export function saveExerciseResults(planId, topicId, exercises, results, options = {}) {
+  return commitAssessmentTransaction(planId, plan => {
+    const topic = plan.topics.find(candidate => candidate.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    const indexed = validateIndexedResults(exercises, results);
+    const outcomeItems = indexed.map(({ result, question, index }) => ({
+      topicId,
+      itemRef: questionItemRef(question, index),
+      correct: result.correct,
+      conceptTags: [question?.conceptTag || topic.title],
+    }));
+    return {
+      outcome: { source: 'exercise', items: outcomeItems, ...options },
+      applyResult(workingPlan, outcome) {
+        const workingTopic = workingPlan.topics.find(candidate => candidate.id === topicId);
+        workingTopic.exercises = structuredClone(exercises);
+        // Store the full grading payload keyed by attemptRef so that a retry
+        // with the same attemptRef can return the identical response without
+        // re-calling the AI provider.
+        workingTopic.lastExerciseGrading = {
+          attemptRef: outcome.attemptRef,
+          results: structuredClone(results),
+        };
+      },
+    };
+  });
+}
+
+export function saveReviewResults(planId, topicId, results, options = {}) {
+  const context = options.context;
+  const kind = context === 'repair' ? 'repair' : 'review';
+  const source = kind;
+  return commitAssessmentTransaction(planId, plan => {
+    const topic = plan.topics.find(candidate => candidate.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    const session = requireAssessmentSession(topic, { sessionId: options.sessionId, kind });
+    if (kind === 'repair') {
+      const mistakeId = typeof options.mistakeId === 'string' ? options.mistakeId.trim() : '';
+      const mistake = (topic.mistakes || []).find(candidate => candidate.id === mistakeId);
+      if (session.mistakeId !== mistakeId || !mistake || !['open', 'repairing'].includes(mistake.status)) {
+        throw assessmentContractError(
+          '错题修复会话已失效，请重新开始修复',
+          409,
+          'STALE_REPAIR_MISTAKE'
+        );
+      }
+    }
+    const indexed = validateIndexedResults(session.exercises, results);
+    const outcomeItems = indexed.map(({ result, question, index }) => ({
+      topicId,
+      itemRef: questionItemRef(question, index),
+      correct: result.correct,
+      conceptTags: [question?.conceptTag || topic.title],
+    }));
+    return {
+      outcome: {
+        source,
+        items: outcomeItems,
+        attemptRef: options.attemptRef,
+        observedAt: options.observedAt,
+      },
+    };
+  });
+}
+
+function commitExamAssessment(planId, examId, results, options) {
+  return commitAssessmentTransaction(planId, plan => {
+    const exam = plan.examPapers?.find(candidate => candidate.id === examId);
+    if (!exam) throw new Error('试卷不存在');
+    const indexed = validateIndexedResults(exam.questions, results);
+    const outcomeItems = indexed.map(({ result, question, index }) => {
+      if (!question?.topicId) throw new Error(`Topic not found for exam question ${index}`);
+      return {
+        topicId: question.topicId,
+        itemRef: questionItemRef(question, index),
+        correct: result.correct,
+        conceptTags: [question.conceptTag || question.topicTitle || ''].filter(Boolean),
+      };
+    });
+    return {
+      outcome: { source: 'exam', items: outcomeItems, ...options },
+      applyResult(workingPlan, outcome) {
+        const workingExam = workingPlan.examPapers.find(candidate => candidate.id === examId);
+        workingExam.results = structuredClone(results);
+        workingExam.gradedAt = outcome.observedAt;
+        workingExam.gradedAttemptRef = outcome.attemptRef;
+        for (const { result, question } of indexed) {
+          if (result.correct || !question.conceptTag) continue;
+          const topic = workingPlan.topics.find(candidate => candidate.id === question.topicId);
+          if (!topic) throw new Error(`Topic not found: ${question.topicId}`);
+          topic.weakPoints = [...new Set([...(topic.weakPoints || []), question.conceptTag])];
+        }
+      },
+    };
+  });
+}
+
+function commitQuickQuizAssessment(planId, quizData, options) {
+  return commitAssessmentTransaction(planId, plan => {
+    const indexed = validateIndexedResults(quizData?.questions, quizData?.results);
+    const outcomeItems = indexed.map(({ result, question, index }) => {
+      const topic = question?.topicId
+        ? plan.topics.find(candidate => candidate.id === question.topicId)
+        : plan.topics.find(candidate => candidate.title === question?.topicTitle);
+      if (!topic) throw new Error(`Topic not found for quick quiz question ${index}`);
+      return {
+        topicId: topic.id,
+        itemRef: questionItemRef(question, index),
+        correct: result.correct,
+        conceptTags: [question.conceptTag || question.topicTitle || topic.title],
+      };
+    });
+    return {
+      outcome: { source: 'quickQuiz', items: outcomeItems, ...options },
+      applyResult(workingPlan, outcome) {
+        if (!outcome.inserted) return;
+        if (!workingPlan.quickQuizHistory) workingPlan.quickQuizHistory = [];
+        workingPlan.quickQuizHistory.push({
+          id: quizData.id || outcome.attemptRef,
+          attemptRef: outcome.attemptRef,
+          createdAt: outcome.observedAt,
+          questions: structuredClone(quizData.questions),
+          results: structuredClone(quizData.results),
+        });
+        workingPlan.quickQuizHistory = workingPlan.quickQuizHistory.slice(-20);
+      },
+    };
+  });
+}
+
+export function saveFeynmanResults(planId, topicId, insights, options = {}) {
+  return commitAssessmentTransaction(planId, plan => {
+    const topic = plan.topics.find(candidate => candidate.id === topicId);
+    if (!topic) throw new Error(`Topic not found: ${topicId}`);
+    const teachingQuality = insights?.teachingQuality;
+    const outcome = Object.hasOwn(FEYNMAN_QUALITY_MAP, teachingQuality)
+      ? {
+          source: 'feynman',
+          items: [{
+            topicId,
+            itemRef: 'transcript',
+            teachingQuality,
+            conceptTags: [topic.title],
+          }],
+          ...options,
+        }
+      : null;
+    return {
+      outcome,
+      applyResult(workingPlan) {
+        workingPlan.topics.find(candidate => candidate.id === topicId).feynmanInsights = structuredClone(insights);
+      },
+    };
+  });
 }

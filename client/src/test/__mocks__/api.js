@@ -9,6 +9,7 @@ const mockApi = {
   emptyTrash: vi.fn(),
   getProfile: vi.fn(),
   importPlan: vi.fn(),
+  importBundle: vi.fn(),
   addTopics: vi.fn(),
   removeTopic: vi.fn(),
   updateTopic: vi.fn(),
@@ -27,7 +28,12 @@ const mockApi = {
   getKnowledgeGraph: vi.fn(),
   extractRelations: vi.fn(),
   generateReview: vi.fn(),
+  generateMistakeRepair: vi.fn(),
+  dismissMistake: vi.fn(),
+  getTodayReviews: vi.fn(),
   submitExercises: vi.fn(),
+  submitReviewExercises: vi.fn(),
+  submitRepairExercises: vi.fn(),
   analyzeWeakPoints: vi.fn(),
   getReviewNeeds: vi.fn(),
   generateQuickQuiz: vi.fn(),
@@ -55,6 +61,7 @@ const mockApi = {
   deleteExam: vi.fn(),
   practiceExam: vi.fn(),
   getCoreTopics: vi.fn(),
+  rateResource: vi.fn(),
 };
 
 export default mockApi;

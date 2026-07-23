@@ -18,7 +18,7 @@ import {
   buildDeterministicContext,
 } from './learn-prompts.js';
 import { getUserProfile } from './user-profile.js';
-import { updateTopic, getTopicHistory } from './learn-store.js';
+import { updateTopic, getTopicHistory, recordTeachingErrors } from './learn-store.js';
 import { resolveProvider } from './learn-engine.js';
 import { engineCacheMonitor } from './learn-engine.js';
 

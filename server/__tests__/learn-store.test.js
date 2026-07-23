@@ -10,6 +10,31 @@ import * as store from '../engine/learn-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_PREFIX = '__test_' + Date.now() + '_';
+const FIXED_REVIEW_NOW = 1_700_000_000_000;
+
+function assertInitialLearningState(topic) {
+  assert.deepStrictEqual(topic.masteryEvidence, []);
+  assert.deepStrictEqual(topic.mistakes, []);
+  assert.strictEqual(topic.reviewSession, null);
+  assert.deepStrictEqual(topic.mastery, {
+    algorithm: 'evidence-v1',
+    level: 0,
+    status: 'unassessed',
+    sampleSize: 0,
+    lastEvidenceAt: null,
+  });
+  assert.deepStrictEqual(topic.reviewSchedule, {
+    algorithm: 'sm2-v1',
+    dueAt: null,
+    intervalDays: 0,
+    easeFactor: 2.5,
+    repetitions: 0,
+    lapses: 0,
+    lastReviewedAt: null,
+    lastQuality: null,
+    paused: false,
+  });
+}
 
 // Global test plan ID tracking shared across describe blocks
 const _testPlanIds = [];
@@ -18,13 +43,12 @@ describe('learn-store', () => {
   let createdPlanIds = _testPlanIds;
 
   after(async () => {
-    // Cleanup test plans from active index
+    // Delete only IDs created by this file; never sweep the shared trash.
     for (const id of _testPlanIds) {
-      try { await store.deletePlan(id); } catch {}
-    }
-    // Also clean up any plans that ended up in trash
-    for (const tp of store.listTrash()) {
-      try { store.permanentlyDeleteTrash(tp.id); } catch {}
+      try {
+        await store.permanentlyDeletePlan(id);
+        store.clearFlag(id);
+      } catch {}
     }
   });
 
@@ -39,6 +63,7 @@ describe('learn-store', () => {
       assert.ok(Array.isArray(plan.history));
       assert.strictEqual(plan.history.length, 0);
       assert.ok(Array.isArray(plan.phases));
+      assert.strictEqual(plan.dataVersion, 2);
       assert.ok(plan.createdAt > 0);
       assert.ok(plan.updatedAt > 0);
     });
@@ -74,6 +99,7 @@ describe('learn-store', () => {
         assert.strictEqual(typeof t.order, 'number');
         assert.strictEqual(t.done, false);
         assert.strictEqual(t.detail, null);
+        assertInitialLearningState(t);
       }
     });
 
@@ -96,6 +122,52 @@ describe('learn-store', () => {
       const topic = updated.topics.find(t => t.id === tid);
       assert.strictEqual(topic.done, true);
       assert.strictEqual(topic.difficulty, 'hard');
+    });
+
+    it('should initialize the first review once without creating mastery evidence', async () => {
+      const plan = await store.createPlan('review-schedule-test');
+      createdPlanIds.push(plan.id);
+      const afterAdd = await store.addTopics(plan.id, ['首次复习']);
+      const topicId = afterAdd.topics[0].id;
+
+      const first = await store.updateTopic(
+        plan.id,
+        topicId,
+        { done: true },
+        { now: FIXED_REVIEW_NOW }
+      );
+      const second = await store.updateTopic(
+        plan.id,
+        topicId,
+        { done: true },
+        { now: FIXED_REVIEW_NOW + 99_000 }
+      );
+      const topic = second.topics.find(candidate => candidate.id === topicId);
+
+      assert.strictEqual(first.topics[0].reviewSchedule.dueAt, FIXED_REVIEW_NOW + 86_400_000);
+      assert.strictEqual(topic.reviewSchedule.dueAt, FIXED_REVIEW_NOW + 86_400_000);
+      assert.deepStrictEqual(topic.masteryEvidence, []);
+      assert.strictEqual(topic.mastery.status, 'learning');
+    });
+
+    it('should preserve learning state when done returns to false', async () => {
+      const plan = await store.createPlan('done-toggle-state-test');
+      createdPlanIds.push(plan.id);
+      const afterAdd = await store.addTopics(plan.id, ['状态保留']);
+      const topicId = afterAdd.topics[0].id;
+      await store.updateTopic(plan.id, topicId, {
+        done: true,
+        masteryEvidence: [{ id: 'evidence-1' }],
+        mastery: { algorithm: 'evidence-v1', level: 0.7, status: 'developing', sampleSize: 1, lastEvidenceAt: 1 },
+      }, { now: FIXED_REVIEW_NOW });
+
+      const updated = await store.updateTopic(plan.id, topicId, { done: false });
+      const topic = updated.topics.find(candidate => candidate.id === topicId);
+
+      assert.strictEqual(topic.done, false);
+      assert.deepStrictEqual(topic.masteryEvidence, [{ id: 'evidence-1' }]);
+      assert.strictEqual(topic.mastery.level, 0.7);
+      assert.strictEqual(topic.reviewSchedule.dueAt, FIXED_REVIEW_NOW + 86_400_000);
     });
   });
 
@@ -122,9 +194,17 @@ describe('learn-store', () => {
       createdPlanIds.push(plan.id);
       const afterAdd = await store.addTopics(plan.id, ['A', 'B', 'C']);
       const tid = afterAdd.topics[0].id;
+      await store.updateTopic(plan.id, tid, {
+        masteryEvidence: [{ id: 'cascade-evidence' }],
+        mistakes: [{ id: 'cascade-mistake' }],
+        reviewSession: { id: 'cascade-session' },
+      });
       const updated = await store.removeTopic(plan.id, tid);
       assert.strictEqual(updated.topics.length, 2);
       assert.ok(!updated.topics.find(t => t.id === tid));
+      assert.ok(!JSON.stringify(updated).includes('cascade-evidence'));
+      assert.ok(!JSON.stringify(updated).includes('cascade-mistake'));
+      assert.ok(!JSON.stringify(updated).includes('cascade-session'));
     });
   });
 
@@ -249,6 +329,8 @@ describe('learn-store', () => {
       assert.strictEqual(plan.topics[0].title, '变量');
       assert.strictEqual(plan.topics[0].level, 1);
       assert.strictEqual(plan.topics[0].parentId, null);
+      assert.strictEqual(plan.dataVersion, 2);
+      assertInitialLearningState(plan.topics[0]);
     });
 
     it('should create plan with nested hierarchy (new object format)', async () => {
@@ -535,10 +617,10 @@ describe('learn-store', () => {
   });
 
   describe('getTopicsNeedingReview', () => {
-    it('should return topics with weakPoints', async () => {
+    it('should return due topics with weakPoints metadata', async () => {
       const plan = {
         topics: [
-          { id: 't1', title: '主题1', done: true, weakPoints: ['闭包'], exercises: [] },
+          { id: 't1', title: '主题1', done: true, weakPoints: ['闭包'], exercises: [], mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
           { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [] },
           { id: 't3', title: '主题3', done: false, weakPoints: ['变量'], exercises: [] },
         ],
@@ -548,12 +630,12 @@ describe('learn-store', () => {
       assert.strictEqual(needs[0].title, '主题1');
     });
 
-    it('should return topics with exercise errors', async () => {
+    it('should preserve exercise errors for due topics', async () => {
       const plan = {
         topics: [
           { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [
             { question: '题1', correct: false, userAnswer: 'A', answer: 'B' },
-          ]},
+          ], mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
           { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [
             { question: '题2', correct: true, userAnswer: 'A', answer: 'A' },
           ]},
@@ -577,10 +659,10 @@ describe('learn-store', () => {
       assert.strictEqual(needs.length, 0);
     });
 
-    it('should flag topics with exam paper errors', async () => {
+    it('should preserve exam error flags for due topics', async () => {
       const plan = {
         topics: [
-          { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [] },
+          { id: 't1', title: '主题1', done: true, weakPoints: [], exercises: [], mastery: { level: 0.5 }, reviewSchedule: { dueAt: 0, paused: false } },
           { id: 't2', title: '主题2', done: true, weakPoints: [], exercises: [] },
         ],
         examPapers: [

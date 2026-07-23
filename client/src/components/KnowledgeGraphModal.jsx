@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Download, RefreshCw, Filter, Eye, Lightbulb, AlertCircle, CheckCircle, Network, FileJson, FileImage, FileText } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
+import { useModalAccessibility } from './ui/use-modal-accessibility';
 
 const PHASE_COLORS = ['#e0f2fe', '#dcfce7', '#fef3c7', '#fce7f3', '#e0e7ff', '#f3e8ff', '#ffedd5', '#d1fae5'];
 
@@ -39,6 +40,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState(null);
   const graphContainerRef = useRef(null);
+  const dialogRef = useModalAccessibility(onClose);
   const svgRef = useRef(null);
   const mountedRef = useRef(true);
   const planIdRef = useRef(plan?.id);
@@ -464,7 +466,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
 
   return (
     <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
-      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} data-dialog-root role='dialog' aria-modal='true' aria-label={`知识图谱：${plan.name}`} tabIndex={-1} className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
         <div className='flex items-center justify-between border-b px-4 py-2.5'>
           <span className='flex items-center gap-2 text-sm font-medium'>
             <Network className='h-4 w-4 text-primary' />
@@ -480,7 +482,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
               </div>
             )}
             <Button variant='ghost' size='sm' onClick={loadGraph} title='重新加载'><RefreshCw className='h-3.5 w-3.5' /></Button>
-            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
+            <Button variant='ghost' size='icon' onClick={onClose} aria-label='关闭知识图谱'><X className='h-4 w-4' /></Button>
           </div>
         </div>
         <div className='flex-1 flex flex-col overflow-hidden'>

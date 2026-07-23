@@ -122,6 +122,12 @@ function AppContent() {
     navigate(`/plan/${d.plan.id}`)
   }
 
+  const handleImportBundle = async (bundle) => {
+    const d = await api.importBundle(bundle)
+    setPlans(prev => [d.plan, ...prev])
+    navigate(`/plan/${d.plan.id}`)
+  }
+
   const handleGenerate = (topicId) => {
     const match = location.pathname.match(/^\/plan\/([^/]+)/)
     if (match) navigate(`/plan/${match[1]}/topic/${topicId}`)
@@ -163,11 +169,21 @@ function AppContent() {
         <Routes>
           <Route path="/" element={
             <PlanList
-              plans={plans}
-              onCreate={handleCreatePlan}
-              onImport={handleImportPlan}
-              onSelect={(id) => navigate(`/plan/${id}`)}
+               plans={plans}
+               onCreate={handleCreatePlan}
+               onImport={handleImportPlan}
+               onImportBundle={handleImportBundle}
+               onSelect={(id) => navigate(`/plan/${id}`)}
               onDelete={handleDeletePlan}
+              hasApiKey={hasApiKey}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenReview={(item) => {
+                const topicPath = `/plan/${encodeURIComponent(item.planId)}/topic/${encodeURIComponent(item.topicId)}`
+                const query = item.kind === 'mistake' && item.primaryMistakeId
+                  ? `?repair=${encodeURIComponent(item.primaryMistakeId)}`
+                  : '?review=1'
+                navigate(`${topicPath}${query}`)
+              }}
             />
           } />
           <Route path="/plan/:planId" element={

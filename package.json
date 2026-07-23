@@ -1,6 +1,6 @@
 {
   "name": "study-assistant",
-  "version": "1.10.0",
+  "version": "1.12.1",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
@@ -26,7 +26,7 @@
     "windows:stop": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/stop.ps1"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3",
+    "concurrently": "9.2.4",
     "playwright": "^1.61.1"
   }
 }

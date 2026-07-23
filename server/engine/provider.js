@@ -1084,9 +1084,10 @@ export class Provider {
 
 // ─── Periodic disk cache flush ───
 
-setInterval(() => {
+const diskCacheFlushTimer = setInterval(() => {
   _diskCache.flush();
 }, 60 * 1000); // every 60s
+diskCacheFlushTimer.unref();
 
 // Graceful shutdown
 process.on('exit', () => { _diskCache.flush(); });

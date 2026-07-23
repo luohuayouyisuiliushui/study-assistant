@@ -20,6 +20,12 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
   const topic = plan.topics.find(t => t.id === req.params.topicId);
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
+  // Mark topic as generating so PlanView can show a spinner during polling
+  await store.updateTopic(req.params.planId, req.params.topicId, {
+    generatingAt: Date.now(),
+    lastError: null,
+  }).catch(() => {});
+
   res.json({ status: 'generating', topicId: req.params.topicId });
 
   try {
@@ -40,21 +46,23 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
     const imageModel = req.body?.imageModel || '';
     const imageBaseUrl = req.body?.imageBaseUrl || '';
     if (imageApiKey) {
-      // Generate text + illustration
       await generateDetailWithImage(provider, plan, req.params.topicId, imageApiKey, provider.model, imageModel, explainStyle, imageBaseUrl);
     } else {
       await generateDetail(provider, plan, req.params.topicId, provider.model, explainStyle);
     }
   } catch (err) {
     console.error('Generate failed:', err.message);
-    // Store error on topic so frontend polling can detect failure
     try {
       await store.updateTopic(req.params.planId, req.params.topicId, {
         lastError: '生成失败: ' + err.message,
+        generatingAt: null,
         done: false,
       });
     } catch { /* best-effort */ }
+    return;
   }
+  // Clear generatingAt on success (generateDetail sets done=true, but generatingAt must be cleared)
+  store.updateTopic(req.params.planId, req.params.topicId, { generatingAt: null }).catch(() => {});
 });
 
 /**
@@ -69,6 +77,12 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
 
   const topic = plan.topics.find(t => t.id === req.params.topicId);
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  // Mark topic as generating before streaming begins
+  await store.updateTopic(req.params.planId, req.params.topicId, {
+    generatingAt: Date.now(),
+    lastError: null,
+  }).catch(() => {});
 
   try {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -114,9 +128,13 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
     }
 
     clearTimeout(timeout);
+    // Clear generating marker on success
+    store.updateTopic(req.params.planId, req.params.topicId, { generatingAt: null }).catch(() => {});
     if (!aborted) res.end();
   } catch (err) {
     console.error('[generate-sse]', err);
+    // Clear generating marker on error
+    store.updateTopic(req.params.planId, req.params.topicId, { generatingAt: null }).catch(() => {});
     if (!res.headersSent) return res.status(500).json({ error: err.message });
     try { res.write('data: ' + JSON.stringify({ type: 'error', data: err.message }) + '\n\n'); res.end(); } catch {}
   }

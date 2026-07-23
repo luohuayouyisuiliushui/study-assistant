@@ -6,7 +6,7 @@
 
 import { Provider } from './provider.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
-import { addExamPaper, getExamPapers, updateExamResults } from './learn-store.js';
+import { addExamPaper, getExamPapers, updateExamResults, updateTopic } from './learn-store.js';
 import {
   STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
   STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT,
@@ -15,6 +15,22 @@ import {
 import { resolveProvider } from './learn-engine.js';
 
 const _resolveProvider = resolveProvider;
+
+/** Validate single question output */
+function validateQuestionOutput(data) {
+  if (!data || typeof data !== 'object') return '输出不是有效对象';
+  if (!data.question || typeof data.question !== 'string') return 'question 字段缺失或非字符串';
+  if (!Array.isArray(data.options)) return 'options 必须是数组';
+  if (!data.answer || typeof data.answer !== 'string') return 'answer 字段缺失或非字符串';
+  if (!data.explanation || typeof data.explanation !== 'string') return 'explanation 字段缺失或非字符串';
+  if (!data.conceptTag || typeof data.conceptTag !== 'string') return 'conceptTag 字段缺失或非字符串';
+  if (data.options.length > 0) {
+    for (let i = 0; i < data.options.length; i++) {
+      if (!data.options[i] || typeof data.options[i] !== 'string') return `options[${i}] 不是有效字符串`;
+    }
+  }
+  return null;
+}
 
 //  EXAM PAPER ENGINE
 // ═══════════════════════════════════════════════════════
@@ -333,12 +349,25 @@ export async function generateExamStream(providerOrConfig, plan, topicIds, confi
  * @param {Array} answers - User's answers [{ exerciseIndex, userAnswer }]
  * @returns {Promise<Array>} Grading results
  */
-export async function gradeExam(providerOrConfig, plan, examId, answers) {
-  const provider = _resolveProvider(providerOrConfig);
-
+export async function gradeExam(providerOrConfig, plan, examId, answers, assessment = {}) {
+  // Read the exam from the store cache so we see the latest persisted state even
+  // if the caller passed a stale plan snapshot.
   const examPapers = getExamPapers(plan.id);
   const exam = examPapers.find(e => e.id === examId);
   if (!exam) throw new Error('试卷不存在');
+
+  // Idempotency check: if this attemptRef was already committed and results were
+  // persisted, return the saved payload immediately without calling the provider.
+  // This handles "response was lost" retries correctly — same results, no double AI.
+  if (
+    typeof assessment.attemptRef === 'string' &&
+    exam.gradedAttemptRef === assessment.attemptRef.trim() &&
+    Array.isArray(exam.results)
+  ) {
+    return exam.results;
+  }
+
+  const provider = _resolveProvider(providerOrConfig);
 
   // Prepare grading context
   const gradingContext = {
@@ -373,30 +402,34 @@ export async function gradeExam(providerOrConfig, plan, examId, answers) {
 
   const results = gradingResults.results || [];
 
-  // Save exam results to store
-  updateExamResults(plan.id, examId, results);
+  // Save results and mastery evidence together when called by the assessment API.
+  await updateExamResults(plan.id, examId, results, assessment);
 
   // ── Weak point feedback: update topic.weakPoints from wrong answers ──
-  const wrongByTopic = {}; // topicId → Set of conceptTags
-  for (const r of results) {
-    if (r.correct === false) {
-      const q = exam.questions[r.exerciseIndex];
-      if (q && q.topicId) {
-        if (!wrongByTopic[q.topicId]) wrongByTopic[q.topicId] = new Set();
-        if (q.conceptTag) wrongByTopic[q.topicId].add(q.conceptTag);
+  // Legacy direct callers do not provide an attemptRef, so retain their existing
+  // weak-point update path. The atomic assessment store handles this otherwise.
+  if (assessment.attemptRef === undefined) {
+    const wrongByTopic = {}; // topicId → Set of conceptTags
+    for (const r of results) {
+      if (r.correct === false) {
+        const q = exam.questions[r.exerciseIndex];
+        if (q && q.topicId) {
+          if (!wrongByTopic[q.topicId]) wrongByTopic[q.topicId] = new Set();
+          if (q.conceptTag) wrongByTopic[q.topicId].add(q.conceptTag);
+        }
       }
     }
-  }
-  for (const [topicId, wrongTags] of Object.entries(wrongByTopic)) {
-    const topic = plan.topics.find(t => t.id === topicId);
-    if (!topic) continue;
-    const existing = new Set(topic.weakPoints || []);
-    let changed = false;
-    for (const tag of wrongTags) {
-      if (!existing.has(tag)) { existing.add(tag); changed = true; }
-    }
-    if (changed) {
-      await updateTopic(plan.id, topicId, { weakPoints: [...existing] });
+    for (const [topicId, wrongTags] of Object.entries(wrongByTopic)) {
+      const topic = plan.topics.find(t => t.id === topicId);
+      if (!topic) continue;
+      const existing = new Set(topic.weakPoints || []);
+      let changed = false;
+      for (const tag of wrongTags) {
+        if (!existing.has(tag)) { existing.add(tag); changed = true; }
+      }
+      if (changed) {
+        await updateTopic(plan.id, topicId, { weakPoints: [...existing] });
+      }
     }
   }
 

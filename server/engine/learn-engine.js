@@ -14,6 +14,7 @@
  * will produce IDENTICAL first-2-messages = HIGH cache hit rate.
  */
 
+import { fileURLToPath } from 'node:url';
 import { Provider } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
@@ -126,7 +127,11 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
     const injector = new AdaptivePromptInjector(profile);
     const adaptiveContext = injector.buildAdaptiveContext();
 
-    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle);
+    const recentFeedback = (topic.generationFeedback || [])
+      .filter(entry => entry?.mode === 'detail' && typeof entry.reason === 'string' && entry.reason.trim())
+      .slice(-5)
+      .map(entry => ({ reason: entry.reason.trim().slice(0, 300) }));
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle, recentFeedback);
 
     // Inject adaptive guidance between context and question (cache-safe:
     // user profile changes infrequently, so prefix stays stable most of the time)
@@ -157,7 +162,6 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
 
     if (!fullContent) throw new Error('AI 返回内容为空');
 
-    topic.done = true;
     await updateTopic(plan.id, topicId, { detail: fullContent, done: true, lastError: null });
     await addHistory(plan.id, topicId, 'ai', fullContent);
 
@@ -253,7 +257,11 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
     const injector = new AdaptivePromptInjector(profile);
     const adaptiveContext = injector.buildAdaptiveContext();
 
-    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle);
+    const recentFeedback = (topic.generationFeedback || [])
+      .filter(entry => entry?.mode === 'detail' && typeof entry.reason === 'string' && entry.reason.trim())
+      .slice(-5)
+      .map(entry => ({ reason: entry.reason.trim().slice(0, 300) }));
+    let messages = buildDetailMessages(plan, topicId, '请为我详细讲解「' + topic.title + '」。', explainStyle, recentFeedback);
 
     if (adaptiveContext && injector.hasMeaningfulProfile) {
       messages[1] = {
@@ -282,7 +290,6 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
 
     if (!fullContent) throw new Error('AI 返回内容为空');
 
-    topic.done = true;
     await updateTopic(plan.id, topicId, { detail: fullContent, done: true, lastError: null });
     await addHistory(plan.id, topicId, 'ai', fullContent);
 
@@ -830,6 +837,21 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
   const provider = resolveProvider(providerOrConfig, model);
 
   const context = cleanDetailForContext(topic.detail).slice(0, 800);
+  const ratedResources = plan.topics
+    .flatMap(item => item.resources || [])
+    .filter(resource => resource.userRating === 1 || resource.userRating === -1 || resource.userRating === 'up' || resource.userRating === 'down');
+  const likedTypes = [...new Set(ratedResources
+    .filter(resource => resource.userRating === 1 || resource.userRating === 'up')
+    .map(resource => resource.type)
+    .filter(Boolean))];
+  const dislikedTypes = [...new Set(ratedResources
+    .filter(resource => resource.userRating === -1 || resource.userRating === 'down')
+    .map(resource => resource.type)
+    .filter(Boolean))];
+  const ratingPreferences = [
+    likedTypes.length > 0 ? `用户过去认为有帮助的资源形式：${likedTypes.join('、')}。优先包含这些形式。` : '',
+    dislikedTypes.length > 0 ? `用户过去认为没有帮助的资源形式：${dislikedTypes.join('、')}。除非必要，请减少这些形式。` : '',
+  ].filter(Boolean).join('\n');
 
   const systemPrompt =
     '你是一位资深的学习资源策展人。根据用户正在学习的一个知识点，推荐多种渠道、多种形式的优质学习资源。\n' +
@@ -851,6 +873,7 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
   const userMessage =
     `知识点名称：${topic.title}\n` +
     `知识点讲解摘要：${context || topic.title}\n\n` +
+    (ratingPreferences ? `学习资源反馈：\n${ratingPreferences}\n\n` : '') +
     `请为这个知识点推荐 6-10 个学习资源，覆盖书籍、视频、文档、文章、课程、互动练习等不同形式与渠道。`;
 
   const messages = [
@@ -956,3 +979,6 @@ export {
   analyzeCoreTopics, generateReview, gradeExercises, analyzeWeakPoints,
   generateQuickQuiz, analyzeFeynmanSession,
 } from './learning-analyzer.js';
+
+export * from './mastery-scheduler.js';
+export * from './mistake-ledger.js';

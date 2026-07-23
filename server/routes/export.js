@@ -1,8 +1,23 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
 import { generateAnkiCSV, generateOPML, generateNotionCSV, generateTopicJSON, generateStudyNotes, exportPlanBundle } from '../engine/export-engine.js';
+import { generateHTML } from '../engine/html-exporter.js';
 
 const router = Router();
+
+function sendHTMLDownload(res, plan, topicId) {
+  const topic = plan.topics.find(t => t.id === topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容，无法导出' });
+
+  const html = generateHTML(plan, topicId);
+  if (!html) return res.status(500).json({ error: '生成 HTML 失败' });
+
+  const filename = `${topic.title.replace(/[/\\?%*:|"<>]/g, '_')}.html`;
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+  return res.send(html);
+}
 
 router.get('/plans/:planId/export/anki/:topicId', (req, res) => {
   const plan = store.getPlan(req.params.planId);
@@ -76,6 +91,46 @@ router.get('/plans/:planId/export/bundle', (req, res) => {
 
   const bundle = exportPlanBundle(plan);
   res.json(bundle);
+});
+
+/**
+ * GET /plans/:planId/export/html/:topicId
+ * Self-contained HTML study note export with inline CSS/JS.
+ * No external CDN dependencies. Supports dark mode, syntax highlighting,
+ * math formulas, collapsible exercises, and auto TOC.
+ */
+router.get('/plans/:planId/export/html/:topicId', (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  return sendHTMLDownload(res, plan, req.params.topicId);
+});
+
+/**
+ * POST /html
+ * Self-contained HTML study note export.
+ * Accepts { topicId, planId } to look up a plan, or { plan } directly.
+ */
+router.post('/html', (req, res) => {
+  try {
+    let { plan, planId, topicId } = req.body;
+
+    if (!topicId) {
+      return res.status(400).json({ error: '缺少 topicId 参数' });
+    }
+
+    if (!plan && planId) {
+      plan = store.getPlan(planId);
+    }
+
+    if (!plan) {
+      return res.status(400).json({ error: '缺少 plan 或 planId 参数，或计划不存在' });
+    }
+
+    return sendHTMLDownload(res, plan, topicId);
+  } catch (err) {
+    console.error('[export] POST /html error:', err);
+    res.status(500).json({ error: err.message || '生成 HTML 失败' });
+  }
 });
 
 export default router;

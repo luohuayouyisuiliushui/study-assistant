@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { X, FileText, RotateCcw, Send, Plus, ChevronRight, ChevronLeft, BarChart3, History, Trash2, AlertCircle, Sparkles, CheckCheck } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
+import ConfirmDialog from './ConfirmDialog';
+import { useModalAccessibility } from './ui/use-modal-accessibility';
 
 export default function ExamPaperModal({ plan, onClose }) {
   const [view, setView] = useState('select');
@@ -19,10 +21,14 @@ export default function ExamPaperModal({ plan, onClose }) {
   const [error, setError] = useState(null);
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const examAttemptRef = useRef(null);
   const [results, setResults] = useState(null);
   const [practiceQuestions, setPracticeQuestions] = useState(null);
   const [practiceAnswers, setPracticeAnswers] = useState({});
   const [practiceLoading, setPracticeLoading] = useState(false);
+  const [confirmSubmit, setConfirmSubmit] = useState(null); // { unanswered: number }
+  const [confirmDelete, setConfirmDelete] = useState(null); // { examId, e }
+  const dialogRef = useModalAccessibility(onClose);
 
   useEffect(() => {
     api.listExams(plan.id).then(data => {
@@ -124,6 +130,7 @@ export default function ExamPaperModal({ plan, onClose }) {
   };
 
   const handleAnswerChange = (index, value) => {
+    examAttemptRef.current = null;
     setAnswers(prev => ({ ...prev, [index]: value }));
   };
 
@@ -131,16 +138,23 @@ export default function ExamPaperModal({ plan, onClose }) {
     if (!currentExam) return;
     const unanswered = currentExam.questions.filter(q => !answers[q.index]);
     if (unanswered.length > 0) {
-      if (!confirm(`还有 ${unanswered.length} 道题未作答，确定要提交吗？`)) return;
+      setConfirmSubmit({ unanswered: unanswered.length });
+      return;
     }
+    await doSubmit();
+  };
 
+  const doSubmit = async () => {
     setSubmitting(true);
     try {
       const answerList = currentExam.questions.map(q => ({
         exerciseIndex: q.index,
         userAnswer: answers[q.index] || '',
       }));
-      const data = await api.submitExam(plan.id, currentExam.id, answerList);
+      const attemptRef = examAttemptRef.current || api.createAttemptRef('exam');
+      examAttemptRef.current = attemptRef;
+      const data = await api.submitExam(plan.id, currentExam.id, answerList, attemptRef);
+      examAttemptRef.current = null;
       setResults(data.results);
       setView('results');
     } catch (err) {
@@ -152,6 +166,7 @@ export default function ExamPaperModal({ plan, onClose }) {
 
   const viewPastExam = (exam, e) => {
     e.stopPropagation();
+    examAttemptRef.current = null;
     setCurrentExam(exam);
     if (exam.results) {
       setResults(exam.results);
@@ -170,7 +185,10 @@ export default function ExamPaperModal({ plan, onClose }) {
 
   const handleDeleteExam = async (examId, e) => {
     e.stopPropagation();
-    if (!confirm('确定要删除这张试卷吗？')) return;
+    setConfirmDelete({ examId, e });
+  };
+
+  const doDeleteExam = async (examId) => {
     try {
       await api.deleteExam(plan.id, examId);
       const data = await api.listExams(plan.id);
@@ -181,6 +199,7 @@ export default function ExamPaperModal({ plan, onClose }) {
   };
 
   const handleNewExam = () => {
+    examAttemptRef.current = null;
     setCurrentExam(null);
     setAnswers({});
     setResults(null);
@@ -513,12 +532,12 @@ export default function ExamPaperModal({ plan, onClose }) {
 
   return (
     <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className='flex flex-col w-[90vw] h-[85vh] max-w-3xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} data-dialog-root role='dialog' aria-modal='true' aria-label={`组卷：${plan.name}`} tabIndex={-1} className='flex flex-col w-[90vw] h-[85vh] max-w-3xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
         <div className='flex items-center justify-between border-b px-4 py-2.5'>
           <h2 className='text-sm font-medium flex items-center gap-1.5'><FileText className='h-4 w-4 text-primary' />组卷</h2>
           <div className='flex items-center gap-1'>
             <Button variant='ghost' size='sm' onClick={() => setView('history')} title='历史试卷'><History className='h-3.5 w-3.5' /></Button>
-            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
+            <Button variant='ghost' size='icon' onClick={onClose} aria-label='关闭组卷'><X className='h-4 w-4' /></Button>
           </div>
         </div>
 
@@ -531,6 +550,24 @@ export default function ExamPaperModal({ plan, onClose }) {
           {view === 'history' && renderHistory()}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmSubmit}
+        onClose={() => setConfirmSubmit(null)}
+        onConfirm={() => { setConfirmSubmit(null); doSubmit(); }}
+        title='还有未作答的题目'
+        description={`还有 ${confirmSubmit?.unanswered ?? 0} 道题未作答，确定要提交吗？未作答的题目将被视为错误。`}
+        confirmLabel='仍然提交'
+      />
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => { const id = confirmDelete?.examId; setConfirmDelete(null); if (id) doDeleteExam(id); }}
+        title='删除试卷'
+        description='确定要删除这张试卷吗？此操作不可撤销。'
+        confirmLabel='删除'
+        destructive
+      />
     </div>
   );
 }

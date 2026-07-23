@@ -5,12 +5,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { hasTestPlanMarker } from './store/test-plan-marker.js';
+import { readJSON, writeAtomic } from './store/storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data', 'learn');
 const PROFILE_FILE = path.join(DATA_DIR, 'user-profile.json');
 
-const ALLOWED_MODES = new Set(['stepwise','challenge','scaffold','realtime','debate','socratic','analogy']);
+const ALLOWED_MODES = new Set(['stepwise','challenge','scaffold','realtime','feynman','stepwise-challenge','realtime-challenge','debate','socratic','analogy']);
 
 function loadAllPlans() {
   const indexFile = path.join(DATA_DIR, 'plans.json');
@@ -208,15 +209,10 @@ function _validSec(v) { return typeof v === 'number' && Number.isFinite(v) && v 
 
 // ─── Profile read/write ───
 export function getUserProfile() {
-  if (!fs.existsSync(PROFILE_FILE)) return null;
-  try { return JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf-8')); } catch { return null; }
+  return readJSON(PROFILE_FILE);
 }
 export function writeUserProfile(data) {
-  const tmp = PROFILE_FILE + '.tmp.' + process.pid;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-    try { fs.renameSync(tmp, PROFILE_FILE); } catch { fs.copyFileSync(tmp, PROFILE_FILE); fs.unlinkSync(tmp); }
-  } catch { fs.writeFileSync(PROFILE_FILE, JSON.stringify(data, null, 2), 'utf-8'); try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
+  writeAtomic(PROFILE_FILE, JSON.stringify(data, null, 2), { backup: true });
 }
 
 // ─── hasBehaviorEvidence / hasAIProfile ───

@@ -95,7 +95,11 @@ describe('Data Consistency & Integrity', () => {
 
       const created = store.getPlan(plan.id);
       assert.ok(created);
+      assert.equal(created.dataVersion, 2);
       assert.equal(created.topics.length, 1);
+      assert.deepEqual(created.topics[0].masteryEvidence, []);
+      assert.equal(created.topics[0].mastery.status, 'learning');
+      assert.ok(created.topics[0].reviewSchedule.dueAt > 0);
 
       await store.deletePlan(plan.id);
 
@@ -106,6 +110,8 @@ describe('Data Consistency & Integrity', () => {
         ? JSON.parse(fs.readFileSync(INDEX_FILE, 'utf-8')).length
         : 0;
       assert.equal(afterCount, beforeCount);
+      await store.permanentlyDeletePlan(plan.id);
+      store.clearFlag(plan.id);
     });
 
     it('trash and restore should preserve all topic data', async () => {
@@ -130,7 +136,8 @@ describe('Data Consistency & Integrity', () => {
       assert.deepEqual(restored.topics[0].weakPoints, ['弱项1']);
       assert.equal(restored.topics[0].exercises.length, 1);
 
-      await store.deletePlan(plan.id);
+      await store.permanentlyDeletePlan(plan.id);
+      store.clearFlag(plan.id);
     });
   });
 
@@ -139,6 +146,8 @@ describe('Data Consistency & Integrity', () => {
       const plan = await store.createPlan('原子写入测试');
       await store.addTopics(plan.id, ['原子写入知识点']);
       await store.deletePlan(plan.id);
+      await store.permanentlyDeletePlan(plan.id);
+      store.clearFlag(plan.id);
 
       if (fs.existsSync(PLANS_DIR)) {
         const tmpFiles = fs.readdirSync(PLANS_DIR).filter(f => f.includes('.tmp'));
@@ -185,7 +194,8 @@ describe('Data Consistency & Integrity', () => {
       const afterDelete = store.getExamPapers(plan.id);
       assert.equal(afterDelete.length, 0);
 
-      await store.deletePlan(plan.id);
+      await store.permanentlyDeletePlan(plan.id);
+      store.clearFlag(plan.id);
     });
   });
 
@@ -207,7 +217,8 @@ describe('Data Consistency & Integrity', () => {
       assert.equal(t.teachingErrors.length, 2);
       assert.equal(t.teachingErrors[0].misconception, '误解1');
 
-      await store.deletePlan(plan.id);
+      await store.permanentlyDeletePlan(plan.id);
+      store.clearFlag(plan.id);
     });
   });
 });

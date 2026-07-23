@@ -10,10 +10,12 @@ import * as store from '../engine/learn-store.js';
 import { dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 
 export function refreshDataFlywheel(contextLabel = 'flywheel') {
-  try {
-    const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
-    dataFlywheelUpdate(allPlans);
-  } catch (fwErr) {
-    console.warn(`[${contextLabel}] update failed (non-fatal):`, fwErr.message);
-  }
+  setImmediate(() => {
+    try {
+      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+      dataFlywheelUpdate(allPlans);
+    } catch (fwErr) {
+      console.warn(`[${contextLabel}] update failed (non-fatal):`, fwErr.message);
+    }
+  });
 }

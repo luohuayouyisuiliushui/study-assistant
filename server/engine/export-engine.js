@@ -19,6 +19,38 @@
 import { parseExercisesFromDetail, getTopicHistory } from './store/crud.js';
 
 // ═══════════════════════════════════════════════════════
+//  RICH MARKUP SANITIZER (for plain-text export targets)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Strip or replace rich Markdown markup that cannot be rendered by external
+ * tools like Anki (without plugins) or OPML readers.
+ *
+ * Rules:
+ *  - Mermaid fenced blocks  → "[图表]"
+ *  - Block LaTeX ($$…$$)    → "[公式]"
+ *  - Inline LaTeX ($…$)     → kept as-is (Anki-KaTeX plugin can render it)
+ *  - Generic fenced code    → kept as-is (Anki renders <pre> blocks acceptably)
+ *  - HTML tags              → stripped (for OPML _note attributes)
+ *
+ * @param {string} md - Raw Markdown string
+ * @param {{ stripHtml?: boolean }} options
+ * @returns {string}
+ */
+function stripRichMarkup(md, { stripHtml = false } = {}) {
+  if (!md) return '';
+  // 1. Mermaid blocks (fenced, case-insensitive language tag)
+  let text = md.replace(/```mermaid[\s\S]*?```/gi, '[图表]');
+  // 2. Block LaTeX: $$…$$ (may span multiple lines)
+  text = text.replace(/\$\$[\s\S]*?\$\$/g, '[公式]');
+  // 3. Strip HTML tags when targeting XML attributes (OPML _note)
+  if (stripHtml) {
+    text = text.replace(/<[^>]+>/g, '');
+  }
+  return text;
+}
+
+// ═══════════════════════════════════════════════════════
 //  DATA EXTRACTION HELPERS
 // ═══════════════════════════════════════════════════════
 
@@ -151,7 +183,7 @@ export function generateAnkiCSV(plan, topicId) {
   const sections = extractSections(topic.detail);
   for (const section of sections) {
     if (section.level === 0 || section.title === '__preamble__') continue;
-    const content = (section.content || '').slice(0, 500);
+    const content = stripRichMarkup(section.content || '').slice(0, 500);
     if (content.length < 20) continue;
     rows.push(
       `Basic,${esc(`「${topic.title}」— ${section.title}`)},${esc(content)},${esc(tags)},`
@@ -238,12 +270,12 @@ export function generateOPML(plan, topicId) {
     if (subsections.length > 0) {
       lines.push(`      <outline text="${esc(section.title)}">`);
       for (const sub of subsections) {
-        const excerpt = (sub.content || '').slice(0, 200).replace(/\n/g, ' ');
+        const excerpt = stripRichMarkup(sub.content || '', { stripHtml: true }).slice(0, 200).replace(/\n/g, ' ');
         lines.push(`        <outline text="${esc(sub.title)}" _note="${esc(excerpt)}"/>`);
       }
       lines.push('      </outline>');
     } else {
-      const excerpt = (section.content || '').slice(0, 200).replace(/\n/g, ' ');
+      const excerpt = stripRichMarkup(section.content || '', { stripHtml: true }).slice(0, 200).replace(/\n/g, ' ');
       lines.push(`      <outline text="${esc(section.title)}" _note="${esc(excerpt)}"/>`);
     }
   }
@@ -290,7 +322,7 @@ export function generateNotionCSV(plan) {
       }
       return content.join(' ');
     })();
-    const excerpt = (topic.detail || '').slice(0, 300).replace(/\n/g, ' ');
+    const excerpt = stripRichMarkup(topic.detail || '', { stripHtml: true }).slice(0, 300).replace(/\n/g, ' ');
     const weakPoints = (topic.weakPoints || []).join('; ');
     const reviewNeeded = ((topic.weakPoints || []).length > 0 || (topic.exercises || []).some(e => e.correct === false)) ? '需要复习' : '';
 

@@ -321,10 +321,27 @@ export default function UserProfile({ onBack }) {
         <Card className="shadow-sm border-0">
           <CardContent className="pt-6 space-y-3">
             <h3 className="text-sm font-semibold">学习者画像</h3>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {(profile.learnerPersona.type || []).map(t => (
                 <span key={t} className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">{t}</span>
               ))}
+              {profile.learnerPersona.confidence && (
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    profile.learnerPersona.confidence === 'high'   ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' :
+                    profile.learnerPersona.confidence === 'medium' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' :
+                    'bg-muted text-muted-foreground'
+                  }`}
+                  title='AI 对本次画像估算的置信程度'
+                >
+                  置信度：{
+                    profile.learnerPersona.confidence === 'high'   ? '高' :
+                    profile.learnerPersona.confidence === 'medium' ? '中' :
+                    profile.learnerPersona.confidence === 'low'    ? '低' :
+                    profile.learnerPersona.confidence
+                  }
+                </span>
+              )}
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">{profile.learnerPersona.summary}</p>
           </CardContent>

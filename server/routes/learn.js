@@ -9,6 +9,31 @@ import { refreshDataFlywheel } from './flywheel.js';
 
 const router = Router();
 
+function readAttemptRef(body) {
+  if (typeof body?.attemptRef !== 'string') return null;
+  const attemptRef = body.attemptRef.trim();
+  return attemptRef.length >= 8 && attemptRef.length <= 128 ? attemptRef : null;
+}
+
+function assessmentErrorStatus(error) {
+  if (Number.isInteger(error?.statusCode)) return error.statusCode;
+  return error instanceof TypeError || error instanceof RangeError || /Topic not found/.test(error.message)
+    ? 400
+    : 500;
+}
+
+function readSessionId(body) {
+  if (typeof body?.sessionId !== 'string') return null;
+  const sessionId = body.sessionId.trim();
+  return sessionId.length >= 8 && sessionId.length <= 128 ? sessionId : null;
+}
+
+function readMistakeId(value) {
+  if (typeof value !== 'string') return null;
+  const mistakeId = value.trim();
+  return mistakeId.length >= 1 && mistakeId.length <= 128 ? mistakeId : null;
+}
+
 // ─── Test Connection ───
 
 /**
@@ -29,6 +54,21 @@ router.post('/test-connection', async (req, res) => {
 
 router.get('/plans', (req, res) => {
   res.json({ plans: store.listPlans() });
+});
+
+router.get('/reviews/today', (req, res) => {
+  const rawLimit = req.query.limit;
+  const limit = rawLimit === undefined ? 20 : Number(rawLimit);
+  if ((rawLimit !== undefined && (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit)))
+    || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return res.status(400).json({ error: 'limit 必须是 1..100 的整数' });
+  }
+
+  try {
+    res.json(store.getTodayReviewQueue({ now: Date.now(), limit }));
+  } catch (error) {
+    res.status(assessmentErrorStatus(error)).json({ error: error.message });
+  }
 });
 
 router.post('/plans', async (req, res) => {
@@ -193,6 +233,22 @@ router.put('/plans/:planId/topics/:topicId', async (req, res) => {
   const { done, difficulty } = req.body;
   try {
     const plan = await store.updateTopic(req.params.planId, req.params.topicId, { done, difficulty });
+    res.json({ plan });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/learn/plans/:planId/topics/:topicId/undone
+ * Revert a topic's done=true mark back to done=false.
+ * - Resets reviewSchedule.dueAt to null (only if no evidence yet)
+ * - Resets mastery.status to 'unassessed' (only if no evidence yet)
+ * - Does NOT delete any existing masteryEvidence or mistake records.
+ */
+router.patch('/plans/:planId/topics/:topicId/undone', async (req, res) => {
+  try {
+    const plan = await store.undoneTopic(req.params.planId, req.params.topicId);
     res.json({ plan });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -562,11 +618,66 @@ router.post('/plans/:planId/review/:topicId', async (req, res) => {
   try {
     const provider = getProvider(req);
     const review = await generateReview(provider, plan, req.params.topicId, getModel(req));
-    const exercises = store.parseExercisesFromDetail(review);
-    res.json({ review, exercises });
+    const persistedTopic = store.getPlan(req.params.planId)?.topics.find(t => t.id === req.params.topicId);
+    const reviewSession = persistedTopic?.reviewSession;
+    res.json({ review, exercises: reviewSession?.exercises || [], reviewSession });
   } catch (err) {
-  console.error('[review]', err);
-    res.status(500).json({ error: err.message });
+    console.error('[review]', err);
+    res.status(assessmentErrorStatus(err)).json({ error: err.message });
+  }
+});
+
+router.post('/plans/:planId/topics/:topicId/mistakes/:mistakeId/repair', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  const topic = plan.topics.find(candidate => candidate.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  const mistake = (topic.mistakes || []).find(candidate => candidate.id === req.params.mistakeId);
+  if (!mistake) return res.status(404).json({ error: '错题不存在' });
+  if (!['open', 'repairing'].includes(mistake.status)) {
+    return res.status(409).json({ error: '该错题当前不可修复' });
+  }
+
+  try {
+    const provider = getProvider(req);
+    const review = await generateReview(provider, plan, topic.id, getModel(req), {
+      mistakeId: mistake.id,
+    });
+    const persistedTopic = store.getPlan(plan.id)?.topics.find(candidate => candidate.id === topic.id);
+    const reviewSession = persistedTopic?.reviewSession;
+    const updatedMistake = persistedTopic?.mistakes?.find(candidate => candidate.id === mistake.id);
+    res.json({
+      review,
+      exercises: reviewSession?.exercises || [],
+      reviewSession,
+      mistake: updatedMistake,
+    });
+  } catch (err) {
+    console.error('[mistake-repair]', err);
+    res.status(assessmentErrorStatus(err)).json({ error: err.message });
+  }
+});
+
+router.post('/plans/:planId/topics/:topicId/mistakes/:mistakeId/dismiss', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+  const topic = plan.topics.find(candidate => candidate.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+  if (!(topic.mistakes || []).some(candidate => candidate.id === req.params.mistakeId)) {
+    return res.status(404).json({ error: '错题不存在' });
+  }
+
+  try {
+    const mistake = await store.dismissTopicMistake(
+      plan.id,
+      topic.id,
+      req.params.mistakeId,
+      req.body?.reason,
+      { now: Date.now() }
+    );
+    res.json({ mistake });
+  } catch (err) {
+    res.status(assessmentErrorStatus(err)).json({ error: err.message });
   }
 });
 
@@ -579,25 +690,61 @@ router.post('/plans/:planId/exercises/:topicId/submit', async (req, res) => {
   if (!answers || !Array.isArray(answers) || answers.length === 0) {
     return res.status(400).json({ error: '请提供练习答案' });
   }
+  const attemptRef = readAttemptRef(req.body);
+  if (!attemptRef) return res.status(400).json({ error: 'attemptRef 必须是 8..128 字符' });
+  const context = req.body?.context ?? 'exercise';
+  if (!['exercise', 'review', 'repair'].includes(context)) {
+    return res.status(400).json({ error: 'context 必须是 exercise、review 或 repair' });
+  }
+  const sessionId = context === 'review' || context === 'repair' ? readSessionId(req.body) : null;
+  if ((context === 'review' || context === 'repair') && !sessionId) {
+    return res.status(400).json({ error: 'sessionId 必须是 8..128 字符' });
+  }
+  const mistakeId = context === 'repair' ? readMistakeId(req.body?.mistakeId) : null;
+  if (context === 'repair' && !mistakeId) {
+    return res.status(400).json({ error: 'repair 提交必须携带有效 mistakeId' });
+  }
+  if (context !== 'repair' && req.body?.mistakeId !== undefined) {
+    return res.status(400).json({ error: '只有 repair 提交可以携带 mistakeId' });
+  }
+  if (context === 'exercise' && req.body?.sessionId !== undefined) {
+    return res.status(400).json({ error: '普通练习不得携带 sessionId' });
+  }
 
   const plan = store.getPlan(req.params.planId);
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
     const provider = getProvider(req);
-    const results = await gradeExercises(provider, plan, req.params.topicId, answers);
+    const results = await gradeExercises(provider, plan, req.params.topicId, answers, {
+      attemptRef,
+      observedAt: Date.now(),
+      context,
+      sessionId,
+      mistakeId,
+    });
 
     // ── Data flywheel: update user profile with latest exercise results ──
-    try {
-      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
-      dataFlywheelUpdate(allPlans);
-    } catch (fwErr) {
-      console.warn('[flywheel] exercise submit update failed (non-fatal):', fwErr.message);
-    }
+    setImmediate(() => {
+      try {
+        const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+        dataFlywheelUpdate(allPlans);
+      } catch (fwErr) {
+        console.warn('[flywheel] exercise submit update failed (non-fatal):', fwErr.message);
+      }
+    });
 
-    res.json({ results });
+    const updatedTopic = store.getPlan(req.params.planId)?.topics.find(topic => topic.id === req.params.topicId);
+    res.json({
+      results,
+      reviewSchedule: updatedTopic?.reviewSchedule,
+      nextReviewAt: updatedTopic?.reviewSchedule?.dueAt ?? null,
+      mistake: mistakeId
+        ? updatedTopic?.mistakes?.find(candidate => candidate.id === mistakeId) || null
+        : null,
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(assessmentErrorStatus(err)).json({ error: err.message });
   }
 });
 
@@ -614,12 +761,14 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
     const results = await analyzeWeakPoints(provider, plan, getModel(req));
 
     // ── Data flywheel: update user profile with weak point analysis results ──
-    try {
-      const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
-      dataFlywheelUpdate(allPlans);
-    } catch (fwErr) {
-      console.warn('[flywheel] weak-point analysis update failed (non-fatal):', fwErr.message);
-    }
+    setImmediate(() => {
+      try {
+        const allPlans = store.listPlans().map(p => store.getPlan(p.id)).filter(Boolean);
+        dataFlywheelUpdate(allPlans);
+      } catch (fwErr) {
+        console.warn('[flywheel] weak-point analysis update failed (non-fatal):', fwErr.message);
+      }
+    });
 
     res.json({ weakPoints: results });
   } catch (err) {
@@ -659,13 +808,18 @@ router.post('/plans/:planId/quick-quiz/submit', async (req, res) => {
     if (!Array.isArray(questions) || !Array.isArray(results)) {
       return res.status(400).json({ error: 'questions 和 results 必须是数组' });
     }
-    await store.saveQuickQuizResults(req.params.planId, { questions, results });
+    const attemptRef = readAttemptRef(req.body);
+    if (!attemptRef) return res.status(400).json({ error: 'attemptRef 必须是 8..128 字符' });
+    await store.saveQuickQuizResults(req.params.planId, { questions, results }, {
+      attemptRef,
+      observedAt: Date.now(),
+    });
     // Flywheel best-effort after successful save
     try { refreshDataFlywheel('quick-quiz'); } catch {}
     res.json({ success: true });
   } catch (err) {
     console.error('[quick-quiz-submit]', err);
-    res.status(500).json({ error: '保存测验结果失败: ' + (err.message || err) });
+    res.status(assessmentErrorStatus(err)).json({ error: '保存测验结果失败: ' + (err.message || err) });
   }
 });
 
@@ -711,6 +865,85 @@ router.get('/plans/:planId/review-needs', (req, res) => {
 
   const needs = store.getTopicsNeedingReview(plan);
   res.json({ needs });
+});
+
+/**
+ * POST /api/learn/plans/import/bundle
+ * Restore a plan from an exported bundle JSON (creates new plan + adds topics).
+ * Body: the bundle object returned by GET /export/bundle
+ */
+router.post('/plans/import/bundle', async (req, res) => {
+  try {
+    const bundle = req.body;
+    if (!bundle || typeof bundle !== 'object') {
+      return res.status(400).json({ error: '请求体必须是合法的 bundle JSON' });
+    }
+    const planName = bundle?.plan?.name;
+    if (!planName || typeof planName !== 'string') {
+      return res.status(400).json({ error: 'bundle 缺少 plan.name 字段' });
+    }
+    const topics = Array.isArray(bundle.topics) ? bundle.topics : [];
+    const phases = Array.isArray(bundle.plan?.phases) ? bundle.plan.phases : [];
+
+    let plan;
+    if (phases.length > 0) {
+      const phaseNames = phases
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map(p => p.name)
+        .filter(Boolean);
+      plan = store.createPlanWithPhases(planName.trim(), phaseNames, []);
+    } else {
+      plan = await store.createPlan(planName.trim());
+    }
+
+    const titles = topics.map(t => t.title).filter(Boolean);
+    if (titles.length > 0) {
+      plan = await store.addTopics(plan.id, titles);
+    }
+
+    res.json({ success: true, plan, planId: plan.id, planName: plan.name, topicCount: titles.length });
+  } catch (err) {
+    console.error('[import-bundle]', err);
+    res.status(500).json({ error: '导入数据包失败: ' + (err.message || err) });
+  }
+});
+
+/**
+ * PATCH /api/learn/plans/:planId/topics/:topicId/resources/:idx/rating
+ * Persist a thumbs-up / thumbs-down rating on a recommended resource.
+ * Body: { rating: 'up' | 'down' | null }
+ */
+router.patch('/plans/:planId/topics/:topicId/resources/:idx/rating', async (req, res) => {
+  const plan = store.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: '计划不存在' });
+
+  const topic = plan.topics.find(t => t.id === req.params.topicId);
+  if (!topic) return res.status(404).json({ error: '知识点不存在' });
+
+  const idx = parseInt(req.params.idx, 10);
+  if (!Number.isFinite(idx) || idx < 0) return res.status(400).json({ error: 'idx 必须是非负整数' });
+
+  const resources = topic.resources || [];
+  if (idx >= resources.length) return res.status(404).json({ error: `资源索引 ${idx} 不存在` });
+
+  const { rating } = req.body;
+  const normalizedRating = rating === 'up' || rating === 1
+    ? 1
+    : (rating === 'down' || rating === -1 ? -1 : null);
+  if (rating !== 'up' && rating !== 'down' && rating !== 1 && rating !== -1 && rating !== null) {
+    return res.status(400).json({ error: "rating 必须是 1、-1 或 null" });
+  }
+
+  try {
+    const updatedResources = resources.map((r, i) =>
+      i === idx ? { ...r, userRating: normalizedRating } : r
+    );
+    await store.updateTopic(req.params.planId, req.params.topicId, { resources: updatedResources });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[resource-rating]', err);
+    res.status(500).json({ error: '保存评分失败: ' + (err.message || err) });
+  }
 });
 
 export default router;

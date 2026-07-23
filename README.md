@@ -1,4 +1,4 @@
-# Study Assistant v1.9.1
+# Study Assistant v1.12.1
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
@@ -12,7 +12,7 @@ AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、�
 3. 讲解内容支持 **Markdown 渲染**、**数学公式**（KaTeX）、**思维导图**和 **Mermaid 图表**
 
 ### 互动学习
-4. **5 种互动教学模式**：费曼教学、挑战找错、分段引导、实时互动、脚手架引导
+4. **7 种互动教学模式**：费曼教学、挑战找错、分段引导、实时互动、脚手架引导、分段挑战、实时挑战
 5. 随时**追问**任何不理解的地方，AI 深入解释
 6. **练习与测验**：随堂练习 AI 自动批改，支持智能组卷考试
 
@@ -26,11 +26,23 @@ AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、�
 11. **费曼教学分析**：记录教学质量、精彩讲解摘录、学生遗留问题
 
 ### 数据导出
-12. 导出为 **Anki 卡片**、**Markdown**、**OPML**、**JSON**、**Notion** 等格式
+12. 导出为 **Anki 卡片**、**Markdown**、**HTML 离线单文件**、**OPML**（思维导图）、**JSON**、**学习笔记**、**计划数据包**（备份恢复）等 7 种格式，每种格式均带用途说明
+13. **数据包还原**：导出的计划数据包（Bundle JSON）可通过导入功能重新恢复，支持跨设备迁移和灾难恢复
 
 ### 个性化自适应
 13. **越用越懂你**：每次做练习、提问、学习时长都被记录，AI 自动调整难度和讲解风格
 14. **自适应引擎**：根据薄弱点自动推荐复习内容，事实核查你的理解
+
+### 复习与错题修复
+15. **今日复习队列**：到期复习与待修复错题合并为一个智能队列，优先处理错题，到期复习紧随其后，优先级基于逾期天数和掌握水平动态计算
+16. **错题修复**：练习/测验中答错的题自动归入错题台账；修复练习答对后进入 24 小时等待期，到期后再次验证，通过才标记为已验证，未通过则重新打开
+17. **间隔重复（SM-2）**：每个知识点独立维护 SM-2 复习计划表（间隔天数、难度系数、重复次数、遗忘次数），复习后 UI 直接展示本次调度参数（间隔 X 天 / 难度系数 Y / 已复习 Z 次），帮助用户理解排期依据
+
+### 掌握评估体系
+18. **完成 ≠ 掌握**：知识点标记为"已完成"仅代表用户已标记学完，不自动视为掌握。掌握水平由 `mastery` 字段独立追踪，初始状态为 `unassessed` 或 `learning`（已标记完成）
+19. **证据驱动掌握**：所有练习、测验、费曼教学、复习的数据点作为证据（`masteryEvidence`）持久化，引擎从最近 20 条证据加权计算掌握分数（`level: 0–1`）和状态；掌握度旁展示证据样本数 tooltip，帮助区分可靠程度
+20. **薄弱点可视化**：AI 分析后将薄弱知识点以标签形式展示在知识点详情页，标注掌握程度与建议行动
+21. **掌握判定条件**：达到 `mastered` 需同时满足 — 掌握分数 ≥ 0.8、至少 3 个独立练习轮次、至少 2 条 high 置信度的高分证据、且覆盖超过 24 小时
 
 ---
 
@@ -103,6 +115,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 | **分段讲解** | AI 按步骤逐段讲解，每段后暂停等你确认 |
 | **实时互动** | AI 实时响应你的反馈，灵活调整节奏 |
 | **脚手架引导** | 将复杂概念拆成递进子问题，逐个掌握 |
+| **分段挑战** | 分段讲解 + AI 嵌入错误，边读边纠错 |
+| **实时挑战** | 实时对话 + AI 嵌入错误，保持批判性警觉 |
 
 ### 4. 练习与测验
 
@@ -127,7 +141,23 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 7. 数据导出
 
-支持导出为：**Anki 卡片**（APKG）、**Markdown**、**OPML**（思维导图）、**JSON**、**Notion** 格式。
+支持导出为：
+
+| 格式 | 用途 |
+|------|------|
+| **Markdown (.md)** | 通用文档，可在 Obsidian / Notion 中打开 |
+| **HTML 离线网页** | 单文件离线浏览，含渲染样式 |
+| **Anki CSV** | 导入 Anki 制作闪卡复习 |
+| **OPML** | 导入思维导图工具（XMind / FreeMind 等） |
+| **JSON** | 结构化数据，供二次开发或脚本处理 |
+| **学习笔记** | 纯 Markdown 笔记，不含题目 |
+| **计划数据包** | 完整备份 JSON，可通过导入功能恢复至本应用 |
+
+### 8. 复习与错题修复
+
+- **今日复习**：打开今日复习面板，查看合并队列中的到期复习和待修复错题，按优先级从高到低展示。复习时逐题作答，每次回答质量（0–5 分）驱动 SM-2 间隔算法
+- **启动错题修复**：从错题面板选择记录并完成定向练习；答对后显示精确的 24 小时验证时间，到期后再次作答，通过才标记为已验证，未通过则重新打开
+- **掌握进度**：完成标记只表示学完；系统根据练习证据与复习记录独立计算掌握状态，并据此安排后续复习
 
 ---
 
@@ -153,13 +183,16 @@ study-assistant/
 │   │   ├── api.js               # API 客户端封装
 │   │   ├── components/          # 业务组件
 │   │   │   ├── ui/              # shadcn/ui 手写组件
-│   │   │   ├── PlanView.jsx     # 计划详情
-│   │   │   ├── TopicDetail.jsx  # 知识点详情
+│   │   │   ├── PlanView.jsx     # 计划详情（含搜索/筛选/滚动恢复）
+│   │   │   ├── TopicDetail.jsx  # 知识点详情（薄弱点/SM-2参数/资源评分）
 │   │   │   ├── KnowledgeGraphModal.jsx  # 知识图谱
 │   │   │   ├── ExercisePanel.jsx       # 练习面板
 │   │   │   ├── ExamPaperModal.jsx      # 考试面板
 │   │   │   ├── InteractivePanel.jsx    # 互动教学
 │   │   │   ├── QAPanel.jsx      # 问答面板
+│   │   │   ├── MistakePanel.jsx # 错题管理
+│   │   │   ├── TodayReview.jsx  # 今日复习队列
+│   │   │   ├── ConfirmDialog.jsx # 统一确认对话框（替代 window.confirm）
 │   │   │   └── ...
 │   │   └── pages/
 │   │       └── UserProfile.jsx  # 学习画像页
@@ -219,7 +252,9 @@ study-assistant/
 | `/api/learn/plans/:id/quick-quiz` | 快速测验 |
 | `/api/learn/plans/:id/weakpoints` | 薄弱点分析 |
 | `/api/learn/plans/:id/knowledge-graph` | 知识图谱 |
-| `/api/learn/plans/:id/export` | 数据导出 |
+| `/api/learn/plans/:id/export` | 数据导出（MD/HTML/Anki/OPML/JSON/Bundle） |
+| `/api/learn/plans/import/bundle` | 计划数据包还原（Bundle JSON 导入） |
+| `/api/learn/plans/:id/topics/:tid/resources/:idx/rating` | 资源推荐评分（👍/👎） |
 | `/api/learn/plans/:id/adaptive/review` | 自适应复习推荐 |
 | `/api/learn/fact-check` | 事实核查 |
 | `/api/user-profile/summary` | 学习画像摘要 |
@@ -253,6 +288,7 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 - 计划索引：`server/data/plans.json`
 - 每计划独立文件：`server/data/plans/<id>.json`
 - 用户画像：`server/data/user-profile.json`
+- **自动数据迁移**：升级到 v2 schema 时自动将计划数据迁移到当前版本；迁移前将原始文件备份到 `server/data/.migration-backups/data-version-<timestamp>` 目录，迁移失败自动回滚
 
 ### 清理命令
 
@@ -267,6 +303,7 @@ npm run clean:backups                  # 清理备份文件
 
 ### 已知限制
 
+- **单用户本地应用**：所有数据存储在本地的 `server/data/` 目录下，无云端同步、无多用户/多设备协作、无通知推送。数据仅限浏览器访问当前后端进程时可用
 - Windows 测试需串行（`--test-concurrency=1`）
 - 前端使用 HashRouter（`/#/`）
 - 服务端没有数据库，数据量极大时 JSON 文件 I/O 可能成为瓶颈

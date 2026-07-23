@@ -65,7 +65,20 @@ describe('learn-engine', () => {
 
   describe('generateReview', () => {
     it('should generate review content for a done topic', async () => {
-      const provider = createMockProvider('## 复习总结\n\n### 重点回顾\n\n这是AI生成的复习内容。');
+      const provider = createMockProvider([
+        '## 复习总结',
+        '',
+        '这是AI生成的复习内容。',
+        '',
+        '### 📝 练习题',
+        '',
+        '> **练习题 1**（选择题）1+1=?',
+        '> - A. 1',
+        '> - B. 2',
+        '> > 正确答案：B',
+        '> > 解析：1+1=2',
+        '> > 关联概念：基础运算',
+      ].join('\n'));
       const plan = await createFullPlan();
 
       const review = await generateReview(provider, plan, plan.topics[0].id, 'mock-model');
@@ -248,8 +261,11 @@ describe('learn-engine', () => {
   // ─── getTopicsNeedingReview ───
 
   describe('store.getTopicsNeedingReview', () => {
-    it('should return done topics with weak points or exercise errors', async () => {
+    it('should return scheduled topics with legacy weak-point metadata', async () => {
       const plan = await createFullPlan();
+      await store.updateTopic(plan.id, plan.topics[0].id, {
+        reviewSchedule: { ...plan.topics[0].reviewSchedule, dueAt: 0 },
+      });
       const needs = store.getTopicsNeedingReview(plan);
       assert.ok(Array.isArray(needs));
       // t1 has weak points + exercise errors
@@ -259,7 +275,7 @@ describe('learn-engine', () => {
       assert.strictEqual(t1.hasExerciseErrors, true);
     });
 
-    it('should not include topics without weak points and correct exercises', async () => {
+    it('should not include topics before their scheduled due time', async () => {
       const plan = await store.createPlan('clean-plan');
       store.updateTopic(plan.id, store.getPlan(plan.id).topics[0]?.id || 'x', {}); // no-op
       await store.addTopics(plan.id, ['干净知识点']);
@@ -582,6 +598,32 @@ describe('Interactive mode', () => {
 // ═══════════════════════════════════════════════════════
 
 describe('generateDetail', () => {
+  it('includes recent detail feedback in the generation context', async () => {
+    const plan = await store.createPlan('gendetail-feedback-context');
+    await store.addTopics(plan.id, ['反馈上下文测试']);
+    const currentPlan = store.getPlan(plan.id);
+    const topic = currentPlan.topics[0];
+    topic.generationFeedback = [
+      { mode: 'detail', reason: '请增加一个贴近生活的例子' },
+      { mode: 'review', reason: '这条不应进入详情生成' },
+    ];
+    let messages = null;
+    const provider = createStreamMockProvider('带反馈的讲解内容。');
+    provider.warmCache = () => {};
+    const create = provider._client.chat.completions.create;
+    provider._client.chat.completions.create = async (options) => {
+      messages = options.messages;
+      return create(options);
+    };
+
+    await generateDetail(provider, currentPlan, topic.id);
+
+    assert.ok(messages[1].content.includes('请增加一个贴近生活的例子'));
+    assert.ok(!messages[1].content.includes('这条不应进入详情生成'));
+    await store.permanentlyDeletePlan(plan.id);
+    store.clearFlag(plan.id);
+  });
+
   it('should generate content and mark topic as done', async () => {
     const plan = await store.createPlan('gendetail-test');
     await store.addTopics(plan.id, ['测试核心生成']);
@@ -599,8 +641,14 @@ describe('generateDetail', () => {
     const topic = p2.topics[0];
     assert.strictEqual(topic.done, true, 'topic should be marked done');
     assert.ok(topic.detail, 'topic should have detail');
+    assert.deepStrictEqual(topic.masteryEvidence, []);
+    assert.strictEqual(topic.mastery.status, 'learning');
+    assert.notStrictEqual(topic.mastery.status, 'mastered');
+    assert.ok(topic.reviewSchedule.dueAt > Date.now());
+    assert.strictEqual(topic.reviewSession, null);
 
-    await store.deletePlan(plan.id);
+    await store.permanentlyDeletePlan(plan.id);
+    store.clearFlag(plan.id);
   });
 
   it('should throw for non-existent topic', async () => {
@@ -610,7 +658,8 @@ describe('generateDetail', () => {
       () => generateDetail(provider, plan, 'non-existent'),
       { message: 'Topic not found' }
     );
-    await store.deletePlan(plan.id);
+    await store.permanentlyDeletePlan(plan.id);
+    store.clearFlag(plan.id);
   });
 
   it('should handle empty AI response as error', async () => {
@@ -622,7 +671,8 @@ describe('generateDetail', () => {
       () => generateDetail(provider, p, p.topics[0].id),
       { message: 'AI 返回内容为空' }
     );
-    await store.deletePlan(plan.id);
+    await store.permanentlyDeletePlan(plan.id);
+    store.clearFlag(plan.id);
   });
 });
 

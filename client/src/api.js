@@ -2,8 +2,39 @@ import { loadSettings, selectTextProvider } from './lib/settings-storage';
 
 const API_BASE = '/api';
 
+export function createAttemptRef(prefix = 'attempt') {
+  const randomPart = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${randomPart}`.slice(0, 128);
+}
+
 function getApiSettings() {
   return loadSettings();
+}
+
+function isQueueableOfflineMutation(url, options) {
+  return options.method === 'PATCH' && /\/api\/learn\/plans\/[^/]+\/topics\/[^/]+\/resources\/\d+\/rating$/.test(url);
+}
+
+function queueOfflineMutation(url, options, body) {
+  const controller = navigator.serviceWorker?.controller;
+  if (!controller) return false;
+  controller.postMessage({
+    type: 'OFFLINE_QUEUE',
+    payload: {
+      url: new URL(url, window.location.origin).href,
+      method: options.method,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      body: body === undefined ? null : (typeof body === 'string' ? body : JSON.stringify(body)),
+    },
+  });
+  return true;
+}
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('online', () => {
+    navigator.serviceWorker.controller?.postMessage({ type: 'REPLAY_OFFLINE_QUEUE' });
+  });
 }
 
 /**
@@ -27,6 +58,40 @@ function injectProvider(body, settings, taskType) {
   return JSON.stringify(parsed);
 }
 
+/**
+ * Translate HTTP status codes and known error messages into actionable Chinese prompts.
+ * The returned string is safe to display directly in the UI.
+ */
+function humanizeError(status, serverMessage) {
+  // Prefer a specific server message when it looks meaningful
+  const msg = serverMessage || '';
+
+  if (status === 401 || msg.includes('Incorrect API key') || msg.includes('invalid_api_key') || msg.includes('Authentication')) {
+    return 'API Key 无效或已过期，请前往设置重新填写。';
+  }
+  if (status === 403 || msg.includes('Permission') || msg.includes('permission')) {
+    return 'API Key 权限不足，请确认 Key 是否支持当前模型。';
+  }
+  if (status === 429 || msg.includes('Rate limit') || msg.includes('rate_limit') || msg.includes('quota')) {
+    return '请求频率或配额超限（429），请稍等片刻后重试，或切换到其他 API Key。';
+  }
+  if (status === 402 || msg.includes('insufficient_quota') || msg.includes('Billing')) {
+    return 'API 余额不足，请前往服务商补充额度。';
+  }
+  if (status === 503 || status === 502 || status === 504) {
+    return `AI 服务暂时不可用（${status}），请稍后重试或更换 Base URL。`;
+  }
+  if (status === 500) {
+    return `服务器内部错误（500）${msg ? '：' + msg : ''}，请重试或重启后端服务。`;
+  }
+  if (status === 404) {
+    return `找不到该资源（404）${msg ? '：' + msg : ''}。`;
+  }
+  if (msg) return msg;
+  if (status) return `请求失败（${status}），请检查网络或 API 配置后重试。`;
+  return '网络请求失败，请检查后端服务是否正在运行。';
+}
+
 async function request(url, options = {}, taskType = null) {
   let body = options.body;
 
@@ -38,24 +103,33 @@ async function request(url, options = {}, taskType = null) {
   const fetchOpts = { ...options };
   if (body !== undefined) {
     fetchOpts.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    // Ensure body is a JSON string for fetch
     fetchOpts.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
 
-  const res = await fetch(url, fetchOpts);
+  let res;
+  try {
+    res = await fetch(url, fetchOpts);
+  } catch (networkErr) {
+    if (isQueueableOfflineMutation(url, options) && queueOfflineMutation(url, options, body)) {
+      return { queued: true };
+    }
+    throw new Error('无法连接到后端服务，请确认服务已启动（npm run dev）。');
+  }
+
   let data;
   try {
     data = await res.json();
   } catch {
-    throw new Error(`服务器返回了空响应 (${res.status})${res.statusText ? ': ' + res.statusText : ''}`);
+    throw new Error(humanizeError(res.status, null));
   }
   if (!res.ok || data.error) {
-    throw new Error(data.error || `请求失败 (${res.status})`);
+    throw new Error(humanizeError(res.status, data.error));
   }
   return data;
 }
 
 const api = {
+  createAttemptRef,
   // ─── Plans (no AI needed) ───
   async listPlans() {
     return request(`${API_BASE}/learn/plans`);
@@ -114,6 +188,11 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}`, {
       method: 'PUT',
       body: JSON.stringify(updates),
+    });
+  },
+  async undoneTopic(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/undone`, {
+      method: 'PATCH',
     });
   },
 
@@ -309,16 +388,45 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/review/${topicId}`,
       { method: 'POST' }, 'generate-review');
   },
+  async generateMistakeRepair(planId, topicId, mistakeId) {
+    return request(
+      `${API_BASE}/learn/plans/${planId}/topics/${topicId}/mistakes/${mistakeId}/repair`,
+      { method: 'POST' },
+      'generate-mistake-repair'
+    );
+  },
+  async dismissMistake(planId, topicId, mistakeId, reason) {
+    return request(
+      `${API_BASE}/learn/plans/${planId}/topics/${topicId}/mistakes/${mistakeId}/dismiss`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      'dismiss-mistake'
+    );
+  },
+  async getTodayReviews(limit = 20) {
+    return request(`${API_BASE}/learn/reviews/today?limit=${encodeURIComponent(limit)}`);
+  },
   async submitFeedback(planId, topicId, reason, mode) {
     return request(`${API_BASE}/learn/plans/${planId}/topic/${topicId}/feedback`, {
       method: 'POST',
       body: JSON.stringify({ reason, mode }),
     });
   },
-  async submitExercises(planId, topicId, answers) {
+  async submitExercises(planId, topicId, answers, attemptRef, assessment = {}) {
     return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {
       method: 'POST',
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, attemptRef, ...assessment }),
+    }, 'submit-exercises');
+  },
+  async submitReviewExercises(planId, topicId, answers, sessionId, attemptRef) {
+    return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers, attemptRef, context: 'review', sessionId }),
+    }, 'submit-exercises');
+  },
+  async submitRepairExercises(planId, topicId, mistakeId, answers, sessionId, attemptRef) {
+    return request(`${API_BASE}/learn/plans/${planId}/exercises/${topicId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers, attemptRef, context: 'repair', sessionId, mistakeId }),
     }, 'submit-exercises');
   },
   async analyzeWeakPoints(planId) {
@@ -335,10 +443,10 @@ const api = {
       method: 'POST',
     }, 'quick-quiz');
   },
-  async submitQuickQuiz(planId, questions, results) {
+  async submitQuickQuiz(planId, questions, results, attemptRef) {
     return request(`${API_BASE}/learn/plans/${planId}/quick-quiz/submit`, {
       method: 'POST',
-      body: JSON.stringify({ questions, results }),
+      body: JSON.stringify({ questions, results, attemptRef }),
     });
   },
 
@@ -421,6 +529,9 @@ const api = {
   exportStudyNotes(planId, topicId) {
     return `${API_BASE}/learn/plans/${planId}/export/notes/${topicId}`;
   },
+  exportHTML(planId, topicId) {
+    return `${API_BASE}/export/plans/${planId}/export/html/${topicId}`;
+  },
   exportBundle(planId) {
     return `${API_BASE}/learn/plans/${planId}/export/bundle`;
   },
@@ -476,10 +587,10 @@ const api = {
       }
     }
   },
-  async submitExam(planId, examId, answers) {
+  async submitExam(planId, examId, answers, attemptRef) {
     return request(`${API_BASE}/learn/plans/${planId}/exam/${examId}/submit`, {
       method: 'POST',
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, attemptRef }),
     }, 'submit-exam');
   },
   async deleteExam(planId, examId) {
@@ -501,6 +612,22 @@ const api = {
       method: 'POST',
       body,
     }, 'get-core-topics');
+  },
+
+  // ─── Bundle Import ───
+  async importBundle(bundleJson) {
+    return request(`${API_BASE}/learn/plans/import/bundle`, {
+      method: 'POST',
+      body: JSON.stringify(bundleJson),
+    }, 'import-bundle');
+  },
+
+  // ─── Resource Rating ───
+  async rateResource(planId, topicId, idx, rating) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/resources/${idx}/rating`, {
+      method: 'PATCH',
+      body: JSON.stringify({ rating }),
+    });
   },
 };
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal, Undo2 } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
 import RegenerateDialog from './RegenerateDialog';
@@ -9,6 +9,7 @@ import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
 import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
+import MistakePanel from './MistakePanel.jsx';
 import QAPanel from './QAPanel.jsx';
 import ActionMenu from './ActionMenu.jsx';
 import { loadSettings } from '#/lib/settings-storage';
@@ -71,10 +72,49 @@ function parseExercisesFromMarkdown(detail) {
   return exercises;
 }
 
+function getUsableReviewSession(topic, { kind = 'review', mistakeId = null } = {}) {
+  const session = topic?.reviewSession;
+  const mistakeMatches = kind !== 'repair' || session?.mistakeId === mistakeId;
+  return session?.kind === kind
+    && mistakeMatches
+    && Array.isArray(session.exercises)
+    && session.exercises.length > 0
+    ? session
+    : null;
+}
+
+function formatReviewDate(timestamp) {
+  if (!Number.isFinite(timestamp)) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatReviewDateTime(timestamp) {
+  if (!Number.isFinite(timestamp)) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlMode = searchParams.get('mode');
   const urlReview = searchParams.get('review') === '1';
+  const urlRepair = searchParams.get('repair');
+  const practiceKind = urlRepair ? 'repair' : 'review';
+  const practiceMistakeId = urlRepair || null;
+  const practiceContextKey = `${topic?.id || ''}:${practiceKind}:${practiceMistakeId || ''}`;
   const [qaList, setQaList] = useState([]);
   const [qaLoading, setQaLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -103,11 +143,33 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [exerciseResults, setExerciseResults] = useState(null);
   const [exerciseLoading, setExerciseLoading] = useState(false);
   const [submittedExercises, setSubmittedExercises] = useState(false);
+  const exerciseAttemptRef = useRef(null);
 
+  const initialReviewSession = getUsableReviewSession(topic, {
+    kind: practiceKind,
+    mistakeId: practiceMistakeId,
+  });
+  const reviewSessionContextRef = useRef(practiceContextKey);
   const [reviewMode, setReviewMode] = useState(false);
-  const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
+  const [reviewSession, setReviewSession] = useState(initialReviewSession);
+  const [reviewContent, setReviewContent] = useState(initialReviewSession?.content || topic?.reviewGenerated || null);
+  const [reviewAnswers, setReviewAnswers] = useState({});
+  const [reviewResults, setReviewResults] = useState(null);
+  const [reviewSubmitted, setReviewSubmitted] = useState(false);
+  const [reviewQuality, setReviewQuality] = useState(null);
+  const [reviewScheduleDetails, setReviewScheduleDetails] = useState(null); // {intervalDays, easeFactor, repetitions}
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState(null);
+  const [nextReviewAt, setNextReviewAt] = useState(null);
+  const [repairMistake, setRepairMistake] = useState(() => (
+    practiceMistakeId
+      ? topic?.mistakes?.find(mistake => mistake.id === practiceMistakeId) || null
+      : null
+  ));
+  const reviewLoadBusyRef = useRef(false);
+  const reviewSubmitBusyRef = useRef(false);
+  const reviewAttemptRef = useRef(null);
   const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
 
   const [interactiveMode, setInteractiveMode] = useState(null);
@@ -126,6 +188,26 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const fixedMenuRef = useRef(null);
+  const menuTriggerRef = useRef(null);
+  const actionMenuId = `topic-action-menu-${topic?.id || 'current'}`;
+
+  const closeActionMenu = () => {
+    setMenuOpen(false);
+    requestAnimationFrame(() => menuTriggerRef.current?.focus());
+  };
+
+  const toggleActionMenu = (event) => {
+    menuTriggerRef.current = event.currentTarget;
+    setMenuOpen(open => !open);
+  };
+
+  const handleActionMenuTriggerKeyDown = (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      menuTriggerRef.current = event.currentTarget;
+      setMenuOpen(true);
+    }
+  };
 
   useEffect(() => {
     const handler = (e) => { if (!menuRef.current?.contains(e.target) && !fixedMenuRef.current?.contains(e.target)) setMenuOpen(false); };
@@ -142,6 +224,17 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const [resources, setResources] = useState(topic?.resources || null);
   const [resourcesLoading, setResourcesLoading] = useState(false);
+  const [resourceRatings, setResourceRatings] = useState(() => {
+    // Pre-populate from persisted userRating on resources
+    const initial = {};
+    (topic?.resources || []).forEach((r, i) => {
+      if (r.userRating === 1 || r.userRating === 'up') initial[i] = 1;
+      if (r.userRating === -1 || r.userRating === 'down') initial[i] = -1;
+    });
+    return initial;
+  });
+  const [resourceRatingError, setResourceRatingError] = useState(null);
+  const [feedbackHistoryOpen, setFeedbackHistoryOpen] = useState(false);
   const [feynmanInsights, setFeynmanInsights] = useState(topic?.feynmanInsights || null);
   const [feynmanInsightsOpen, setFeynmanInsightsOpen] = useState(true);
   const [feynmanAnalyzing, setFeynmanAnalyzing] = useState(false);
@@ -182,6 +275,30 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     setPrevSessionData({ mode: session.mode, sections: session.transcript.map(e => ({ content: e.content || '' })), finished: !!session.finished });
   }, [topic?.id]);
 
+  useEffect(() => {
+    if (reviewSessionContextRef.current === practiceContextKey) return;
+    const session = getUsableReviewSession(topic, {
+      kind: practiceKind,
+      mistakeId: practiceMistakeId,
+    });
+    reviewSessionContextRef.current = practiceContextKey;
+    setReviewSession(session);
+    setReviewContent(session?.content || (practiceKind === 'review' ? topic?.reviewGenerated : null) || null);
+    setReviewAnswers({});
+    setReviewResults(null);
+    setReviewSubmitted(false);
+    setReviewQuality(null);
+    setReviewScheduleDetails(null);
+    setReviewError(null);
+    setNextReviewAt(null);
+    setRepairMistake(practiceMistakeId
+      ? topic?.mistakes?.find(mistake => mistake.id === practiceMistakeId) || null
+      : null);
+    reviewLoadBusyRef.current = false;
+    reviewSubmitBusyRef.current = false;
+    reviewAttemptRef.current = null;
+  }, [practiceContextKey, practiceKind, practiceMistakeId, topic, topic?.mistakes, topic?.reviewGenerated]);
+
   // Sync URL params with interactive mode and review mode
   useEffect(() => {
     if (urlMode && !interactiveMode) {
@@ -198,21 +315,90 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }
   }, [urlMode]);
 
-  useEffect(() => {
-    if (urlReview && !reviewMode) {
-      setReviewMode(true);
-      // If no review content yet, generate it
-      if (!reviewContent && !reviewLoading) {
-        setReviewLoading(true);
-        api.generateReview(plan.id, topic.id).then(d => {
-          setReviewContent(d.review);
-          api.getPlan(plan.id).then(fresh => onRefresh(fresh.plan));
-        }).catch(() => {}).finally(() => setReviewLoading(false));
+  const activeReviewSession = reviewSessionContextRef.current === practiceContextKey ? reviewSession : null;
+  const activeReviewContent = reviewSessionContextRef.current === practiceContextKey ? reviewContent : null;
+  const activeRepairMistake = practiceKind === 'repair'
+    ? repairMistake || topic?.mistakes?.find(mistake => mistake.id === practiceMistakeId) || null
+    : null;
+
+  const applyReviewSession = useCallback((session, fallbackContent = '') => {
+    const mistakeMatches = practiceKind !== 'repair' || session?.mistakeId === practiceMistakeId;
+    if (session?.kind !== practiceKind
+      || !mistakeMatches
+      || !Array.isArray(session.exercises)
+      || session.exercises.length === 0) {
+      throw new Error(practiceKind === 'repair' ? '错题修复会话无效' : '复习会话缺少可作答练习');
+    }
+    reviewSessionContextRef.current = practiceContextKey;
+    setReviewSession(session);
+    setReviewContent(session.content || fallbackContent);
+    setReviewAnswers({});
+    setReviewResults(null);
+    setReviewSubmitted(false);
+    setReviewQuality(null);
+    setReviewScheduleDetails(null);
+    setNextReviewAt(null);
+    reviewAttemptRef.current = null;
+  }, [practiceContextKey, practiceKind, practiceMistakeId]);
+
+  const ensureReviewSession = useCallback(async () => {
+    const persistedSession = getUsableReviewSession(topic, {
+      kind: practiceKind,
+      mistakeId: practiceMistakeId,
+    });
+    const availableSession = activeReviewSession || persistedSession;
+    if (availableSession) {
+      if (activeReviewSession?.id !== availableSession.id) {
+        applyReviewSession(
+          availableSession,
+          availableSession.content || (practiceKind === 'review' ? topic?.reviewGenerated : '') || ''
+        );
       }
-    } else if (!urlReview && reviewMode) {
+      setReviewError(null);
+      return availableSession;
+    }
+    if (reviewLoadBusyRef.current) return null;
+
+    reviewLoadBusyRef.current = true;
+    setReviewLoading(true);
+    setReviewError(null);
+    try {
+      const response = practiceKind === 'repair'
+        ? await api.generateMistakeRepair(plan.id, topic.id, practiceMistakeId)
+        : await api.generateReview(plan.id, topic.id);
+      applyReviewSession(response.reviewSession, response.review || '');
+      if (practiceKind === 'repair') setRepairMistake(response.mistake || null);
+      try {
+        const fresh = await api.getPlan(plan.id);
+        onRefresh(fresh.plan);
+      } catch {}
+      return response.reviewSession;
+    } catch (err) {
+      const fallback = practiceKind === 'repair' ? '无法生成错题修复' : '无法生成复习';
+      setReviewError(`生成失败：${err?.message || fallback}`);
+      return null;
+    } finally {
+      setReviewLoading(false);
+      reviewLoadBusyRef.current = false;
+    }
+  }, [
+    activeReviewSession,
+    applyReviewSession,
+    onRefresh,
+    plan.id,
+    practiceKind,
+    practiceMistakeId,
+    topic,
+  ]);
+
+  useEffect(() => {
+    if (urlReview || urlRepair) {
+      setReviewMode(true);
+      ensureReviewSession();
+    } else {
       setReviewMode(false);
     }
-  }, [urlReview]);
+  }, [ensureReviewSession, urlRepair, urlReview]);
 
   // Sticky header: detect when sentinel scrolls out of view
   useEffect(() => {
@@ -342,6 +528,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   useEffect(() => {
     setLocalDetail(topic?.detail || '');
+    exerciseAttemptRef.current = null;
     setError(topic?.lastError || null);
     const history = plan.history?.filter(h => h.topicId === topic?.id) || [];
     const pairs = [];
@@ -469,68 +656,21 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     URL.revokeObjectURL(url);
   };
 
-  const handleExportHtml = async () => {
+  const handleExportHtml = () => {
     if (!localDetail) return;
-    let md = `# ${topic.title}\n\n`;
-    md += topic.detail + '\n\n';
-    if (qaList.length > 0) {
-      md += `---\n\n## 📎 扩展讨论\n\n`;
-      qaList.forEach((qa, i) => { md += `### 追问 ${i + 1}\n\n${qa.question}\n\n`; md += `> ${qa.answer}\n\n`; });
-    }
-    const segments = [];
-    const mermaidRe = /```mermaid\s*\n([\s\S]*?)```/g;
-    let lastIdx = 0, match;
-    while ((match = mermaidRe.exec(md)) !== null) {
-      if (match.index > lastIdx) segments.push({ type: 'markdown', content: md.slice(lastIdx, match.index) });
-      segments.push({ type: 'mermaid', content: match[1].trim() });
-      lastIdx = mermaidRe.lastIndex;
-    }
-    if (lastIdx < md.length) segments.push({ type: 'markdown', content: md.slice(lastIdx) });
-    const mdToHtml = (text) => {
-      let h = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      h = h.replace(/^##### (.*$)/gm, '<h5>$1</h5>');
-      h = h.replace(/^#### (.*$)/gm, '<h4>$1</h4>');
-      h = h.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-      h = h.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-      h = h.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-      h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-      h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
-      h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-      h = h.replace(/^---$/gm, '<hr>');
-      h = h.replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>');
-      h = h.replace(/^- (.*$)/gm, '<li>$1</li>');
-      h = h.replace(/^\d+\. (.*$)/gm, '<li>$1</li>');
-      h = h.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-      h = h.replace(/\n\n/g, '</p><p>');
-      if (!h.startsWith('<h') && !h.startsWith('<p>') && !h.startsWith('<ul') && !h.startsWith('<blockquote') && !h.startsWith('<hr')) h = '<p>' + h;
-      if (!h.endsWith('>')) h = h + '</p>';
-      h = h.replace(/<p><\/p>/g, '');
-      return h;
-    };
-    const { default: mermaid } = await import('mermaid');
-    mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'strict', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' });
-    let bodyHtml = '';
-    for (const seg of segments) {
-      if (seg.type === 'mermaid') {
-        try { const id = 'm-export-' + Math.random().toString(36).slice(2, 9); const { svg: svgText } = await mermaid.render(id, seg.content); bodyHtml += `<div class="mermaid-svg">${svgText}</div>`; } catch { bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`; }
-      } else { bodyHtml += mdToHtml(seg.content); }
-    }
-    const title = topic.title.replace(/[/\\?%*:|"<>]/g, '_');
-    const html = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>${title}</title>\n<style>\n  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 24px 20px; line-height: 1.8; color: #1e293b; background: #fff; }\n  h1 { font-size: 24px; margin: 20px 0 10px; } h2 { font-size: 20px; margin: 16px 0 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; } h3 { font-size: 17px; margin: 12px 0 6px; } h4, h5 { font-size: 15px; margin: 10px 0 5px; } p { margin: 8px 0; } ul, ol { padding-left: 20px; margin: 8px 0; } li { margin: 3px 0; } code { padding: 2px 5px; background: #f1f5f9; border-radius: 3px; font-size: .9em; } pre { padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; overflow-x: auto; font-size: 13px; } pre.mermaid-fallback { background: #fef2f2; border-color: #fca5a5; color: #dc2626; } blockquote { margin: 10px 0; padding: 8px 14px; border-left: 3px solid #60a5fa; background: #f1f5f9; border-radius: 0 6px 6px 0; } table { width: 100%; border-collapse: collapse; margin: 10px 0; } th, td { padding: 6px 10px; border: 1px solid #e2e8f0; } th { background: #f1f5f9; } hr { margin: 20px 0; border: none; border-top: 1px solid #e2e8f0; } a { color: #2563eb; } .mermaid-svg { margin: 16px 0; display: flex; justify-content: center; overflow-x: auto; padding: 16px 8px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 6px; } .mermaid-svg svg { max-width: 100%; height: auto; } .qa-section { margin-top: 32px; border-top: 2px solid #e2e8f0; padding-top: 16px; } .qa-section h2 { color: #2563eb; } .qa-item { margin: 16px 0; } .qa-question { font-weight: 600; color: #1e293b; padding: 8px 12px; background: #eff6ff; border-radius: 6px; } .qa-answer { padding: 8px 12px 8px 16px; border-left: 3px solid #e2e8f0; margin-left: 4px; } .footer { margin-top: 32px; font-size: 12px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 16px; }\n</style>\n</head>\n<body>\n${bodyHtml}\n<div class="footer">由 Study Assistant 生成</div>\n</body>\n</html>`;
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${title}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
+    window.open(api.exportHTML(plan.id, topic.id), '_blank');
   };
 
   const handleRetry = () => {
     setError(null); setLocalDetail(''); genTriggered.current = false; setGenerating(true);
     api.generateDetail(plan.id, topic.id).catch(() => {});
+  };
+
+  // Stop waiting for generation (server-side generation continues in background;
+  // the completed content will appear automatically on next visit / refresh).
+  const handleCancelGenerate = () => {
+    setGenerating(false);
+    genTriggered.current = false;
   };
 
   const handleRegenerate = async (reason) => {
@@ -568,27 +708,133 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const handleDismissReveal = async () => { setRevealErrors(null); await doComplete(); };
 
-  const handleExerciseAnswer = (exerciseIndex, answer) => { setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer })); };
+  const handleUndone = async () => {
+    try {
+      const result = await api.undoneTopic(plan.id, topic.id);
+      onRefresh(result.plan);
+    } catch (err) { alert('撤销失败: ' + err.message); }
+  };
+
+  const handleExerciseAnswer = (exerciseIndex, answer) => {
+    exerciseAttemptRef.current = null;
+    setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer }));
+  };
 
   const handleSubmitExercises = async () => {
     if (exerciseLoading || exercises.length === 0) return;
     setExerciseLoading(true);
     try {
       const answers = Object.entries(exerciseAnswers).map(([idx, answer]) => ({ exerciseIndex: parseInt(idx), userAnswer: answer }));
-      const d = await api.submitExercises(plan.id, topic.id, answers);
+      const attemptRef = exerciseAttemptRef.current || api.createAttemptRef('exercise');
+      exerciseAttemptRef.current = attemptRef;
+      const d = await api.submitExercises(plan.id, topic.id, answers, attemptRef);
       setExerciseResults(d.results); setSubmittedExercises(true);
       const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
+      exerciseAttemptRef.current = null;
     } catch (err) { alert('提交失败: ' + err.message); } finally { setExerciseLoading(false); }
   };
 
-  const handleToggleReview = async () => {
-    if (reviewContent) { const next = !reviewMode; setReviewMode(next); if (next) { setSearchParams({ review: '1' }, { replace: false }); } else { setSearchParams({}, { replace: false }); } return; }
-    setReviewLoading(true); setReviewMode(true); setSearchParams({ review: '1' }, { replace: false });
+  const handleReviewAnswer = (exerciseIndex, answer) => {
+    reviewAttemptRef.current = null;
+    setReviewError(null);
+    setReviewAnswers(prev => ({ ...prev, [exerciseIndex]: answer }));
+  };
+
+  const handleSubmitReview = async () => {
+    if (reviewSubmitBusyRef.current || !activeReviewSession?.exercises?.length) return;
+    const answers = Object.entries(reviewAnswers).map(([idx, answer]) => ({
+      exerciseIndex: parseInt(idx),
+      userAnswer: answer,
+    }));
+    if (answers.length === 0) return;
+
+    reviewSubmitBusyRef.current = true;
+    setReviewSubmitting(true);
+    setReviewError(null);
+    const attemptRef = reviewAttemptRef.current || api.createAttemptRef(practiceKind);
+    reviewAttemptRef.current = attemptRef;
     try {
-      const d = await api.generateReview(plan.id, topic.id);
-      setReviewContent(d.review);
-      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch (err) { setReviewError(err.message); setReviewMode(false); } finally { setReviewLoading(false); }
+      const response = practiceKind === 'repair'
+        ? await api.submitRepairExercises(
+          plan.id,
+          topic.id,
+          practiceMistakeId,
+          answers,
+          activeReviewSession.id,
+          attemptRef
+        )
+        : await api.submitReviewExercises(
+          plan.id,
+          topic.id,
+          answers,
+          activeReviewSession.id,
+          attemptRef
+        );
+      setReviewResults(response.results || []);
+      setReviewSubmitted(true);
+      setReviewQuality(response.reviewSchedule?.lastQuality ?? null);
+      setReviewScheduleDetails(response.reviewSchedule ? {
+        intervalDays: response.reviewSchedule.intervalDays ?? null,
+        easeFactor: response.reviewSchedule.easeFactor ?? null,
+        repetitions: response.reviewSchedule.repetitions ?? null,
+      } : null);
+      setNextReviewAt(response.nextReviewAt ?? response.reviewSchedule?.dueAt ?? null);
+      if (practiceKind === 'repair') setRepairMistake(response.mistake || null);
+      reviewAttemptRef.current = null;
+      window.dispatchEvent(new CustomEvent('today-review-refresh'));
+      // P2-4: auto-run adaptive analysis after review so recommendations surface immediately
+      if (practiceKind === 'review') {
+        api.adaptiveAnalysis(plan.id).then(d => setAdaptiveData(d)).catch(() => {});
+      }
+      try {
+        const fresh = await api.getPlan(plan.id);
+        onRefresh(fresh.plan);
+      } catch {}
+    } catch (err) {
+      const fallback = practiceKind === 'repair' ? '无法提交错题修复' : '无法提交复习';
+      setReviewError(`提交失败：${err?.message || fallback}`);
+    } finally {
+      reviewSubmitBusyRef.current = false;
+      setReviewSubmitting(false);
+    }
+  };
+
+  const handleRetryRepairAnswers = () => {
+    setReviewAnswers({});
+    setReviewResults(null);
+    setReviewSubmitted(false);
+    setReviewQuality(null);
+    setReviewScheduleDetails(null);
+    setReviewError(null);
+    reviewAttemptRef.current = null;
+  };
+
+  const handleToggleReview = () => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (reviewMode) {
+      nextParams.delete('review');
+      nextParams.delete('repair');
+    } else {
+      nextParams.delete('repair');
+      nextParams.set('review', '1');
+    }
+    setSearchParams(nextParams, { replace: false });
+  };
+
+  const handleStartMistakeRepair = (mistakeId) => {
+    if (!mistakeId) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('mode');
+    nextParams.delete('review');
+    nextParams.set('repair', mistakeId);
+    setSearchParams(nextParams, { replace: false });
+  };
+
+  const handleMistakeChanged = async () => {
+    try {
+      const fresh = await api.getPlan(plan.id);
+      onRefresh(fresh.plan);
+    } catch {}
   };
 
   const prerequisites = topic?.prerequisites?.length ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
@@ -635,8 +881,22 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     try {
       const d = await api.recommendResources(plan.id, topic.id);
       setResources(d.resources || []);
+      setResourceRatings({});
       const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
     } catch (err) { alert('资源推荐失败: ' + err.message); } finally { setResourcesLoading(false); }
+  };
+
+  const handleRateResource = async (idx, rating) => {
+    const prev = resourceRatings[idx];
+    const newRating = prev === rating ? null : rating; // toggle off if same
+    setResourceRatingError(null);
+    setResourceRatings(r => ({ ...r, [idx]: newRating }));
+    try {
+      await api.rateResource(plan.id, topic.id, idx, newRating);
+    } catch (err) {
+      setResourceRatings(r => ({ ...r, [idx]: prev })); // rollback on error
+      setResourceRatingError(err?.message || '资源评分保存失败，请稍后重试');
+    }
   };
 
   const handleExportFormat = (format) => {
@@ -765,8 +1025,30 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         <div className='flex items-center flex-wrap gap-2'>
         <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
         <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
-        {generating && <span className='inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full'><RotateCcw className='h-3 w-3 animate-spin' />生成中...</span>}
-        {error && <span className='inline-flex items-center gap-1 text-xs text-destructive bg-destructive/10 px-2 py-0.5 rounded-full'><AlertCircle className='h-3 w-3' />生成失败</span>}
+        {generating && (
+          <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full'>
+            <RotateCcw className='h-3 w-3 animate-spin' />生成中...
+            <button type='button' onClick={handleCancelGenerate} className='ml-1 text-muted-foreground hover:text-foreground underline underline-offset-2' title='停止等待（后台继续生成）'>取消</button>
+          </span>
+        )}
+        {error && (
+          <div className='inline-flex items-center gap-1.5'>
+            <span className='inline-flex items-center gap-1 text-xs text-destructive bg-destructive/10 px-2 py-0.5 rounded-full' title={error}>
+              <AlertCircle className='h-3 w-3' />
+              生成失败：{error.length > 30 ? error.slice(0, 30) + '...' : error}
+            </span>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-6 px-2 text-xs'
+              onClick={() => handleRegenerate('错误重试')}
+              title='重新生成'
+            >
+              <RotateCcw className='h-3 w-3 mr-1' />
+              重试
+            </Button>
+          </div>
+        )}
         {localDetail && !error && !generating && topic.done === false && (
           <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
             {revealLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <CheckCheck className='h-3.5 w-3.5 mr-1' />}
@@ -779,6 +1061,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             {reviewMode ? '返回讲解' : '复习'}
           </Button>
         )}
+        {!generating && topic.done && (
+          <Button size='sm' variant='outline' className='text-muted-foreground hover:text-foreground' onClick={handleUndone} title='撤销"学完"标记，重新学习'>
+            <Undo2 className='h-3.5 w-3.5 mr-1' />撤销完成
+          </Button>
+        )}
         {interactiveMode && (
           <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white' onClick={handleExitInteractive}>
             <X className='h-3.5 w-3.5 mr-1' />退出互动
@@ -786,7 +1073,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         )}
         <AIStatusIndicator />
         <div className='relative' ref={menuRef}>
-          <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+          <Button variant='ghost' size='sm' onClick={toggleActionMenu} onKeyDown={handleActionMenuTriggerKeyDown} title='更多操作' aria-label='更多操作' aria-haspopup='menu' aria-expanded={menuOpen} aria-controls={actionMenuId}>
             <MoreHorizontal className='h-4 w-4' />
           </Button>
           {menuOpen && (
@@ -802,8 +1089,10 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                      adaptiveLoading={adaptiveLoading}
                      resourcesLoading={resourcesLoading}
                      showExport={!!(localDetail && !error && !generating)}
-                     showTeaching={!generating && !!localDetail && !error && !interactiveMode}
-                     showAnalysis={!generating && !!(localDetail && !error)}
+                      showTeaching={!generating && !!localDetail && !error && !interactiveMode}
+                      showAnalysis={!generating && !!(localDetail && !error)}
+                      id={actionMenuId}
+                      onClose={closeActionMenu}
             />
           )}
         </div>
@@ -858,6 +1147,22 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
               <span className='font-semibold text-foreground truncate text-sm flex-1 min-w-0'>{topic.title}</span>
               <AIStatusIndicator />
+              {generating && (
+                <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full'>
+                  <RotateCcw className='h-3 w-3 animate-spin' />生成中...
+                  <button type='button' onClick={handleCancelGenerate} className='ml-1 text-muted-foreground hover:text-foreground underline underline-offset-2' title='停止等待（后台继续生成）'>取消</button>
+                </span>
+              )}
+              {error && (
+                <div className='inline-flex items-center gap-1'>
+                  <span className='inline-flex items-center gap-1 text-xs text-destructive bg-destructive/10 px-1.5 py-0.5 rounded-full' title={error}>
+                    <AlertCircle className='h-3 w-3' />失败
+                  </span>
+                  <Button variant='ghost' size='sm' className='h-6 px-1.5 text-xs' onClick={() => handleRegenerate('错误重试')} title={error}>
+                    <RotateCcw className='h-3 w-3' />
+                  </Button>
+                </div>
+              )}
               {localDetail && !error && !generating && topic.done === false && (
                 <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white h-7 text-xs' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
                   {revealLoading ? <RotateCcw className='h-3 w-3 mr-1 animate-spin' /> : <CheckCheck className='h-3 w-3 mr-1' />}
@@ -870,13 +1175,18 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                   {reviewMode ? '返回讲解' : '复习'}
                 </Button>
               )}
+              {!generating && topic.done && (
+                <Button size='sm' variant='outline' className='h-7 text-xs text-muted-foreground hover:text-foreground' onClick={handleUndone} title='撤销"学完"标记，重新学习'>
+                  <Undo2 className='h-3 w-3 mr-1' />撤销完成
+                </Button>
+              )}
               {interactiveMode && (
                 <Button size='sm' className='bg-red-500 hover:bg-red-600 text-white h-7 text-xs' onClick={handleExitInteractive}>
                   <X className='h-3 w-3 mr-1' />退出互动
                 </Button>
               )}
               <div className='relative' ref={fixedMenuRef}>
-                <Button variant='ghost' size='sm' onClick={() => setMenuOpen(!menuOpen)} title='更多操作'>
+                <Button variant='ghost' size='sm' onClick={toggleActionMenu} onKeyDown={handleActionMenuTriggerKeyDown} title='更多操作' aria-label='更多操作' aria-haspopup='menu' aria-expanded={menuOpen} aria-controls={actionMenuId}>
                   <MoreHorizontal className='h-4 w-4' />
                 </Button>
                 {menuOpen && (
@@ -893,6 +1203,9 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                     showExport={!!(localDetail && !error && !generating)}
                     showTeaching={!generating && !!localDetail && !error && !interactiveMode}
                     showAnalysis={!generating && !!(localDetail && !error)}
+                    resourcesLoading={resourcesLoading}
+                    id={actionMenuId}
+                    onClose={closeActionMenu}
                   />
                 )}
               </div>
@@ -937,6 +1250,113 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             </div>
           </div>
         </div>
+      )}
+
+      {/* Mastery & Mistake Overview */}
+      {!interactiveMode && topic.done && (topic.mastery || (topic.mistakes && topic.mistakes.length > 0)) && (
+        <div className='rounded-lg bg-gradient-to-br from-blue-50/50 to-purple-50/50 dark:from-blue-950/20 dark:to-purple-950/20 border border-blue-200/50 dark:border-blue-800/30 p-4 space-y-3'>
+          {topic.mastery && (
+            <div className='flex items-center gap-3'>
+              <Brain className='h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0' />
+              <div className='flex-1 space-y-1.5'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='font-medium text-foreground'>掌握度</span>
+                  <span
+                    className='text-xs text-muted-foreground cursor-help'
+                    title={`AI 根据 ${(topic.masteryEvidence || []).length} 条练习记录估算，非精确评分（evidence-v1 算法）`}
+                  >
+                    {Math.round((topic.mastery.level || 0) * 100)}%
+                    {(topic.masteryEvidence || []).length > 0 && (
+                      <span className='ml-1 opacity-60'>({(topic.masteryEvidence || []).length} 条记录)</span>
+                    )}
+                  </span>
+                </div>
+                <div className='w-full h-2 bg-muted rounded-full overflow-hidden'>
+                  <div
+                    className={`h-full transition-all ${
+                      topic.mastery.level >= 0.8 ? 'bg-green-500' :
+                      topic.mastery.level >= 0.6 ? 'bg-blue-500' :
+                      topic.mastery.level >= 0.4 ? 'bg-yellow-500' : 'bg-orange-500'
+                    }`}
+                    style={{ width: `${Math.round((topic.mastery.level || 0) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          {topic.weakPoints && topic.weakPoints.length > 0 && (
+            <div className='flex items-start gap-3 pt-2 border-t border-blue-200/30 dark:border-blue-800/30'>
+              <AlertTriangle className='h-5 w-5 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5' />
+              <div className='flex-1 space-y-1.5'>
+                <div className='text-sm font-medium text-foreground'>AI 分析的薄弱点</div>
+                <div className='flex flex-wrap gap-1.5'>
+                  {topic.weakPoints.map((wp, i) => (
+                    <span key={i} className='text-xs px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'>
+                      {wp}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {(() => {
+            const activeMistakes = (topic.mistakes || []).filter(m => m.status === 'open' || m.status === 'repairing');
+            if (activeMistakes.length === 0) return null;
+
+            const conceptFreq = {};
+            activeMistakes.forEach(m => {
+              if (m.conceptKey) {
+                conceptFreq[m.conceptKey] = (conceptFreq[m.conceptKey] || 0) + (m.occurrenceCount || 1);
+              }
+            });
+
+            const topConcepts = Object.entries(conceptFreq)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5);
+
+            if (topConcepts.length === 0) return null;
+
+            return (
+              <div className='flex items-start gap-3 pt-2 border-t border-blue-200/30 dark:border-blue-800/30'>
+                <AlertTriangle className='h-5 w-5 text-orange-600 dark:text-orange-400 shrink-0 mt-0.5' />
+                <div className='flex-1 space-y-1.5'>
+                  <div className='text-sm font-medium text-foreground'>
+                    活跃错题 {activeMistakes.length} 个
+                  </div>
+                  <div className='text-xs text-muted-foreground space-y-1'>
+                    <div>高频薄弱概念：</div>
+                    <div className='flex flex-wrap gap-1.5'>
+                      {topConcepts.map(([key, count]) => {
+                        const mistake = activeMistakes.find(m => m.conceptKey === key);
+                        const label = mistake?.conceptLabel || key;
+                        return (
+                          <span
+                            key={key}
+                            className='inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300'
+                          >
+                            {label}
+                            <span className='text-[10px] opacity-75'>×{count}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {!interactiveMode && (
+        <MistakePanel
+          planId={plan.id}
+          topicId={topic.id}
+          mistakes={topic.mistakes || []}
+          activeMistakeId={practiceKind === 'repair' ? practiceMistakeId : null}
+          onRepair={handleStartMistakeRepair}
+          onChanged={handleMistakeChanged}
+        />
       )}
 
       {interactiveMode && (
@@ -1232,12 +1652,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                   </Button>
                 </div>
                 {resources && resources.length > 0 && (
-                  <div className='grid grid-cols-1 sm:grid-cols-2 gap-2'>
-                    {resources.map((r, i) => (
-                      <div key={i} className='rounded-md border p-3 text-sm space-y-1'>
+                  <>
+                    <div className='grid grid-cols-1 sm:grid-cols-2 gap-2'>
+                      {resources.map((r, i) => (
+                        <div key={i} className='rounded-md border p-3 text-sm space-y-1'>
                         <div className='flex items-center gap-2 flex-wrap'>
                           <span className='text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300'>{r.type}</span>
-                          <span className='font-medium'>{r.title}</span>
+                          <span className='font-medium flex-1'>{r.title}</span>
                           {r.paid && <span className='text-xs px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300'>付费</span>}
                         </div>
                         <div className='text-xs text-muted-foreground'>{r.source}{r.level ? ' · ' + ({ beginner: '入门', intermediate: '进阶', advanced: '深入' }[r.level] || r.level) : ''}</div>
@@ -1245,9 +1666,28 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                         {r.url && (
                           <a href={r.url} target='_blank' rel='noreferrer' className='text-xs text-blue-600 hover:underline break-all'>{r.url}</a>
                         )}
-                      </div>
-                    ))}
-                  </div>
+                        <div className='flex items-center gap-1 pt-1'>
+                          <span className='text-[10px] text-muted-foreground mr-1'>有帮助？</span>
+                          <button
+                            type='button'
+                            onClick={() => handleRateResource(i, 1)}
+                            className={`rounded px-1.5 py-0.5 text-xs transition-colors ${resourceRatings[i] === 1 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'text-muted-foreground hover:text-green-600'}`}
+                            title='有帮助'
+                            aria-pressed={resourceRatings[i] === 1}
+                          >👍</button>
+                          <button
+                            type='button'
+                            onClick={() => handleRateResource(i, -1)}
+                            className={`rounded px-1.5 py-0.5 text-xs transition-colors ${resourceRatings[i] === -1 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'text-muted-foreground hover:text-red-600'}`}
+                            title='没帮助'
+                            aria-pressed={resourceRatings[i] === -1}
+                          >👎</button>
+                        </div>
+                        </div>
+                      ))}
+                    </div>
+                    {resourceRatingError && <p className='text-xs text-destructive' role='alert'>{resourceRatingError}</p>}
+                  </>
                 )}
               </div>
             )}
@@ -1261,18 +1701,136 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           </div>
         )}
 
-      {/* Review mode content — rendered outside the main content block so it's visible when reviewMode=true */}
+      {/* Persisted review/repair sessions share one focused exercise workspace. */}
       {reviewMode && (
-        <div className='px-8 pt-4'>
-          {reviewLoading && (
-            <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-              <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
-              <span>AI 正在生成复习内容，针对你的薄弱点进行巩固...</span>
+        <div className='px-8 pt-4 space-y-4'>
+          {practiceKind === 'repair' && (
+            <div className='flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50/50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200'>
+              <Wrench className='h-4 w-4' aria-hidden='true' />
+              <strong>错题修复</strong>
+              <span className='min-w-0 break-words'>{activeRepairMistake?.conceptLabel || '正在定位目标概念'}</span>
             </div>
           )}
-          {!generating && reviewContent && !reviewLoading && (
+          {reviewLoading && (
+            <div className='flex items-center gap-2 text-sm text-muted-foreground' role='status'>
+              <div className='animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent' />
+              <span>{practiceKind === 'repair'
+                ? 'AI 正在生成针对该错题的修复练习...'
+                : 'AI 正在生成复习内容，针对你的薄弱点进行巩固...'}</span>
+            </div>
+          )}
+          {reviewError && (
+            <div className='flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive' role='alert'>
+              <span>{reviewError}</span>
+              {!activeReviewSession && (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={ensureReviewSession}
+                  title={practiceKind === 'repair' ? '重试生成错题修复' : '重试生成复习'}
+                >
+                  <RotateCcw className='h-3.5 w-3.5 mr-1' />重试生成
+                </Button>
+              )}
+            </div>
+          )}
+          {!generating && activeReviewContent && !reviewLoading && (
             <div>
-              <ContentArea content={reviewContent} />
+              <ContentArea content={activeReviewContent} />
+            </div>
+          )}
+          {!reviewLoading && activeReviewSession && (
+            <ExercisePanel
+              exercises={activeReviewSession.exercises}
+              answers={reviewAnswers}
+              onAnswer={handleReviewAnswer}
+              onSubmit={handleSubmitReview}
+              loading={reviewSubmitting}
+              submitted={reviewSubmitted}
+              results={reviewResults}
+            />
+          )}
+          {practiceKind === 'repair' && reviewSubmitted && activeRepairMistake?.status === 'open' && (
+            <div className='flex flex-wrap items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50/50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300' role='status'>
+              <span><strong>本次仍有错误</strong>，错题已重新打开。</span>
+              <Button variant='outline' size='sm' onClick={handleRetryRepairAnswers}>
+                <RotateCcw className='h-3.5 w-3.5 mr-1' />再次作答
+              </Button>
+            </div>
+          )}
+          {practiceKind === 'repair'
+            && reviewSubmitted
+            && activeRepairMistake?.status === 'repairing'
+            && formatReviewDateTime(activeRepairMistake.verificationDueAt) && (
+              <div className='rounded-md border border-amber-200 bg-amber-50/50 px-3 py-2 text-sm font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200' role='status'>
+                本次已修复，等待延迟验证：{formatReviewDateTime(activeRepairMistake.verificationDueAt)}
+              </div>
+          )}
+          {practiceKind === 'repair' && reviewSubmitted && activeRepairMistake?.status === 'verified' && (
+            <div className='rounded-md border border-green-200 bg-green-50/50 px-3 py-2 text-sm font-medium text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300' role='status'>
+              已通过延迟验证
+            </div>
+          )}
+          {practiceKind === 'repair'
+            && reviewSubmitted
+            && (!activeRepairMistake || !['open', 'repairing', 'verified'].includes(activeRepairMistake.status)) && (
+              <div className='rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive' role='alert'>
+                修复结果状态异常，请刷新后重试
+              </div>
+          )}
+          {practiceKind === 'review' && reviewSubmitted && reviewQuality !== null && (
+            <div className='rounded-md border px-3 py-2 text-sm' role='status'
+              style={{ borderColor: reviewQuality >= 4 ? '#86efac' : reviewQuality >= 3 ? '#93c5fd' : reviewQuality >= 2 ? '#fde68a' : '#fca5a5',
+                       backgroundColor: reviewQuality >= 4 ? 'rgb(240 253 244 / 0.5)' : reviewQuality >= 3 ? 'rgb(239 246 255 / 0.5)' : reviewQuality >= 2 ? 'rgb(255 251 235 / 0.5)' : 'rgb(254 242 242 / 0.5)' }}>
+              <span className='font-medium'>记忆质量 {reviewQuality}/5：</span>
+              {reviewQuality === 5 && <span className='text-green-700 dark:text-green-300'>完美记忆 — 间隔大幅延长</span>}
+              {reviewQuality === 4 && <span className='text-green-700 dark:text-green-300'>良好 — 小有犹豫，间隔已延长</span>}
+              {reviewQuality === 3 && <span className='text-blue-700 dark:text-blue-300'>及格 — 有些费力，间隔小幅延长</span>}
+              {reviewQuality === 2 && <span className='text-amber-700 dark:text-amber-300'>错误但能想起 — 间隔将重置，需再复习</span>}
+              {reviewQuality === 1 && <span className='text-red-700 dark:text-red-300'>严重遗忘 — 间隔重置为1天</span>}
+              {reviewQuality === 0 && <span className='text-red-700 dark:text-red-300'>完全遗忘 — 从头开始</span>}
+            </div>
+          )}
+          {practiceKind === 'review' && formatReviewDate(nextReviewAt) && (
+            <div className='rounded-md border border-green-200 bg-green-50/50 px-3 py-2 text-sm font-medium text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300' role='status'>
+              <div>下次复习：{formatReviewDate(nextReviewAt)}</div>
+              {reviewScheduleDetails && (reviewScheduleDetails.intervalDays != null || reviewScheduleDetails.easeFactor != null) && (
+                <div className='mt-1 text-xs font-normal opacity-75 flex flex-wrap gap-x-3 gap-y-0.5'>
+                  {reviewScheduleDetails.intervalDays != null && <span>间隔 {reviewScheduleDetails.intervalDays} 天</span>}
+                  {reviewScheduleDetails.easeFactor != null && <span>难度系数 {reviewScheduleDetails.easeFactor.toFixed(2)}</span>}
+                  {reviewScheduleDetails.repetitions != null && <span>已复习 {reviewScheduleDetails.repetitions} 次</span>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {topic.generationFeedback && topic.generationFeedback.length > 0 && (
+        <div className='px-8 py-2'>
+          <button
+            type='button'
+            className='flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors'
+            onClick={() => setFeedbackHistoryOpen(o => !o)}
+          >
+            <MessageSquare className='h-3 w-3' />
+            已提交 {topic.generationFeedback.length} 条生成反馈
+            {feedbackHistoryOpen ? <ChevronDown className='h-3 w-3' /> : <ChevronRight className='h-3 w-3' />}
+          </button>
+          {feedbackHistoryOpen && (
+            <div className='mt-2 space-y-1.5 border-l-2 border-border pl-3'>
+              {[...topic.generationFeedback].reverse().slice(0, 5).map((fb, i) => (
+                <div key={i} className='text-xs text-muted-foreground'>
+                  <span className='text-foreground/60'>[{fb.mode}]</span>{' '}
+                  {fb.reason}
+                  <span className='ml-2 opacity-50'>
+                    {fb.timestamp ? new Date(fb.timestamp).toLocaleDateString('zh-CN') : ''}
+                  </span>
+                </div>
+              ))}
+              {topic.generationFeedback.length > 5 && (
+                <div className='text-[10px] text-muted-foreground'>…共 {topic.generationFeedback.length} 条，仅显示最近 5 条</div>
+              )}
             </div>
           )}
         </div>
