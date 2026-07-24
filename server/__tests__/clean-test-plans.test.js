@@ -115,6 +115,29 @@ describe('clean-test-plans classification', () => {
       source: 'known-fixture',
     });
   });
+
+  it('only recognizes the fixed historical test fixture payload', () => {
+    const fixture = {
+      id: 'historical-fixture',
+      name: '历史测试',
+      topics: [{ id: 'topic-1', title: '知识点' }],
+      history: [{ topicId: 'topic-1', role: 'user', content: '内容'.repeat(100) }],
+    };
+
+    assert.deepEqual(classifyPlanForCleanup(fixture, { legacyNames: true }), {
+      status: 'candidate',
+      reason: 'known-historical-test-fixture',
+      source: 'known-fixture',
+    });
+
+    assert.equal(
+      classifyPlanForCleanup({
+        ...fixture,
+        history: [{ topicId: 'topic-1', role: 'user', content: '正常的历史测试内容' }],
+      }, { legacyNames: true }).status,
+      'protected'
+    );
+  });
 });
 
 describe('cleanTestPlans', () => {

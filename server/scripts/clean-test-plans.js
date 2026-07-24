@@ -117,6 +117,18 @@ export function isKnownManualTestFixtureName(name) {
   return MANUAL_TEST_FIXTURE_NAME.test(String(name ?? '').trim());
 }
 
+function isKnownHistoricalTestFixture(plan) {
+  const topics = Array.isArray(plan?.topics) ? plan.topics : [];
+  const history = Array.isArray(plan?.history) ? plan.history : [];
+  const topic = topics[0];
+  const entry = history[0];
+
+  return plan?.name === '历史测试' &&
+    topics.length === 1 && topic?.title === '知识点' &&
+    history.length === 1 && entry?.role === 'user' && entry?.topicId === topic.id &&
+    typeof entry.content === 'string' && /^(内容){100,}$/.test(entry.content);
+}
+
 let defaultStorePromise;
 
 function loadDefaultStore() {
@@ -214,6 +226,14 @@ export function classifyPlanForCleanup(plan, {
     return {
       status: 'candidate',
       reason: 'known-manual-test-fixture',
+      source: 'known-fixture',
+    };
+  }
+
+  if (isKnownHistoricalTestFixture(plan)) {
+    return {
+      status: 'candidate',
+      reason: 'known-historical-test-fixture',
       source: 'known-fixture',
     };
   }
