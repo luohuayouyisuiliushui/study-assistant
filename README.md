@@ -1,4 +1,4 @@
-# Study Assistant v1.13.1
+# Study Assistant v1.13.2
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
@@ -66,7 +66,7 @@ npm run dev
 2. `windows-setup.cmd`：安装根目录、服务端和客户端依赖
 3. `windows-dev.cmd`：启动开发环境，然后访问 `http://localhost:5173`
 
-清理测试数据：双击 `windows-clean-testdata.cmd`，一键清除测试计划、备份和缓存文件。
+清理测试数据：双击 `windows-clean-testdata.cmd`，一键清除测试计划、回收站测试条目、测试通知、备份和缓存文件。
 
 前两个检查/安装窗口执行完会停留，阅读结果后按任意键关闭。
 
@@ -294,10 +294,10 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 ### 清理命令
 
 ```bash
-npm run clean:testdata                 # 清理失效索引 + 测试计划
-npm run clean:testdata:legacy          # 预览旧版测试计划
-npm run clean:testdata:legacy:confirm  # 删除旧版测试计划
-npm run clean:testdata:all             # 一键清理：测试计划 + 旧版计划 + 备份 + 缓存
+npm run clean:testdata                 # 清理带测试标记的计划、回收站条目和测试通知文件
+npm run clean:testdata:legacy          # 预览旧版命名的测试计划和回收站条目
+npm run clean:testdata:legacy:confirm  # 删除安全的旧版命名测试数据
+npm run clean:testdata:all             # 一键清理：测试数据、回收站、备份和缓存
 npm run clean:cache                    # 清理 AI 缓存
 npm run clean:backups                  # 清理备份文件
 ```

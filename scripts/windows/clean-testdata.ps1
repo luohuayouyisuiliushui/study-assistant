@@ -11,7 +11,7 @@ Push-Location $rootDir
 try {
   $npmPath = if (Get-Command 'npm.cmd' -ErrorAction SilentlyContinue) { 'npm.cmd' } else { 'npm' }
 
-  Write-Host '[1/3] Removing test plans...' -ForegroundColor Yellow
+  Write-Host '[1/3] Removing test data artifacts...' -ForegroundColor Yellow
   & $npmPath run clean:testdata:all --prefix server
   if ($LASTEXITCODE -ne 0) { throw 'clean:testdata:all failed' }
 

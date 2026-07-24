@@ -70,6 +70,8 @@ export const DEFAULT_LEGACY_PATTERNS = Object.freeze([
   '恢复一致性',
   '原子写入测试',
   '试卷数据测试',
+  '试卷测试计划',
+  '集成测试计划',
   '教学错误测试',
   // edge-cases.test.js
   '边界测试计划',
@@ -105,6 +107,15 @@ export const DEFAULT_LEGACY_PATTERNS = Object.freeze([
   'clean-plan',
   'interactive-test-',
 ]);
+
+// Manual browser smoke tests created a small, well-known fixture series before
+// test markers were added. This exact convention is safe to remove even when
+// the fixture records a completed review step.
+export const MANUAL_TEST_FIXTURE_NAME = /^V-\d+\s+Fixture$/i;
+
+export function isKnownManualTestFixtureName(name) {
+  return MANUAL_TEST_FIXTURE_NAME.test(String(name ?? '').trim());
+}
 
 let defaultStorePromise;
 
@@ -160,6 +171,7 @@ function learningDataSignals(plan) {
 export function looksLikeLegacyTestName(name, patterns = DEFAULT_LEGACY_PATTERNS) {
   const normalizedName = String(name ?? '');
   const normalizedPatterns = Array.isArray(patterns) ? patterns : [];
+  if (isKnownManualTestFixtureName(normalizedName)) return true;
   if (normalizedPatterns.some(pattern =>
     typeof pattern === 'string' && pattern.length > 0 && normalizedName.startsWith(pattern)
   )) {
@@ -196,6 +208,14 @@ export function classifyPlanForCleanup(plan, {
 
   if (!legacyNames) {
     return { status: 'skipped', reason: 'not-explicitly-marked' };
+  }
+
+  if (isKnownManualTestFixtureName(plan.name)) {
+    return {
+      status: 'candidate',
+      reason: 'known-manual-test-fixture',
+      source: 'known-fixture',
+    };
   }
 
   if (!looksLikeLegacyTestName(plan.name, patterns)) {
@@ -694,6 +714,7 @@ function printResult(result) {
     const sourceLabels = {
       'marker': '① Explicit test marker',
       'legacy-name': '② Legacy test name',
+      'known-fixture': '② Known manual test fixture',
       'stale-index': '③ Stale index entry',
       'orphaned': '④ Orphaned file',
     };

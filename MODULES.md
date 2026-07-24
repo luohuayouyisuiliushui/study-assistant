@@ -130,7 +130,7 @@
 - **③ 测试：** `user-profile.test.js`、`batch6-core.test.js`、`export-engine.test.js`、`html-exporter.test.js` 与 Client HTML 导出测试通过。
 - **④ 依赖与副作用：** 持久化画像/计划、产生下载内容；生产依赖审计为 0 漏洞。
 - **⑤ 异味与可维护性：** 导出格式随产品扩展，应保持每种格式用途说明和契约测试。
-- **⑥ 风险与改进点：** 低：README 标题已与根目录、Server 和 Client manifest 的 `1.13.1` 同步。
+- **⑥ 风险与改进点：** 低：README 标题已与根目录、Server 和 Client manifest 的 `1.13.2` 同步。
 
 ### 10. 测试、脚本与开发工具 [已评估]
 

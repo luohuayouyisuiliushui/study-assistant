@@ -6,6 +6,7 @@ import {
   classifyPlanForCleanup,
   cleanTestPlans,
   hasUserLearningData,
+  isKnownManualTestFixtureName,
   looksLikeLegacyTestName,
   parseCleanupArgs,
 } from '../scripts/clean-test-plans.js';
@@ -80,7 +81,12 @@ describe('clean-test-plans classification', () => {
     assert.equal(looksLikeLegacyTestName('analysis-fu-empty'), true);
     assert.equal(looksLikeLegacyTestName('quiz-malformed'), true);
     assert.equal(looksLikeLegacyTestName('画像生成测试'), true);
+    assert.equal(looksLikeLegacyTestName('V-01 Fixture'), true);
+    assert.equal(looksLikeLegacyTestName('集成测试计划'), true);
+    assert.equal(looksLikeLegacyTestName('试卷测试计划'), true);
     assert.equal(looksLikeLegacyTestName('Software Test Fundamentals'), false);
+    assert.equal(isKnownManualTestFixtureName('V-01 Fixture'), true);
+    assert.equal(isKnownManualTestFixtureName('V-01 Learning Plan'), false);
 
     assert.deepEqual(
       classifyPlanForCleanup({ id: 'p1', name: 'engine-test-plan', topics: [], history: [] }),
@@ -93,6 +99,21 @@ describe('clean-test-plans classification', () => {
     assert.equal(hasUserLearningData({ topics: [], history: [{ role: 'user', content: 'answer' }] }), true);
     assert.equal(hasUserLearningData({ topics: Array.from({ length: 10 }, () => ({})) }), true);
     assert.equal(hasUserLearningData({ topics: [{ title: 'empty scaffold' }], history: [] }), false);
+  });
+
+  it('treats the exact manual smoke-test fixture name as high confidence', () => {
+    const result = classifyPlanForCleanup({
+      id: 'manual-fixture',
+      name: 'V-01 Fixture',
+      topics: [{ done: true }],
+      history: [{ role: 'user', content: 'test review result' }],
+    }, { legacyNames: true, confirmLegacy: true });
+
+    assert.deepEqual(result, {
+      status: 'candidate',
+      reason: 'known-manual-test-fixture',
+      source: 'known-fixture',
+    });
   });
 });
 
