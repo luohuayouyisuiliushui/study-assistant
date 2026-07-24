@@ -77,6 +77,50 @@ function Get-PortListeners {
     return $listeners
 }
 
+function Get-StudyAssistantPortListeners {
+    $projectRootPattern = [regex]::Escape($script:ProjectRoot)
+    $listeners = @()
+
+    foreach ($connection in @(Get-NetTCPConnection -State Listen -LocalPort 3001, 5173 -ErrorAction SilentlyContinue)) {
+        try {
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($connection.OwningProcess)" -ErrorAction Stop
+            $commandLine = [string]$process.CommandLine
+            $isServer = $connection.LocalPort -eq 3001 -and $process.Name -ieq 'node.exe' -and
+                $commandLine -match "${projectRootPattern}\\server\\index\.js"
+            $isClient = $connection.LocalPort -eq 5173 -and $process.Name -ieq 'node.exe' -and
+                $commandLine -match "${projectRootPattern}\\client\\" -and
+                $commandLine -match 'vite[\\/]+bin[\\/]+vite\.js'
+
+            if ($isServer -or $isClient) {
+                $listeners += [pscustomobject]@{
+                    Port = $connection.LocalPort
+                    ProcessId = $connection.OwningProcess
+                    ProcessName = $process.Name
+                    CommandLine = $commandLine
+                    Role = if ($isServer) { 'server' } else { 'client' }
+                }
+            }
+        }
+        catch {
+            # The listener may have exited while its process details were queried.
+        }
+    }
+
+    return $listeners
+}
+
+function Stop-StudyAssistantProcessTree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ProcessId
+    )
+
+    & taskkill.exe /PID ([string]$ProcessId) /T /F
+    if ($LASTEXITCODE -ne 0) {
+        throw "taskkill exited with code $LASTEXITCODE."
+    }
+}
+
 function Assert-PortsAvailable {
     param(
         [Parameter(Mandatory = $true)]
@@ -202,6 +246,17 @@ function Start-TrackedNpmProcess {
     try {
         $process.WaitForExit()
         if ($process.ExitCode -ne 0) {
+            # stop.ps1 removes this state after terminating the tracked npm tree.
+            # Wait briefly for that handoff so the outer .cmd does not treat a
+            # requested stop as an error and remain blocked at its pause prompt.
+            for ($attempt = 0; $attempt -lt 10; $attempt++) {
+                $currentState = Read-StudyAssistantProcessState
+                if (-not $currentState -or [int]$currentState.processId -ne $process.Id) {
+                    Write-Host 'Study Assistant was stopped.'
+                    return
+                }
+                Start-Sleep -Milliseconds 100
+            }
             throw "Study Assistant exited with code $($process.ExitCode)."
         }
     }
