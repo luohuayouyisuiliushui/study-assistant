@@ -9,6 +9,7 @@ import {
   buildDetailMessages,
   buildDeterministicContext,
 } from '../engine/learn-prompts.js';
+import { generateSingleQuestion, gradeExam } from '../engine/exam-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Mock provider that returns a fixed completion ───
@@ -91,6 +92,71 @@ describe('recommendResources', () => {
     const provider = createMockProvider('{}');
     const plan = store.getPlan(planId);
     await assert.rejects(() => recommendResources(provider, plan, 'no-such-topic', 'mock-model'));
+  });
+});
+
+describe('exam engine runtime wiring', () => {
+  it('generates a validated single question', async () => {
+    const provider = createMockProvider(JSON.stringify({
+      question: 'TCP 建立连接需要哪种报文？',
+      options: ['A. SYN', 'B. FIN', 'C. RST', 'D. PSH'],
+      answer: 'A',
+      explanation: '客户端首先发送 SYN。',
+      conceptTag: 'TCP 三次握手',
+    }), 'single-question-runtime-model');
+
+    const question = await generateSingleQuestion(provider, {
+      index: 0,
+      type: 'choice',
+      difficulty: 'medium',
+      topicTitle: 'Socket 编程基础',
+    }, 'TCP 通过三次握手建立连接。', 'single-question-runtime-model');
+
+    assert.ok(question);
+    assert.equal(question.question, 'TCP 建立连接需要哪种报文？');
+    assert.equal(question.options.length, 4);
+  });
+
+  it('persists exam results and wrong-answer weak points before returning', async () => {
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    const examId = 'runtime-wiring-exam';
+    await store.addExamPaper(plan.id, {
+      id: examId,
+      title: '运行时接线测试',
+      config: {},
+      paper: '',
+      questions: [{
+        id: 'q1',
+        index: 0,
+        type: 'choice',
+        question: 'TCP 建立连接首先发送什么？',
+        options: ['A. SYN', 'B. FIN'],
+        answer: 'A',
+        explanation: '首先发送 SYN。',
+        conceptTag: 'TCP 三次握手',
+        topicId,
+        difficulty: 'easy',
+      }],
+    });
+    const provider = createMockProvider(JSON.stringify({
+      results: [{
+        exerciseIndex: 0,
+        correct: false,
+        userAnswer: 'B',
+        correctAnswer: 'A',
+        explanation: '应选择 SYN。',
+      }],
+    }), 'grade-runtime-model');
+
+    await gradeExam(provider, store.getPlan(plan.id), examId, [
+      { exerciseIndex: 0, userAnswer: 'B' },
+    ]);
+
+    const persisted = store.getPlan(plan.id);
+    const persistedExam = persisted.examPapers.find(exam => exam.id === examId);
+    assert.equal(persistedExam.results[0].correct, false);
+    assert.ok(persisted.topics[0].weakPoints.includes('TCP 三次握手'));
   });
 });
 

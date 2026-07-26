@@ -4,7 +4,7 @@ import { getEngineCacheDiagnostics, createProviderFromConfig,
   generateExamStream, generateExam, gradeExam, generateExamPractice,
   analyzeFeynmanSession, factCheckDetail, autoFixUncertainClaims,
   applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
-import { analyzePlanAdaptive, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { AdaptivePromptInjector, analyzePlanAdaptive, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
 import { refreshDataFlywheel } from './flywheel.js';

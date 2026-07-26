@@ -983,7 +983,8 @@ export function buildEnhancedKnowledgeGraph(plan, options = {}) {
     return !baseKeys.has(key);
   });
   const allEdges = [...base.edges, ...dedupedInferred];
-  const centrality = computeGraphCentrality({ nodes: base.nodes, edges: allEdges });
+  // Keep the engine helper Map-based, but expose a JSON-safe object at the API boundary.
+  const centrality = Object.fromEntries(computeGraphCentrality({ nodes: base.nodes, edges: allEdges }));
   return {
     nodes: base.nodes,
     edges: allEdges,

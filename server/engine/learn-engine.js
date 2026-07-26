@@ -36,6 +36,7 @@ import OpenAI from 'openai';
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 /**
  * Global cache monitor for this process.
@@ -744,23 +745,6 @@ function validateBlueprintOutput(data) {
     if (!o.topicTitle || typeof o.topicTitle !== 'string') return `orders[${i}].topicTitle 必须是字符串`;
     if (!['choice', 'open'].includes(o.type)) return `orders[${i}].type 必须是 choice 或 open，得到 "${o.type}"`;
     if (!['easy', 'medium', 'hard'].includes(o.difficulty)) return `orders[${i}].difficulty 必须是 easy/medium/hard，得到 "${o.difficulty}"`;
-  }
-  return null;
-}
-
-/** Validate single question output */
-function validateQuestionOutput(data) {
-  if (!data || typeof data !== 'object') return '输出不是有效对象';
-  if (!data.question || typeof data.question !== 'string') return 'question 字段缺失或非字符串';
-  if (!Array.isArray(data.options)) return 'options 必须是数组';
-  if (!data.answer || typeof data.answer !== 'string') return 'answer 字段缺失或非字符串';
-  if (!data.explanation || typeof data.explanation !== 'string') return 'explanation 字段缺失或非字符串';
-  if (!data.conceptTag || typeof data.conceptTag !== 'string') return 'conceptTag 字段缺失或非字符串';
-  // Choice questions should have 4 options
-  if (data.options.length > 0) {
-    for (let i = 0; i < data.options.length; i++) {
-      if (!data.options[i] || typeof data.options[i] !== 'string') return `options[${i}] 不是有效字符串`;
-    }
   }
   return null;
 }

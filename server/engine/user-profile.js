@@ -145,14 +145,11 @@ function _aggregate(plans) {
   const dailyMap = {};
   for (const l of allTimeLogs) dailyMap[l.date] = (dailyMap[l.date] || 0) + l.seconds;
   const sortedDays = Object.entries(dailyMap).sort((a, b) => a[0].localeCompare(b[0])).map(([d, s]) => ({ date: d, seconds: s, hours: Math.round(s / 3600 * 10) / 10 }));
-  const now = new Date();
-  const today = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-  const d7 = new Date(now); d7.setDate(d7.getDate()-7);
-  const d30 = new Date(now); d30.setDate(d30.getDate()-30);
-  const d30S = d30.getFullYear()+'-'+String(d30.getMonth()+1).padStart(2,'0')+'-'+String(d30.getDate()).padStart(2,'0');
+  const today = _dateString();
+  const d30S = _dateStringOffset(-30);
   let t7 = 0, t30 = 0;
   const l7 = [];
-  for (let i=6; i>=0; i--) { const d=new Date(now); d.setDate(d.getDate()-i); const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); const s=dailyMap[ds]||0; l7.push({date:ds,seconds:s,hours:Math.round(s/3600*10)/10}); t7+=s; }
+  for (let i=6; i>=0; i--) { const ds = _dateStringOffset(-i); const s=dailyMap[ds]||0; l7.push({date:ds,seconds:s,hours:Math.round(s/3600*10)/10}); t7+=s; }
   for (const [d,s] of Object.entries(dailyMap)) { if (d>=d30S && d<=today) t30+=s; }
   const activeDays = sortedDays.filter(d => d.seconds>0).length;
   const avgDay = activeDays>0 ? Math.round(totalTime/activeDays) : 0;
@@ -194,15 +191,20 @@ function _san(s, maxLen) {
   while (r.indexOf("  ") >= 0) r = r.replace("  ", " ");
   return r.slice(0, maxLen);
 }
+function _dateString(date = new Date()) { return date.toISOString().slice(0, 10); }
+function _dateStringOffset(days) {
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + days);
+  return _dateString(date);
+}
 function _validDate(s) {
   if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const p = s.split('-').map(Number);
   const d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
   if (isNaN(d.getTime())) return false;
   if (d.getUTCFullYear() !== p[0] || d.getUTCMonth() + 1 !== p[1] || d.getUTCDate() !== p[2]) return false;
-  const n = new Date();
-  const t = n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
-  return s <= t;
+  return s <= _dateString();
 }
 function _validSec(v) { return typeof v === 'number' && Number.isFinite(v) && v > 0; }
 

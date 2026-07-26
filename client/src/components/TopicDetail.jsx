@@ -12,6 +12,7 @@ import ExercisePanel from './ExercisePanel.jsx';
 import QAPanel from './QAPanel.jsx';
 import ActionMenu from './ActionMenu.jsx';
 import { loadSettings } from '#/lib/settings-storage';
+import { normalizeMermaidSource } from '../lib/mermaid-source.js';
 
 const ERROR_TYPE_LABELS = {
   boundary: '边界条件偏差',
@@ -514,7 +515,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     let bodyHtml = '';
     for (const seg of segments) {
       if (seg.type === 'mermaid') {
-        try { const id = 'm-export-' + Math.random().toString(36).slice(2, 9); const { svg: svgText } = await mermaid.render(id, seg.content); bodyHtml += `<div class="mermaid-svg">${svgText}</div>`; } catch { bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`; }
+        try { const id = 'm-export-' + Math.random().toString(36).slice(2, 9); const { svg: svgText } = await mermaid.render(id, normalizeMermaidSource(seg.content)); bodyHtml += `<div class="mermaid-svg">${svgText}</div>`; } catch { bodyHtml += `<pre class="mermaid-fallback">${seg.content}</pre>`; }
       } else { bodyHtml += mdToHtml(seg.content); }
     }
     const title = topic.title.replace(/[/\\?%*:|"<>]/g, '_');

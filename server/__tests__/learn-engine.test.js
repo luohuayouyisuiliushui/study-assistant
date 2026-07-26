@@ -720,6 +720,9 @@ describe('revealEmbeddedErrors', () => {
     assert.strictEqual(result.hasErrors, true);
     assert.strictEqual(result.errors.length, 1);
     assert.ok(result.errors[0].correction.includes('8'));
+    const persisted = store.getPlan(plan.id).topics.find(t => t.id === topic.id);
+    assert.strictEqual(persisted.teachingErrors.length, 1);
+    assert.ok(persisted.teachingErrors[0].correction.includes('8'));
     await store.deletePlan(plan.id);
   });
 });

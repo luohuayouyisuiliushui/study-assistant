@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
   buildKnowledgeGraph,
+  buildEnhancedKnowledgeGraph,
   buildInferredEdges,
   parseExercisesFromDetail,
   extractWeakPoints,
@@ -215,6 +216,27 @@ describe('computeGraphCentrality', () => {
     assert.ok(centrality.get('t2'));
     assert.strictEqual(centrality.get('t1').outDegree, 1);
     assert.strictEqual(centrality.get('t2').inDegree, 1);
+  });
+
+  it('should serialize enhanced graph centrality as node-keyed JSON data', () => {
+    const plan = makePlan([
+      { id: 't1', title: 'A', level: 1, parentId: null, order: 0, prerequisites: [], relatedTopics: [] },
+      { id: 't2', title: 'B', level: 1, parentId: null, order: 1, prerequisites: ['t1'], relatedTopics: [] },
+    ]);
+    const graph = buildEnhancedKnowledgeGraph(plan, {
+      includeDetailExtraction: false,
+      includeTransitive: false,
+      includeInherited: false,
+      includeSiblingRelated: false,
+      includeSequential: false,
+      includeKeywordCrossPhase: false,
+    });
+    const serialized = JSON.parse(JSON.stringify(graph));
+
+    assert.ok(serialized.centrality.t1);
+    assert.ok(serialized.centrality.t2);
+    assert.equal(serialized.centrality.t1.outDegree, 1);
+    assert.equal(serialized.centrality.t2.inDegree, 1);
   });
 });
 

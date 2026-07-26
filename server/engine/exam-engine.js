@@ -4,9 +4,7 @@
  * streaming exam generation, grading, and practice generation.
  */
 
-import { Provider } from './provider.js';
-import { AdaptivePromptInjector } from './adaptive-engine.js';
-import { addExamPaper, getExamPapers, updateExamResults } from './learn-store.js';
+import { addExamPaper, getExamPapers, updateExamResults, updateTopic } from './learn-store.js';
 import {
   STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
   STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT,
@@ -15,6 +13,19 @@ import {
 import { resolveProvider } from './learn-engine.js';
 
 const _resolveProvider = resolveProvider;
+
+function validateQuestionOutput(data) {
+  if (!data || typeof data !== 'object') return '输出不是有效对象';
+  if (!data.question || typeof data.question !== 'string') return 'question 字段缺失或非字符串';
+  if (!Array.isArray(data.options)) return 'options 必须是数组';
+  if (!data.answer || typeof data.answer !== 'string') return 'answer 字段缺失或非字符串';
+  if (!data.explanation || typeof data.explanation !== 'string') return 'explanation 字段缺失或非字符串';
+  if (!data.conceptTag || typeof data.conceptTag !== 'string') return 'conceptTag 字段缺失或非字符串';
+  for (let i = 0; i < data.options.length; i++) {
+    if (!data.options[i] || typeof data.options[i] !== 'string') return `options[${i}] 不是有效字符串`;
+  }
+  return null;
+}
 
 //  EXAM PAPER ENGINE
 // ═══════════════════════════════════════════════════════
@@ -281,7 +292,7 @@ export async function generateExam(providerOrConfig, plan, topicIds, config = {}
   if (choiceQs.length>0) { md+=`## 一、选择题（共 ${choiceQs.length} 题，每题 5 分）\n\n`; choiceQs.forEach(q=>{md+=`**${q.index+1}.** ${q.question}\n\n`; for (const o of q.options) md+=`${o}\n\n`; md+='\n';}); }
   if (openQs.length>0) { md+=`## ${choiceQs.length>0?'二':'一'}、简答题（共 ${openQs.length} 题，每题 5 分）\n\n`; openQs.forEach(q=>{md+=`**${q.index+1}.** ${q.question}\n\n\n`;}); }
   const examPaper = {id:examId, title, config:{topicIds, questionCount:validatedQ.length, choiceRatio:config.choiceRatio||0.6}, paper:md, questions:validatedQ};
-  addExamPaper(plan.id, examPaper);
+  await addExamPaper(plan.id, examPaper);
   return examPaper;
 }
 
@@ -320,7 +331,7 @@ export async function generateExamStream(providerOrConfig, plan, topicIds, confi
   if (openQs.length>0) { md+=`## ${choiceQs.length>0?'二':'一'}、简答题（共 ${openQs.length} 题，每题 5 分）\n\n`; openQs.forEach(q=>{md+=`**${q.index+1}.** ${q.question}\n\n\n`;}); }
   const {v4:uuidv4}=await import('uuid'); const examId=uuidv4().slice(0,8);
   const examPaper = {id:examId, title, config:{topicIds, questionCount:validatedQ.length, choiceRatio:config.choiceRatio||0.6}, paper:md, questions:validatedQ};
-  addExamPaper(plan.id, examPaper);
+  await addExamPaper(plan.id, examPaper);
   writeCallback({type:'done', data:{examId, totalQuestions:validatedQ.length}});
 }
 
@@ -374,7 +385,7 @@ export async function gradeExam(providerOrConfig, plan, examId, answers) {
   const results = gradingResults.results || [];
 
   // Save exam results to store
-  updateExamResults(plan.id, examId, results);
+  await updateExamResults(plan.id, examId, results);
 
   // ── Weak point feedback: update topic.weakPoints from wrong answers ──
   const wrongByTopic = {}; // topicId → Set of conceptTags
