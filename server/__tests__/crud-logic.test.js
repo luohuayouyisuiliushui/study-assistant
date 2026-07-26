@@ -10,6 +10,7 @@ import {
   parseExercisesFromDetail,
   extractWeakPoints,
   getTopicsNeedingReview,
+  computeGraphCentrality,
 } from '../engine/learn-store.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -84,6 +85,136 @@ describe('buildKnowledgeGraph', () => {
     const graph = buildKnowledgeGraph(makePlan(topics));
     assert.strictEqual(graph.nodes.length, 1);
     assert.strictEqual(graph.edges.length, 0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// computeGraphCentrality — PageRank + degree centrality
+// ═══════════════════════════════════════════════════════════
+
+describe('computeGraphCentrality', () => {
+  it('should return empty Map for empty graph', () => {
+    const m = computeGraphCentrality({ nodes: [], edges: [] });
+    assert.strictEqual(m.size, 0);
+  });
+
+  it('should return empty Map for null/undefined graph', () => {
+    assert.strictEqual(computeGraphCentrality(null).size, 0);
+    assert.strictEqual(computeGraphCentrality(undefined).size, 0);
+  });
+
+  it('should give single isolated node pageRank=1.0 and zero degrees', () => {
+    const graph = {
+      nodes: [{ id: 't1' }],
+      edges: [],
+    };
+    const m = computeGraphCentrality(graph);
+    const c = m.get('t1');
+    assert.strictEqual(c.inDegree, 0);
+    assert.strictEqual(c.outDegree, 0);
+    assert.ok(Math.abs(c.pageRank - 1.0) < 1e-9, 'single node should have pageRank 1.0');
+  });
+
+  it('should count directed edges: prerequisite t1->t2 gives t1.outDegree=1, t2.inDegree=1', () => {
+    const graph = {
+      nodes: [{ id: 't1' }, { id: 't2' }],
+      edges: [{ from: 't1', to: 't2', type: 'prerequisite' }],
+    };
+    const m = computeGraphCentrality(graph);
+    assert.strictEqual(m.get('t1').outDegree, 1);
+    assert.strictEqual(m.get('t1').inDegree, 0);
+    assert.strictEqual(m.get('t2').outDegree, 0);
+    assert.strictEqual(m.get('t2').inDegree, 1);
+  });
+
+  it('should treat "related" edges as bidirectional (both degrees increment)', () => {
+    const graph = {
+      nodes: [{ id: 't1' }, { id: 't2' }],
+      edges: [{ from: 't1', to: 't2', type: 'related' }],
+    };
+    const m = computeGraphCentrality(graph);
+    assert.strictEqual(m.get('t1').inDegree, 1);
+    assert.strictEqual(m.get('t1').outDegree, 1);
+    assert.strictEqual(m.get('t2').inDegree, 1);
+    assert.strictEqual(m.get('t2').outDegree, 1);
+  });
+
+  it('should preserve total pageRank across iterations (sum ~ 1.0)', () => {
+    const graph = {
+      nodes: [{ id: 't1' }, { id: 't2' }, { id: 't3' }, { id: 't4' }],
+      edges: [
+        { from: 't1', to: 't2', type: 'prerequisite' },
+        { from: 't1', to: 't3', type: 'prerequisite' },
+        { from: 't2', to: 't3', type: 'extends' },
+        { from: 't3', to: 't4', type: 'prerequisite' },
+      ],
+    };
+    const m = computeGraphCentrality(graph);
+    let sum = 0;
+    for (const c of m.values()) sum += c.pageRank;
+    assert.ok(Math.abs(sum - 1.0) < 1e-6, `pageRank sum should be ~1.0, got ${sum}`);
+  });
+
+  it('should give higher pageRank to a node pointed to by multiple nodes', () => {
+    // Hub: t3 is pointed to by t1, t2, t4 → high pageRank
+    // Leaves: t1, t2, t4 point outward only
+    const graph = {
+      nodes: [{ id: 't1' }, { id: 't2' }, { id: 't3' }, { id: 't4' }],
+      edges: [
+        { from: 't1', to: 't3', type: 'references' },
+        { from: 't2', to: 't3', type: 'references' },
+        { from: 't4', to: 't3', type: 'references' },
+      ],
+    };
+    const m = computeGraphCentrality(graph);
+    const hubPR = m.get('t3').pageRank;
+    const leafPR = m.get('t1').pageRank;
+    assert.ok(hubPR > leafPR, `hub (${hubPR}) should outrank leaf (${leafPR})`);
+    assert.strictEqual(m.get('t3').inDegree, 3);
+  });
+
+  it('should handle dangling nodes (no outbound edges) without NaN', () => {
+    // t2 is a dangling node (no outbound); t1 points to t2.
+    const graph = {
+      nodes: [{ id: 't1' }, { id: 't2' }],
+      edges: [{ from: 't1', to: 't2', type: 'prerequisite' }],
+    };
+    const m = computeGraphCentrality(graph);
+    for (const c of m.values()) {
+      assert.ok(Number.isFinite(c.pageRank), 'pageRank must be finite');
+      assert.ok(c.pageRank > 0, 'pageRank must be positive');
+    }
+  });
+
+  it('should ignore edges referencing unknown nodes', () => {
+    const graph = {
+      nodes: [{ id: 't1' }],
+      edges: [
+        { from: 't1', to: 'ghost', type: 'prerequisite' },
+        { from: 'ghost', to: 't1', type: 'prerequisite' },
+      ],
+    };
+    const m = computeGraphCentrality(graph);
+    const c = m.get('t1');
+    assert.strictEqual(c.inDegree, 0);
+    assert.strictEqual(c.outDegree, 0);
+    assert.ok(Number.isFinite(c.pageRank));
+  });
+
+  it('buildEnhancedKnowledgeGraph should include centrality field', () => {
+    const topics = [
+      { id: 't1', title: 'A', level: 1, parentId: null, order: 0, prerequisites: [], relatedTopics: [] },
+      { id: 't2', title: 'B', level: 1, parentId: null, order: 1, prerequisites: ['t1'], relatedTopics: [] },
+    ];
+    const graph = buildKnowledgeGraph(makePlan(topics));
+    // buildKnowledgeGraph itself does not include centrality (backward compat)
+    assert.ok(!graph.centrality);
+    // computeGraphCentrality can be applied to any {nodes, edges} graph
+    const centrality = computeGraphCentrality(graph);
+    assert.ok(centrality.get('t1'));
+    assert.ok(centrality.get('t2'));
+    assert.strictEqual(centrality.get('t1').outDegree, 1);
+    assert.strictEqual(centrality.get('t2').inDegree, 1);
   });
 });
 

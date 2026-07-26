@@ -11,7 +11,7 @@ export {
   deletePlan, permanentlyDeletePlan, deletePlansByIds,
   trashPlan, listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
   getTopicChildren, getTopicPrerequisites, getTopicDescendants,
-  buildKnowledgeGraph, extractRelationsFromDetail, buildInferredEdges, buildEnhancedKnowledgeGraph,
+  buildKnowledgeGraph, extractRelationsFromDetail, buildInferredEdges, buildEnhancedKnowledgeGraph, computeGraphCentrality,
   addTopics, updateTopic, updateTopicTime, reorderTopics, removeTopic,
   writePlan,
   addHistory, getTopicHistory,

@@ -983,12 +983,112 @@ export function buildEnhancedKnowledgeGraph(plan, options = {}) {
     return !baseKeys.has(key);
   });
   const allEdges = [...base.edges, ...dedupedInferred];
+  const centrality = computeGraphCentrality({ nodes: base.nodes, edges: allEdges });
   return {
     nodes: base.nodes,
     edges: allEdges,
     baseEdgeCount: base.edges.length,
     inferredCount: dedupedInferred.length,
+    centrality,
   };
+}
+
+/**
+ * Compute graph centrality metrics for knowledge graph nodes.
+ *
+ * Returns a Map<nodeId, { inDegree, outDegree, pageRank }> where:
+ *   - inDegree: number of incoming edges (other topics depend on this one)
+ *   - outDegree: number of outgoing edges (this topic depends on others)
+ *   - pageRank: iterative importance score (damping=0.85, 20 iterations)
+ *
+ * Edge direction semantics:
+ *   - parentOf, prerequisite, extends, buildsOn, exampleOf, references,
+ *     contrasts: directed from→to
+ *   - related: undirected, treated as bidirectional (counts in both degrees)
+ *
+ * High inDegree + high pageRank ⇒ hub topic (many topics reference it).
+ * Use this to surface "core knowledge points" quantitatively, complementing
+ * the AI-based analyzeCoreTopics identification.
+ *
+ * Standard PageRank with dangling-node redistribution. No external deps;
+ * O(iterations * (N + E)) which is fine for typical plan graphs (<1000 nodes).
+ *
+ * @param {{nodes: Array, edges: Array}} graph
+ * @param {{iterations?: number, damping?: number}} options
+ * @returns {Map<string, {inDegree: number, outDegree: number, pageRank: number}>}
+ */
+export function computeGraphCentrality(graph, options = {}) {
+  const { iterations = 20, damping = 0.85 } = options;
+  const nodes = graph?.nodes || [];
+  const edges = graph?.edges || [];
+  if (nodes.length === 0) return new Map();
+
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const inDeg = new Map();
+  const outDeg = new Map();
+  const inbound = new Map();
+  const outbound = new Map();
+  for (const id of nodeIds) {
+    inDeg.set(id, 0);
+    outDeg.set(id, 0);
+    inbound.set(id, []);
+    outbound.set(id, []);
+  }
+
+  const UNDIRECTED_TYPES = new Set(['related']);
+  for (const e of edges) {
+    if (!nodeIds.has(e.from) || !nodeIds.has(e.to)) continue;
+    if (UNDIRECTED_TYPES.has(e.type)) {
+      inbound.get(e.to).push(e.from);
+      inbound.get(e.from).push(e.to);
+      outbound.get(e.from).push(e.to);
+      outbound.get(e.to).push(e.from);
+      outDeg.set(e.from, outDeg.get(e.from) + 1);
+      outDeg.set(e.to, outDeg.get(e.to) + 1);
+      inDeg.set(e.from, inDeg.get(e.from) + 1);
+      inDeg.set(e.to, inDeg.get(e.to) + 1);
+    } else {
+      outbound.get(e.from).push(e.to);
+      inbound.get(e.to).push(e.from);
+      outDeg.set(e.from, outDeg.get(e.from) + 1);
+      inDeg.set(e.to, inDeg.get(e.to) + 1);
+    }
+  }
+
+  // PageRank: PR(n) = (1-d)/N + d * (sum(PR(m)/outdeg(m) for m in inbound(n)) + danglingSum/N)
+  const N = nodeIds.size;
+  let pr = new Map();
+  for (const id of nodeIds) pr.set(id, 1 / N);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    let danglingSum = 0;
+    for (const id of nodeIds) {
+      if (outbound.get(id).length === 0) danglingSum += pr.get(id);
+    }
+    const danglingShare = danglingSum / N;
+    const base = (1 - damping) / N;
+
+    const next = new Map();
+    for (const id of nodeIds) {
+      let sum = 0;
+      for (const m of inbound.get(id)) {
+        const outM = outbound.get(m).length;
+        if (outM > 0) sum += pr.get(m) / outM;
+      }
+      next.set(id, base + damping * (sum + danglingShare));
+    }
+    pr = next;
+  }
+
+  const result = new Map();
+  for (const id of nodeIds) {
+    result.set(id, {
+      inDegree: inDeg.get(id),
+      outDegree: outDeg.get(id),
+      pageRank: pr.get(id),
+    });
+  }
+  return result;
 }
 
 export function createPlanWithPhases(name, phases, relations, options = {}) {
