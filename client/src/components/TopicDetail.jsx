@@ -81,7 +81,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [error, setError] = useState(null);
   const [localDetail, setLocalDetail] = useState(topic?.detail || '');
   const chatPanelRef = useRef(null);
-  const genTriggered = useRef(false);
+  const genTriggered = useRef(null);
   const startTimeRef = useRef(Date.now());
   const hiddenDurationRef = useRef(0);
   const hiddenStartRef = useRef(null);
@@ -387,11 +387,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   useEffect(() => {
-    if (!topic || genTriggered.current) return;
+    if (!topic || genTriggered.current === topic.id) return;
     if (topic.detail && topic.done) { setGenerating(false); return; }
     if (topic.lastError) { setError(topic.lastError); return; }
     if (!topic.detail && !topic.done && !topic.lastError) {
-      genTriggered.current = true;
+      genTriggered.current = topic.id;
       setGenerating(true);
       api.generateDetail(plan.id, topic.id).catch(err => {
         console.error('[TopicDetail] generateDetail failed:', err);
@@ -528,9 +528,17 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     URL.revokeObjectURL(url);
   };
 
-  const handleRetry = () => {
-    setError(null); setLocalDetail(''); genTriggered.current = false; setGenerating(true);
-    api.generateDetail(plan.id, topic.id).catch(() => {});
+  const handleRetry = async () => {
+    setError(null);
+    setLocalDetail('');
+    genTriggered.current = topic.id;
+    setGenerating(true);
+    try {
+      await api.generateDetail(plan.id, topic.id);
+    } catch (err) {
+      setGenerating(false);
+      setError(err.message || '加载失败');
+    }
   };
 
   const handleRegenerate = async (reason) => {
@@ -848,6 +856,21 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             </div>
           )}
       </div>
+
+      {error && !interactiveMode && (
+        <div role='alert' className='flex flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex min-w-0 items-start gap-3'>
+            <AlertCircle className='mt-0.5 h-5 w-5 shrink-0 text-destructive' />
+            <div className='min-w-0'>
+              <p className='text-sm font-semibold text-destructive'>讲解生成失败</p>
+              <p className='break-words text-sm text-muted-foreground'>{error}</p>
+            </div>
+          </div>
+          <Button variant='outline' size='sm' className='shrink-0' onClick={handleRetry}>
+            <RotateCcw className='h-3.5 w-3.5 mr-1' />重新生成
+          </Button>
+        </div>
+      )}
 
       {/* Sticky navigation bar — appears when scrolling past the original header */}
       {headerStuckVisible && (
