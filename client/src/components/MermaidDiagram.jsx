@@ -10,6 +10,7 @@ export default function MermaidDiagram({ code }) {
   const [visible, setVisible] = useState(false);
   const [svg, setSvg] = useState('');
   const [error, setError] = useState(null);
+  const [renderAttempt, setRenderAttempt] = useState(0);
 
   // Lazy load: observe when element enters viewport
   useEffect(() => {
@@ -40,6 +41,9 @@ export default function MermaidDiagram({ code }) {
     if (!visible) return;
     let cancelled = false;
 
+    setError(null);
+    setSvg('');
+
     (async () => {
       try {
         const { default: mermaid } = await import('mermaid');
@@ -67,7 +71,7 @@ export default function MermaidDiagram({ code }) {
     })();
 
     return () => { cancelled = true; };
-  }, [code, visible]);
+  }, [code, visible, renderAttempt]);
 
   if (error) {
     // Extract a short, readable error description
@@ -83,7 +87,7 @@ export default function MermaidDiagram({ code }) {
       <div className="mermaid-error">
         <div className="mermaid-error-header">
           <span>图表渲染失败</span>
-          <button className="btn-tiny" onClick={() => { setError(null); setSvg(''); }} title="重新渲染">重试</button>
+          <button className="btn-tiny" onClick={() => setRenderAttempt(attempt => attempt + 1)} title="重新渲染">重试</button>
         </div>
         <div className="mermaid-error-body">
           <p className="mermaid-error-reason">{shortMsg}</p>
