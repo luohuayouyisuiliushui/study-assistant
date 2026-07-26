@@ -7,6 +7,7 @@ import assert from 'node:assert';
 import {
   buildKnowledgeGraph,
   buildInferredEdges,
+  extractRelationsFromDetail,
   parseExercisesFromDetail,
   extractWeakPoints,
   getTopicsNeedingReview,
@@ -114,6 +115,26 @@ describe('buildInferredEdges', () => {
     const edges = buildInferredEdges(makePlan(topics));
     // Should not throw; edges may or may not be found
     assert.ok(Array.isArray(edges));
+  });
+});
+
+describe('extractRelationsFromDetail', () => {
+  it('keeps the current topic as the prerequisite when the description says this section is foundational', () => {
+    const topics = [
+      { id: 'threads', title: '多线程编程' },
+      { id: 'reactor', title: '主从 Reactor 架构' },
+    ];
+    const detail = [
+      '## 与相关知识点的联系',
+      '- **主从 Reactor 架构**：多线程最终会演进为事件驱动的线程池模型，本节是理解该架构的前置。',
+    ].join('\n');
+
+    const edges = extractRelationsFromDetail(detail, topics, 'threads');
+
+    assert.strictEqual(edges.length, 1);
+    assert.strictEqual(edges[0].type, 'prerequisite');
+    assert.strictEqual(edges[0].from, 'threads');
+    assert.strictEqual(edges[0].to, 'reactor');
   });
 });
 

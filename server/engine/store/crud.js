@@ -696,13 +696,17 @@ export function extractRelationsFromDetail(detail, allTopics, currentTopicId) {
 
     const isNextStep = nextStepKeywords.some(kw => description.includes(kw));
     const isFoundation = foundationKeywords.some(kw => description.includes(kw));
+    const currentIsFoundation = [
+      /(?:本节|本讲|本章|本文|当前知识点|本知识点)(?:内容)?\s*(?:是|作为|可作为|构成|将成为).{0,40}(?:前置(?:知识|条件)?|先决条件)/,
+      /(?:本节|本讲|本章|本文|当前知识点|本知识点)(?:内容)?.{0,20}(?:为|给).{0,30}(?:奠定|提供).{0,10}基础/,
+    ].some(pattern => pattern.test(description));
 
     if (relType === 'buildsOn' || relType === 'references') {
       // Linked topic is the foundation → reverse direction: matched → current
       from = matchedTopic.id;
       to = currentTopicId;
     } else if (relType === 'prerequisite') {
-      if (isFoundation) {
+      if (!currentIsFoundation && isFoundation && !isNextStep) {
         // Linked topic should be learned first → matched → current
         from = matchedTopic.id;
         to = currentTopicId;

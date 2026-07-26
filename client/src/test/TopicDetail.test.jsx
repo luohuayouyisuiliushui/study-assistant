@@ -137,6 +137,26 @@ describe('TopicDetail', () => {
     });
   });
 
+  describe('topic relationship navigation', () => {
+    it('opens the selected topic without navigating back first', () => {
+      const onBack = vi.fn();
+      const onSelectTopic = vi.fn();
+      const prerequisite = { id: 't-prerequisite', title: '词法作用域', done: true };
+
+      renderTD({
+        plan: { ...samplePlan, topics: [prerequisite] },
+        topic: { ...sampleTopic, prerequisites: [prerequisite.id] },
+        onBack,
+        onSelectTopic,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: prerequisite.title }));
+
+      expect(onSelectTopic).toHaveBeenCalledWith(prerequisite.id);
+      expect(onBack).not.toHaveBeenCalled();
+    });
+  });
+
   describe('image generation', () => {
     beforeEach(() => {
       vi.clearAllMocks();

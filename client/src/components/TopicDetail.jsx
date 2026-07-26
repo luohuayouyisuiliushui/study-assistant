@@ -604,7 +604,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const nextTopics = plan.topics.filter(t => t.prerequisites?.includes(topic?.id)).sort((a, b) => a.order - b.order);
   const relatedTopics = topic?.relatedTopics?.length ? topic.relatedTopics.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
 
-  const handleNavigateToTopic = (targetTopicId) => { onBack(); if (onSelectTopic) onSelectTopic(targetTopicId); };
+  const handleNavigateToTopic = (targetTopicId) => { if (onSelectTopic) onSelectTopic(targetTopicId); };
 
   const handleFactCheck = async () => {
     if (factCheckLoading || !localDetail) return;

@@ -520,12 +520,20 @@ async function* withStreamTimeout(iterable, timeoutMs = 60_000) {
   const nextWithTimeout = async () => {
     const elapsed = Date.now() - lastActivity;
     const remaining = Math.max(1, timeoutMs - elapsed);
+    let timeoutId;
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Stream idle timeout: no data for ${timeoutMs / 1000}s`)), remaining)
-    );
+    try {
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Stream idle timeout: no data for ${timeoutMs / 1000}s`)),
+          remaining
+        );
+      });
 
-    return Promise.race([iterator.next(), timeoutPromise]);
+      return await Promise.race([iterator.next(), timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   };
 
   try {
@@ -685,10 +693,13 @@ export class Provider {
       if (opts.responseFormat && !responseFormatFailed) {
         requestOpts.response_format = opts.responseFormat;
       }
+      const apiRequestOptions = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+        ? { timeout: opts.timeoutMs }
+        : undefined;
 
       let resp;
       try {
-        resp = await this._client.chat.completions.create(requestOpts);
+        resp = await this._client.chat.completions.create(requestOpts, apiRequestOptions);
       } catch (err) {
         if (opts.responseFormat && !responseFormatFailed && isUnsupportedParameterError(err, 'response_format')) {
           console.warn('[provider] ⚠️ Relay does not support response_format, retrying without it');
@@ -698,7 +709,7 @@ export class Provider {
             messages: apiMessages,
             temperature: opts.temperature ?? 0.7,
             max_tokens: opts.maxTokens ?? 4096,
-          });
+          }, apiRequestOptions);
         } else {
           throw err;
         }
@@ -790,19 +801,22 @@ export class Provider {
 
     this._totalCalls++;
 
-    // Shared stream reader: accumulates content and usage
+    // Shared stream reader: accumulates content and usage, and reports why it ended.
     const readStream = async (stream) => {
+      let finishReason = null;
       for await (const chunk of withStreamTimeout(stream)) {
         if (chunk.usage) {
           finalUsage = chunk.usage;
-          continue;
         }
-        const delta = chunk.choices?.[0]?.delta?.content || '';
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta?.content || '';
         if (delta) {
           fullContent += delta;
           if (opts.onChunk) opts.onChunk(delta);
         }
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
       }
+      return finishReason;
     };
 
     const resetAttempt = async () => {
@@ -817,33 +831,55 @@ export class Provider {
       const apiMessages = mergedMessages.map(m =>
         m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
       );
-      const requestOpts = {
-        model,
-        messages: apiMessages,
-        temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
-        max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
-        stream: true,
+      const maxContinuations = Number.isInteger(opts.maxContinuations)
+        ? Math.max(0, opts.maxContinuations)
+        : 2;
+      const continuationPrompt = encodeForRelay(
+        '上一次回答因输出长度限制而被截断。请从截断处直接继续，保持原有格式，不要重复已经生成的内容。'
+      );
+
+      const runStreamSequence = async (includeStreamOptions) => {
+        let requestMessages = apiMessages;
+        let continuationCount = 0;
+
+        while (true) {
+          const requestOpts = {
+            model,
+            messages: requestMessages,
+            temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
+            max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
+            stream: true,
+          };
+          if (includeStreamOptions) {
+            requestOpts.stream_options = { include_usage: true };
+          }
+
+          const stream = await this._client.chat.completions.create(requestOpts);
+          const finishReason = await readStream(stream);
+          if (finishReason !== 'length') return;
+
+          if (continuationCount >= maxContinuations) {
+            throw new Error('AI 输出达到长度上限，自动续写后仍未完成，请重试');
+          }
+
+          continuationCount++;
+          requestMessages = [
+            ...apiMessages,
+            { role: 'assistant', content: fullContent },
+            { role: 'user', content: continuationPrompt },
+          ];
+        }
       };
-      if (useStreamOptions && !streamOptionsFailed) {
-        requestOpts.stream_options = { include_usage: true };
-      }
 
       try {
-        const stream = await this._client.chat.completions.create(requestOpts);
-        await readStream(stream);
+        await runStreamSequence(useStreamOptions);
       } catch (err) {
         if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
+          useStreamOptions = false;
           await resetAttempt();
-          const fallbackStream = await this._client.chat.completions.create({
-            model,
-            messages: apiMessages,
-            temperature: opts.temperature ?? 0.7,
-            max_tokens: opts.maxTokens ?? 8192,
-            stream: true,
-          });
-          await readStream(fallbackStream);
+          await runStreamSequence(false);
           return;
         }
         throw err;
