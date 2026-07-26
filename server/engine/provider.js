@@ -461,15 +461,51 @@ const MAX_RETRIES = 2;
 const BACKOFF_MULTIPLIER = 2;
 
 function isRetryableError(err) {
-  const status = err?.status;
-  if (!status) {
-    return err?.message?.includes('ECONNRESET') ||
-           err?.message?.includes('ETIMEDOUT') ||
-           err?.message?.includes('timeout') ||
-           err?.message?.includes('socket hang up') ||
-           err?.message?.includes('network');
+  const chain = [];
+  const seen = new Set();
+  let current = err;
+  while (current && !seen.has(current) && chain.length < 5) {
+    chain.push(current);
+    seen.add(current);
+    current = current.cause;
   }
-  return status === 429 || status >= 500;
+
+  const retryableCodes = new Set([
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'ERR_HTTP2_GOAWAY_SESSION',
+    'ERR_HTTP2_STREAM_ERROR',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+  ]);
+  const retryableMessages = [
+    'connection error',
+    'connection reset',
+    'connection terminated',
+    'econnreset',
+    'etimedout',
+    'fetch failed',
+    'http/2 stream',
+    'http2 stream',
+    'network',
+    'premature close',
+    'socket hang up',
+    'stream failed',
+    'timeout',
+  ];
+
+  return chain.some(candidate => {
+    const status = Number(candidate?.status);
+    if ([408, 409, 425, 429].includes(status) || status >= 500) return true;
+
+    const code = String(candidate?.code || '').toUpperCase();
+    if (retryableCodes.has(code)) return true;
+
+    const message = String(candidate?.message || '').toLowerCase();
+    return retryableMessages.some(fragment => message.includes(fragment));
+  });
 }
 
 /**
@@ -505,7 +541,7 @@ async function* withStreamTimeout(iterable, timeoutMs = 60_000) {
   }
 }
 
-async function retryWithBackoff(fn, attempt = 0) {
+async function retryWithBackoff(fn, attempt = 0, onRetry) {
   try {
     return await fn();
   } catch (err) {
@@ -513,8 +549,9 @@ async function retryWithBackoff(fn, attempt = 0) {
       const delay = Math.min(INITIAL_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt), MAX_DELAY);
       const jitter = delay * (0.75 + Math.random() * 0.5);
       console.warn('[provider] Retry ' + (attempt + 1) + '/' + MAX_RETRIES + ' after ' + Math.round(jitter) + 'ms: ' + err.message);
+      if (onRetry) await onRetry(err);
       await sleep(jitter);
-      return retryWithBackoff(fn, attempt + 1);
+      return retryWithBackoff(fn, attempt + 1, onRetry);
     }
     throw err;
   }
@@ -568,17 +605,19 @@ export class Provider {
    * Tries the primary model first; on retryable failure, falls back through this._fallbackModels.
    * Skips cache update for fallback models to avoid stale data.
    */
-  async _executeWithModelFallback(fn) {
+  async _executeWithModelFallback(fn, hooks = {}) {
     const modelsToTry = [this._model, ...this._fallbackModels.filter(m => m !== this._model)];
     let lastError;
-    for (const model of modelsToTry) {
+    for (let index = 0; index < modelsToTry.length; index++) {
+      const model = modelsToTry[index];
       try {
-        const result = await retryWithBackoff(() => fn(model));
+        const result = await retryWithBackoff(() => fn(model), 0, hooks.onRetry);
         return { result, usedFallback: model !== this._model };
       } catch (err) {
         lastError = err;
         if (!isRetryableError(err)) throw err;
         console.warn(`[provider] Model ${model} failed, trying fallback: ${err.message}`);
+        if (index < modelsToTry.length - 1 && hooks.onRetry) await hooks.onRetry(err);
       }
     }
     throw lastError;
@@ -766,6 +805,12 @@ export class Provider {
       }
     };
 
+    const resetAttempt = async () => {
+      fullContent = '';
+      finalUsage = null;
+      if (opts.onReset) await opts.onReset();
+    };
+
     await this._executeWithModelFallback(async (model) => {
       let useStreamOptions = opts.streamOptions !== false;
       let streamOptionsFailed = false;
@@ -790,6 +835,7 @@ export class Provider {
         if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
+          await resetAttempt();
           const fallbackStream = await this._client.chat.completions.create({
             model,
             messages: apiMessages,
@@ -802,7 +848,7 @@ export class Provider {
         }
         throw err;
       }
-    });
+    }, { onRetry: resetAttempt });
 
     const usage = extractUsage({ usage: finalUsage || {} });
     const prefixChanged = this._lastPrefixHash && this._lastPrefixHash !== prefixHash;
@@ -892,6 +938,14 @@ export class Provider {
       }
     };
 
+    const resetToolStreamAttempt = async () => {
+      fullContent = '';
+      finalUsage = null;
+      toolCallsAccumulator = null;
+      finishReason = null;
+      if (opts.onReset) await opts.onReset();
+    };
+
     await this._executeWithModelFallback(async (model) => {
       let streamOptionsFailed = false;
       const apiMessages = mergedMessages.map(m =>
@@ -917,6 +971,7 @@ export class Provider {
         if (!streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
+          await resetToolStreamAttempt();
           const fallbackOpts = { ...requestOpts };
           delete fallbackOpts.stream_options;
           const fallbackStream = await this._client.chat.completions.create(fallbackOpts);
@@ -925,7 +980,7 @@ export class Provider {
         }
         throw err;
       }
-    });
+    }, { onRetry: resetToolStreamAttempt });
 
     const usage = extractUsage({ usage: finalUsage || {} });
     const prefixChanged = this._lastPrefixHash && this._lastPrefixHash !== prefixHash;
