@@ -39,4 +39,32 @@ describe('MermaidDiagram', () => {
     await waitFor(() => expect(mermaidMocks.render).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument());
   });
+
+  it('normalizes quoted state names before rendering a state diagram', async () => {
+    const source = [
+      'stateDiagram-v2',
+      '    [*] --> "运行中"',
+      '    "运行中" --> "可连接线程已结束": "线程函数 return 或 pthread_exit()"',
+      '    "运行中" --> "分离线程已结束": "线程函数 return 或 pthread_exit()"',
+      '    "可连接线程已结束" --> [*]: "pthread_join() 回收"',
+      '    "分离线程已结束" --> [*]: "内核自动回收"',
+    ].join('\n');
+
+    mermaidMocks.render.mockImplementation(async (_id, normalizedSource) => {
+      if (/^\s*\[\*\]\s*-->\s*"/m.test(normalizedSource)) {
+        throw new Error('Parse error on line 2: Expecting ID, got STRING');
+      }
+      return { svg: '<svg aria-label="state diagram"></svg>' };
+    });
+
+    const { container } = render(<MermaidDiagram code={source} />);
+
+    await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument());
+    const normalizedSource = mermaidMocks.render.mock.calls[0][1];
+    expect(normalizedSource).toContain('state "运行中" as mermaid_state_1');
+    expect(normalizedSource).toContain('state "可连接线程已结束" as mermaid_state_2');
+    expect(normalizedSource).toContain('state "分离线程已结束" as mermaid_state_3');
+    expect(normalizedSource).toContain('[*] --> mermaid_state_1');
+    expect(normalizedSource).not.toContain('--> "运行中"');
+  });
 });

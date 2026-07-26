@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { normalizeMermaidSource } from '../lib/mermaid-source.js';
 
 /**
  * Renders a Mermaid diagram from its source code.
@@ -58,7 +59,7 @@ export default function MermaidDiagram({ code }) {
 
         // Use a unique id per render to avoid collisions
         const id = 'mermaid-' + Math.random().toString(36).slice(2, 9);
-        const { svg: svgText } = await mermaid.render(id, code);
+        const { svg: svgText } = await mermaid.render(id, normalizeMermaidSource(code));
 
         if (!cancelled) {
           setSvg(svgText);
