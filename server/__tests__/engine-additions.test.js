@@ -33,6 +33,33 @@ function createMockProvider(resultContent, modelName = 'mock-model') {
   return provider;
 }
 
+function createSequencedMockProvider(responses, modelName = 'mock-model') {
+  const requests = [];
+  let responseIndex = 0;
+  const mockClient = {
+    chat: {
+      completions: {
+        async create(options) {
+          requests.push(options);
+          const response = responses[Math.min(responseIndex++, responses.length - 1)];
+          return {
+            choices: [{
+              message: { content: response.content, role: 'assistant' },
+              finish_reason: response.finishReason || 'stop',
+            }],
+            model: modelName,
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+          };
+        },
+      },
+    },
+  };
+  const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: modelName });
+  provider._client = mockClient;
+  provider._autoWarm = false;
+  return { provider, requests };
+}
+
 let planId = null;
 
 before(async () => {
@@ -92,6 +119,77 @@ describe('recommendResources', () => {
     const provider = createMockProvider('{}');
     const plan = store.getPlan(planId);
     await assert.rejects(() => recommendResources(provider, plan, 'no-such-topic', 'mock-model'));
+  });
+
+  it('retries a truncated response with enough budget and a concise prompt', async () => {
+    const resources = Array.from({ length: 6 }, (_, index) => ({
+      type: index === 0 ? 'book' : 'doc',
+      title: `资源 ${index + 1}`,
+      source: '权威来源',
+      level: 'intermediate',
+      paid: false,
+      reason: '紧扣当前知识点',
+      url: `https://example.com/resource-${index + 1}`,
+    }));
+    const { provider, requests } = createSequencedMockProvider([
+      {
+        content: '{"topicTitle":"Socket 编程基础","resources":[{"type":"book","title":"未完成',
+        finishReason: 'length',
+      },
+      {
+        content: JSON.stringify({ topicTitle: 'Socket 编程基础', resources }),
+        finishReason: 'stop',
+      },
+    ], 'resource-retry-model');
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    await store.updateTopic(plan.id, topicId, {
+      detail: `资源截断恢复测试 ${Date.now()}`,
+    });
+
+    const result = await recommendResources(provider, store.getPlan(planId), topicId, 'resource-retry-model');
+
+    assert.equal(result.resources.length, 6);
+    assert.equal(requests.length, 2);
+    assert.ok(requests[0].max_tokens >= 4096);
+    assert.match(requests[1].messages.at(-1).content, /精简/);
+  });
+
+  it('retries instead of silently accepting an empty resource list', async () => {
+    const recoveredResource = {
+      type: 'doc',
+      title: 'Linux man-pages',
+      source: 'man7.org',
+      level: 'intermediate',
+      paid: false,
+      reason: '提供权威 API 定义',
+      url: 'https://man7.org/linux/man-pages/',
+    };
+    const { provider, requests } = createSequencedMockProvider([
+      { content: '{}', finishReason: 'stop' },
+      {
+        content: JSON.stringify({
+          topicTitle: 'Socket 编程基础',
+          resources: [null, recoveredResource],
+        }),
+        finishReason: 'stop',
+      },
+    ], 'resource-empty-retry-model');
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    await store.updateTopic(plan.id, topicId, {
+      detail: `资源空结果恢复测试 ${Date.now()}`,
+    });
+
+    const result = await recommendResources(
+      provider,
+      store.getPlan(planId),
+      topicId,
+      'resource-empty-retry-model'
+    );
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(result.resources, [recoveredResource]);
   });
 });
 

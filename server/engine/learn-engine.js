@@ -796,6 +796,41 @@ export function getEngineCacheDiagnostics() {
   return engineCacheMonitor.summary();
 }
 
+function parseResourceRecommendations(content, fallbackTitle) {
+  let json = String(content || '').trim();
+  const fenced = json.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) json = fenced[1].trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(json || '{}');
+  } catch {
+    throw new Error('AI 返回的资源推荐 JSON 不完整');
+  }
+
+  const resources = (Array.isArray(parsed.resources) ? parsed.resources : [])
+    .filter(r => r && typeof r === 'object')
+    .map(r => ({
+      type: r.type || 'article',
+      title: String(r.title || '').trim(),
+      source: String(r.source || '').trim(),
+      level: r.level || 'intermediate',
+      paid: !!r.paid,
+      reason: String(r.reason || '').trim(),
+      url: String(r.url || '').trim(),
+    }))
+    .filter(r => r.title);
+
+  if (resources.length === 0) {
+    throw new Error('AI 未返回有效的学习资源');
+  }
+
+  return {
+    topicTitle: parsed.topicTitle || fallbackTitle,
+    resources,
+  };
+}
+
 /**
  * Recommend learning resources for a knowledge point.
  * Returns structured recommendations across multiple channels/forms
@@ -822,6 +857,7 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
     '- 覆盖多种「形式」：书籍(book)、视频(video)、官方文档(doc)、技术文章(article)、在线课程(course)、互动练习(practice)\n' +
     '- 覆盖多种「渠道」：经典教材、知名慕课平台、官方文档、技术博客/社区（如官方文档、MDN、Stack Overflow、知名博客等）\n' +
     '- 每个资源必须真实、权威、广为人知，不要编造不存在的书名或链接\n' +
+    '- 恰好推荐 6 个资源，每个资源的推荐理由不超过 40 个汉字\n' +
     '- 标注适合人群（初学者/进阶）与推荐理由（为什么对这个知识点有帮助）\n' +
     '- 优先推荐免费或易获取的资源，付费资源需明确标注\n' +
     '## 输出格式（只输出 JSON）\n' +
@@ -836,34 +872,37 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
   const userMessage =
     `知识点名称：${topic.title}\n` +
     `知识点讲解摘要：${context || topic.title}\n\n` +
-    `请为这个知识点推荐 6-10 个学习资源，覆盖书籍、视频、文档、文章、课程、互动练习等不同形式与渠道。`;
+    '请恰好推荐 6 个学习资源，覆盖书籍、视频、文档、文章、课程、互动练习等不同形式与渠道。';
 
-  const messages = [
+  const complete = (recovery = false) => provider.complete([
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userMessage },
-  ];
-
-  const result = await provider.complete(messages, {
-    temperature: 0.4,
-    maxTokens: 2048,
+    {
+      role: 'user',
+      content: recovery
+        ? `${userMessage}\n\n上一次输出无效或被截断。请精简内容，严格输出完整 JSON，不要附加说明。`
+        : userMessage,
+    },
+  ], {
+    temperature: recovery ? 0.2 : 0.4,
+    maxTokens: 4096,
     responseFormat: { type: 'json_object' },
     model,
   });
 
-  const parsed = JSON.parse(result.content || '{}');
-  const resources = Array.isArray(parsed.resources) ? parsed.resources : [];
-  return {
-    topicTitle: parsed.topicTitle || topic.title,
-    resources: resources.map(r => ({
-      type: r.type || 'article',
-      title: r.title || '',
-      source: r.source || '',
-      level: r.level || 'intermediate',
-      paid: !!r.paid,
-      reason: r.reason || '',
-      url: r.url || '',
-    })),
-  };
+  let result = await complete();
+  try {
+    if (result.finishReason === 'length') {
+      throw new Error('AI 返回的资源推荐被截断');
+    }
+    return parseResourceRecommendations(result.content, topic.title);
+  } catch {
+    result = await complete(true);
+  }
+
+  if (result.finishReason === 'length') {
+    throw new Error('AI 返回的资源推荐仍被截断，请稍后重试');
+  }
+  return parseResourceRecommendations(result.content, topic.title);
 }
 
 /**
