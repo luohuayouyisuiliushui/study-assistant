@@ -477,29 +477,49 @@ function isRetryableError(err) {
  * Throws if no chunk is received for `timeoutMs` milliseconds.
  * Each successful chunk resets the idle timer.
  */
-async function* withStreamTimeout(iterable, timeoutMs = 60_000) {
+async function* withStreamTimeout(iterable, timeoutMs = 60_000, signal) {
   const iterator = iterable[Symbol.asyncIterator]();
   let lastActivity = Date.now();
+  let timeoutHandle = null;
+  let onAbort = null;
 
   const nextWithTimeout = async () => {
     const elapsed = Date.now() - lastActivity;
     const remaining = Math.max(1, timeoutMs - elapsed);
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Stream idle timeout: no data for ${timeoutMs / 1000}s`)), remaining)
-    );
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Stream idle timeout: no data for ${timeoutMs / 1000}s`)),
+        remaining
+      );
+    });
 
     return Promise.race([iterator.next(), timeoutPromise]);
   };
 
+  // If a signal is provided, race against abort so the consumer stops
+  // reading promptly when the client disconnects.
+  if (signal) {
+    if (signal.aborted) throw new Error('Stream aborted before start');
+    onAbort = () => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      try { iterator.return?.(); } catch { /* best-effort cleanup */ }
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+
   try {
     while (true) {
+      if (signal?.aborted) throw new Error('Stream aborted by client');
       const result = await nextWithTimeout();
+      if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
       if (result.done) break;
       lastActivity = Date.now();
       yield result.value;
     }
   } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     // If we exit early (error/break), the iterator might still be pending.
     // The underlying stream will be cleaned up by GC/Node.js on connection close.
   }
@@ -646,20 +666,28 @@ export class Provider {
       if (opts.responseFormat && !responseFormatFailed) {
         requestOpts.response_format = opts.responseFormat;
       }
+      // Forward AbortSignal to the underlying SDK so cancelled requests
+      // stop consuming upstream tokens (e.g. when an SSE client disconnects).
+      if (opts.signal) {
+        requestOpts.signal = opts.signal;
+      }
 
       let resp;
       try {
         resp = await this._client.chat.completions.create(requestOpts);
       } catch (err) {
+        if (opts.signal?.aborted) throw err;
         if (opts.responseFormat && !responseFormatFailed && isUnsupportedParameterError(err, 'response_format')) {
           console.warn('[provider] ⚠️ Relay does not support response_format, retrying without it');
           responseFormatFailed = true;
-          resp = await this._client.chat.completions.create({
+          const retryOpts = {
             model,
             messages: apiMessages,
             temperature: opts.temperature ?? 0.7,
             max_tokens: opts.maxTokens ?? 4096,
-          });
+          };
+          if (opts.signal) retryOpts.signal = opts.signal;
+          resp = await this._client.chat.completions.create(retryOpts);
         } else {
           throw err;
         }
@@ -753,7 +781,8 @@ export class Provider {
 
     // Shared stream reader: accumulates content and usage
     const readStream = async (stream) => {
-      for await (const chunk of withStreamTimeout(stream)) {
+      for await (const chunk of withStreamTimeout(stream, 60_000, opts.signal)) {
+        if (opts.signal?.aborted) throw new Error('Stream aborted by client');
         if (chunk.usage) {
           finalUsage = chunk.usage;
           continue;
@@ -782,21 +811,27 @@ export class Provider {
       if (useStreamOptions && !streamOptionsFailed) {
         requestOpts.stream_options = { include_usage: true };
       }
+      if (opts.signal) {
+        requestOpts.signal = opts.signal;
+      }
 
       try {
         const stream = await this._client.chat.completions.create(requestOpts);
         await readStream(stream);
       } catch (err) {
+        if (opts.signal?.aborted) throw err;
         if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
-          const fallbackStream = await this._client.chat.completions.create({
+          const fallbackOpts = {
             model,
             messages: apiMessages,
             temperature: opts.temperature ?? 0.7,
             max_tokens: opts.maxTokens ?? 8192,
             stream: true,
-          });
+          };
+          if (opts.signal) fallbackOpts.signal = opts.signal;
+          const fallbackStream = await this._client.chat.completions.create(fallbackOpts);
           await readStream(fallbackStream);
           return;
         }
@@ -861,7 +896,8 @@ export class Provider {
     this._totalCalls++;
 
     const readStream = async (stream) => {
-      for await (const chunk of withStreamTimeout(stream)) {
+      for await (const chunk of withStreamTimeout(stream, 60_000, opts.signal)) {
+        if (opts.signal?.aborted) throw new Error('Stream aborted by client');
         if (chunk.usage) {
           finalUsage = chunk.usage;
           continue;
@@ -909,11 +945,15 @@ export class Provider {
       if (!streamOptionsFailed) {
         requestOpts.stream_options = { include_usage: true };
       }
+      if (opts.signal) {
+        requestOpts.signal = opts.signal;
+      }
 
       try {
         const stream = await this._client.chat.completions.create(requestOpts);
         await readStream(stream);
       } catch (err) {
+        if (opts.signal?.aborted) throw err;
         if (!streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;

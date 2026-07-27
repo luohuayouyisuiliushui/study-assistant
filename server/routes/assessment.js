@@ -114,14 +114,15 @@ router.post('/plans/:planId/exam/generate-stream', async (req, res) => {
 
     // Client disconnect cleanup
     let aborted = false;
-    res.on('close', () => { aborted = true; clearTimeout(timeout); });
+    const abortController = new AbortController();
+    res.on('close', () => { aborted = true; clearTimeout(timeout); abortController.abort(); });
 
     const provider = getProvider(req);
     const writeEvent = (event) => {
       if (aborted) return;
       try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
     };
-    await generateExamStream(provider, plan, topicIds, config || {}, writeEvent, getModel(req));
+    await generateExamStream(provider, plan, topicIds, config || {}, writeEvent, getModel(req), abortController.signal);
     clearTimeout(timeout);
     if (!aborted) res.end();
   } catch (err) {

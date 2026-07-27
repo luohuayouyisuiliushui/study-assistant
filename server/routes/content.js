@@ -84,8 +84,11 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
       } catch {}
     }, 180_000);
 
+    // AbortController lets us cancel the upstream AI call when the client
+    // disconnects, so we stop paying for tokens nobody will read.
+    const abortController = new AbortController();
     let aborted = false;
-    res.on('close', () => { aborted = true; clearTimeout(timeout); });
+    res.on('close', () => { aborted = true; clearTimeout(timeout); abortController.abort(); });
 
     const writeEvent = (event) => {
       if (aborted) return;
@@ -98,14 +101,14 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
     if (wantsAgentDispatch(req)) {
       const dispatcher = getDispatcher(req);
       await dispatcher.dispatch('explain',
-        (provider) => generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle)
+        (provider) => generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle, abortController.signal)
       );
     } else {
       const provider = getProvider(req);
       const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
       const imageModel = req.body?.imageModel || '';
       const imageBaseUrl = req.body?.imageBaseUrl || '';
-      await generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle);
+      await generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle, abortController.signal);
       if (imageApiKey) {
         generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl).then(imageUrl => {
           if (imageUrl) store.updateTopic(plan.id, topic.id, { imageUrl }).catch(() => {});
@@ -250,7 +253,8 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
     };
 
     let aborted = false;
-    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
+    const abortController = new AbortController();
+    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); abortController.abort(); });
 
     const provider = getProvider(req);
     const writeEvent = (event) => {
@@ -260,6 +264,7 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
     resetIdleTimer();
 
     await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
+      signal: abortController.signal,
       onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
       onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
       onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
@@ -311,7 +316,8 @@ router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res)
     };
 
     let aborted = false;
-    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); });
+    const abortController = new AbortController();
+    res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); abortController.abort(); });
 
     const provider = getProvider(req);
     const writeEvent = (event) => {
@@ -321,6 +327,7 @@ router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res)
     resetIdleTimer();
 
     await streamInteractiveContinue(provider, plan, req.params.topicId, mode, feedback.trim(), {
+      signal: abortController.signal,
       onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
       onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
       onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),

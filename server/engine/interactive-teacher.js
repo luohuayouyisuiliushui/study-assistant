@@ -418,7 +418,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
     : baseContext;
   const stateMachine = (mode === 'stepwise' || mode === 'stepwise-challenge') ? _initDynamicStateMachine() : null;
 
-  const { onChunk, onToolCall, onDone, onError } = callbacks;
+  const { onChunk, onToolCall, onDone, onError, signal } = callbacks;
 
   if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     const stateSnapshot = _buildStateMachineSnapshot({ stateMachine });
@@ -435,6 +435,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
         maxTokens: 4096,
         tools: [ASK_USER_TO_CONTINUE_TOOL],
         tool_choice: 'auto',
+        signal,
         onChunk: (delta) => { if (onChunk) onChunk(delta); },
         onToolCall: (tcs) => { if (onToolCall) onToolCall(tcs); },
       });
@@ -481,6 +482,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
 
     const fullContent = await provider.stream(messages, {
       maxTokens: 4096,
+      signal,
       onChunk: (delta) => { if (onChunk) onChunk(delta); },
     });
 
@@ -529,7 +531,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
   const systemPrompt = _getInteractivePrompt(mode);
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
-  const { onChunk, onToolCall, onDone, onError } = callbacks;
+  const { onChunk, onToolCall, onDone, onError, signal } = callbacks;
 
   if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     session.status = 'ai_thinking';
@@ -559,6 +561,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
       try {
         const fullContent = await provider.stream(messages, {
           maxTokens: 4096,
+          signal,
           onChunk: (delta) => { if (onChunk) onChunk(delta); },
         });
         if (!fullContent) throw new Error('AI 返回内容为空');
@@ -593,6 +596,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
         maxTokens: 4096,
         tools: [ASK_USER_TO_CONTINUE_TOOL],
         tool_choice: 'auto',
+        signal,
         onChunk: (delta) => { if (onChunk) onChunk(delta); },
         onToolCall: (tcs) => { if (onToolCall) onToolCall(tcs); },
       });
@@ -664,6 +668,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
 
     const fullContent = await provider.stream(messages, {
       maxTokens: 4096,
+      signal,
       onChunk: (delta) => { if (onChunk) onChunk(delta); },
     });
 
@@ -1013,4 +1018,4 @@ export async function decomposeTopic(providerOrConfig, plan, topicId, model) {
     }
 }
 
-
+

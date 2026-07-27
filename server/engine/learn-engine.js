@@ -233,7 +233,7 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
  * Events: chunk ({ content }), done ({ topicId, detail }), error ({ message })
  * Still persists to store (same as generateDetail), but also streams via SSE.
  */
-export async function generateDetailStream(providerOrConfig, plan, topicId, writeEvent, model = 'gpt-4o-mini', explainStyle) {
+export async function generateDetailStream(providerOrConfig, plan, topicId, writeEvent, model = 'gpt-4o-mini', explainStyle, signal) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
@@ -268,6 +268,7 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
     let chunkCount = 0;
     const fullContent = await provider.stream(messages, {
       maxTokens: 8192,
+      signal,
       onChunk: (delta) => {
         topic.detail += delta;
         chunkCount++;

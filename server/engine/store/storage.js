@@ -129,9 +129,15 @@ function enqueueWrite(planId, fn) {
   const prev = writeQueues.get(planId);
   const next = prev.then(fn, fn);
   writeQueues.set(planId, next);
+  // When this write settles, drop the Map entry if no newer write has been
+  // queued against the same planId. This prevents idle entries from
+  // accumulating over the server's lifetime (the previous implementation
+  // only reset the entry to Promise.resolve() and never deleted it, so the
+  // Map grew unboundedly for long-running processes). A subsequent
+  // enqueueWrite will simply recreate the entry via the has() check above.
   next.then(
-    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
-    () => { if (writeQueues.get(planId) === next) writeQueues.set(planId, Promise.resolve()); },
+    () => { if (writeQueues.get(planId) === next) writeQueues.delete(planId); },
+    () => { if (writeQueues.get(planId) === next) writeQueues.delete(planId); },
   );
   return next;
 }

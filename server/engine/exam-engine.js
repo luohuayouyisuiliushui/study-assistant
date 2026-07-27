@@ -296,7 +296,7 @@ export async function generateExam(providerOrConfig, plan, topicIds, config = {}
   return examPaper;
 }
 
-export async function generateExamStream(providerOrConfig, plan, topicIds, config = {}, writeCallback, model) {
+export async function generateExamStream(providerOrConfig, plan, topicIds, config = {}, writeCallback, model, signal) {
   const provider = _resolveProvider(providerOrConfig, model);
   const blueprint = await generateBlueprint(provider, plan, topicIds, config, model);
   const {title, orders, topicTitleToId, topicDetailMap} = blueprint;
@@ -304,6 +304,8 @@ export async function generateExamStream(providerOrConfig, plan, topicIds, confi
   const MAX_RETRIES=2, CONCURRENCY=5;
   const validatedQ = [];
   for (let i=0; i<orders.length; i+=CONCURRENCY) {
+    // Stop generating further batches if the SSE client has disconnected.
+    if (signal?.aborted) break;
     const batch = orders.slice(i, i+CONCURRENCY);
     const results = await Promise.all(batch.map(async order=>{
       for (let a=0; a<=MAX_RETRIES; a++) {
