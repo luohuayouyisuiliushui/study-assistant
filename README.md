@@ -51,6 +51,10 @@ npm run dev
 
 浏览器打开 `http://localhost:5173`，在设置里填入 API Key（支持 OpenAI / DeepSeek / SiliconFlow / 任意兼容 OpenAI 的 API）即可使用。
 
+服务端默认只监听 `127.0.0.1:3001`。如确需允许远程访问，显式设置
+`STUDY_ASSISTANT_HOST`，并同时设置 `STUDY_ASSISTANT_API_TOKEN`；远程 API 请求必须携带
+`x-study-assistant-token`。不要把 CORS 当作访问控制。
+
 > 也可通过 `npm run start` 启动**生产模式**（先 `npm run build` 构建前端，后端在端口 3001 提供完整服务）。
 
 ### Windows 快速开始

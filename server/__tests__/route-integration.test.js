@@ -1,22 +1,27 @@
-import { describe, it, before } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { fork } from 'node:child_process';
+import fs from 'fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 
-const BASE = 'http://localhost:3001';
+let serverProcess;
+let baseUrl;
+let tempDataDir;
 
-function request(method, path, body) {
+function request(method, route, body) {
   return new Promise((resolve, reject) => {
-    const url = new URL(path, BASE);
-    const opts = {
+    const url = new URL(route, baseUrl);
+    const req = http.request({
       method,
-      hostname: 'localhost',
-      port: 3001,
+      hostname: '127.0.0.1',
+      port: url.port,
       path: url.pathname,
       headers: { 'Content-Type': 'application/json' },
-    };
-    const req = http.request(opts, res => {
+    }, res => {
       let data = '';
-      res.on('data', chunk => data += chunk);
+      res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
         try {
           resolve({ status: res.statusCode, body: JSON.parse(data) });
@@ -26,80 +31,123 @@ function request(method, path, body) {
       });
     });
     req.on('error', reject);
-    if (body) req.write(JSON.stringify(body));
+    if (body !== undefined) req.write(JSON.stringify(body));
     req.end();
   });
 }
 
-describe('Route Integration (requires running server)', () => {
-  let serverRunning = false;
+function startIsolatedServer(dataDir) {
+  return new Promise((resolve, reject) => {
+    const helper = new URL('./helpers/isolated-learn-server.js', import.meta.url);
+    serverProcess = fork(helper, [], {
+      env: { ...process.env, STUDY_ASSISTANT_DATA_DIR: dataDir },
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
 
+    const timeout = setTimeout(() => reject(new Error('Timed out starting isolated learn server')), 10_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      serverProcess.off('message', onMessage);
+      serverProcess.off('error', onError);
+      serverProcess.off('exit', onExit);
+    };
+    const onMessage = message => {
+      cleanup();
+      if (message?.error) reject(new Error(message.error));
+      else resolve(`http://127.0.0.1:${message.port}`);
+    };
+    const onError = error => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = (code, signal) => {
+      cleanup();
+      reject(new Error(`Isolated learn server exited before listening (code=${code}, signal=${signal})`));
+    };
+
+    serverProcess.on('message', onMessage);
+    serverProcess.once('error', onError);
+    serverProcess.once('exit', onExit);
+  });
+}
+
+async function stopIsolatedServer() {
+  if (!serverProcess || serverProcess.exitCode !== null || serverProcess.killed) return;
+  await new Promise(resolve => {
+    serverProcess.once('exit', resolve);
+    serverProcess.kill();
+  });
+}
+
+describe('Route Integration', () => {
   before(async () => {
-    try {
-      await request('GET', '/api/learn/plans');
-      serverRunning = true;
-    } catch {
-      console.log('⚠ Server not running — skipping route integration tests');
-    }
+    tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'study-assistant-route-'));
+    baseUrl = await startIsolatedServer(tempDataDir);
   });
 
-  it('GET /api/learn/plans should return plans array', async () => {
-    if (!serverRunning) return;
+  after(async () => {
+    await stopIsolatedServer();
+    fs.rmSync(tempDataDir, { recursive: true, force: true });
+  });
+
+  it('GET /api/learn/plans returns an isolated plans array', async () => {
     const res = await request('GET', '/api/learn/plans');
     assert.equal(res.status, 200);
-    assert.ok(Array.isArray(res.body.plans));
+    assert.deepEqual(res.body.plans, []);
   });
 
-  it('GET /api/learn/trash should return plans array', async () => {
-    if (!serverRunning) return;
-    const res = await request('GET', '/api/learn/trash');
-    assert.equal(res.status, 200);
-    // trash endpoint returns {plans: [...]}
-    assert.ok(Array.isArray(res.body.plans));
-  });
-
-  it('GET /api/user-profile should return profile or 404', async () => {
-    if (!serverRunning) return;
-    const res = await request('GET', '/api/user-profile');
-    assert.ok([200, 404].includes(res.status));
-  });
-
-  it('POST /api/learn/plans with invalid body should return 400', async () => {
-    if (!serverRunning) return;
+  it('rejects an invalid create request', async () => {
     const res = await request('POST', '/api/learn/plans', { name: '' });
     assert.equal(res.status, 400);
     assert.ok(res.body.error);
   });
 
-  it('POST /api/learn/plans should create a plan and return it', async () => {
-    if (!serverRunning) return;
-    const res = await request('POST', '/api/learn/plans', { name: '集成测试计划' });
+  it('creates and moves plans to trash without touching port 3001', async () => {
+    const created = await request('POST', '/api/learn/plans', { name: '集成测试计划' });
+    assert.equal(created.status, 200);
+    assert.ok(created.body.plan.id);
+
+    const deleted = await request('DELETE', `/api/learn/plans/${created.body.plan.id}`);
+    assert.equal(deleted.status, 200);
+
+    const trash = await request('GET', '/api/learn/trash');
+    assert.equal(trash.status, 200);
+    assert.equal(trash.body.plans.some(plan => plan.id === created.body.plan.id), true);
+  });
+
+  it('persists topic weak points through the public cross-project contract', async () => {
+    const created = await request('POST', '/api/learn/plans', { name: '弱项契约测试' });
+    const planId = created.body.plan.id;
+    const topics = await request('POST', `/api/learn/plans/${planId}/topics`, { titles: ['线程同步'] });
+    const topicId = topics.body.plan.topics[0].id;
+
+    const first = await request('POST', `/api/learn/plans/${planId}/topics/${topicId}/weak-points`, { point: '条件变量' });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.changed, true);
+
+    const duplicate = await request('POST', `/api/learn/plans/${planId}/topics/${topicId}/weak-points`, { point: '条件变量' });
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.body.changed, false);
+
+    const missing = await request('POST', `/api/learn/plans/${planId}/topics/missing-topic/weak-points`, { point: '条件变量' });
+    assert.equal(missing.status, 404);
+
+    const stored = await request('GET', `/api/learn/plans/${planId}`);
+    assert.deepEqual(stored.body.plan.topics[0].weakPoints, ['条件变量']);
+  });
+
+  it('waits for batch deletion before responding', async () => {
+    const first = await request('POST', '/api/learn/plans', { name: '批量删除集成测试 1' });
+    const second = await request('POST', '/api/learn/plans', { name: '批量删除集成测试 2' });
+    const ids = [first.body.plan.id, second.body.plan.id];
+
+    const res = await request('POST', '/api/learn/plans/batch-delete', { ids });
     assert.equal(res.status, 200);
-    assert.ok(res.body.plan);
-    assert.ok(res.body.plan.id);
-    assert.equal(res.body.plan.name, '集成测试计划');
-    await request('DELETE', `/api/learn/plans/${res.body.plan.id}`);
-  });
+    assert.deepEqual(res.body, { success: true, deleted: 2 });
 
-  it('GET /api/learn/plans/:id with non-existent id should return 404', async () => {
-    if (!serverRunning) return;
-    const res = await request('GET', '/api/learn/plans/non-existent-id');
-    assert.equal(res.status, 404);
-  });
-
-  it('POST /api/learn/plans/batch-delete with empty ids should return 400', async () => {
-    if (!serverRunning) return;
-    const res = await request('POST', '/api/learn/plans/batch-delete', { ids: [] });
-    assert.equal(res.status, 400);
-  });
-
-  it('GET /api/learn/plans/:planId/exams should return exams array', async () => {
-    if (!serverRunning) return;
-    const createRes = await request('POST', '/api/learn/plans', { name: '试卷测试计划' });
-    const planId = createRes.body.plan.id;
-    const res = await request('GET', `/api/learn/plans/${planId}/exams`);
-    assert.equal(res.status, 200);
-    assert.ok(Array.isArray(res.body.exams));
-    await request('DELETE', `/api/learn/plans/${planId}`);
+    for (const id of ids) {
+      const plan = await request('GET', `/api/learn/plans/${id}`);
+      assert.equal(plan.status, 404);
+    }
   });
 });

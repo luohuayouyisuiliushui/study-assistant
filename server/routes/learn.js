@@ -56,13 +56,17 @@ router.delete('/plans/:id', async (req, res) => {
  * Permanently delete multiple plans by their IDs (skips trash).
  * Body: { ids: ["id1", "id2", ...] }
  */
-router.post('/plans/batch-delete', (req, res) => {
+router.post('/plans/batch-delete', async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: '请提供要删除的计划 ID 数组' });
   }
-  store.deletePlansByIds(ids);
-  res.json({ success: true, deleted: ids.length });
+  try {
+    await store.deletePlansByIds(ids);
+    res.json({ success: true, deleted: ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
@@ -103,9 +107,9 @@ router.get('/trash', (req, res) => {
  * POST /api/learn/trash/:id/restore
  * Restore a plan from the recycle bin.
  */
-router.post('/trash/:id/restore', (req, res) => {
+router.post('/trash/:id/restore', async (req, res) => {
   try {
-    store.restorePlan(req.params.id);
+    await store.restorePlan(req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -213,6 +217,20 @@ router.post('/plans/:planId/topics/:topicId/time', async (req, res) => {
     res.json({ plan });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/plans/:planId/topics/:topicId/weak-points', async (req, res) => {
+  const point = typeof req.body?.point === 'string' ? req.body.point.trim() : '';
+  if (!point || point.length > 500) {
+    return res.status(400).json({ error: '弱项必须是 1 到 500 个字符的文本' });
+  }
+  try {
+    const result = await store.appendWeakPoint(req.params.planId, req.params.topicId, point);
+    res.json({ changed: result.changed, plan: result.plan });
+  } catch (err) {
+    const status = /Topic not found|Plan not found/.test(err.message) ? 404 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -354,7 +372,7 @@ router.post('/plans/import', async (req, res) => {
     };
     phases = phases.map(p => ({ ...p, topics: cleanTopicsRecursive(p.topics) }));
 
-    const plan = store.createPlanWithPhases(planName, phases, relations);
+    const plan = await store.createPlanWithPhases(planName, phases, relations);
 
     // ── Infer missing prerequisites from topic ordering ──
     // If AI didn't output explicit relations, infer basic prerequisite chains:

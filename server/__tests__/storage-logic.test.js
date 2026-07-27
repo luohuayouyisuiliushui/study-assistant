@@ -13,6 +13,8 @@ import {
   drainWriteQueue,
   readIndex,
   writeIndex,
+  appendIndexEntry,
+  removeIndexEntries,
   updateIndex,
   planPath,
   getCachedPlan,
@@ -165,6 +167,40 @@ describe('index operations', () => {
     // Restore the index to its original state so this test does not leave an
     // orphan index entry (which would break global consistency checks).
     await writeIndex(originalIdx);
+  });
+
+  it('serializes overlapping mutations without dropping index entries', async () => {
+    const originalIdx = readIndex();
+    const prefix = `test-concurrent-index-${Date.now()}`;
+    const entries = [0, 1, 2].map(index => ({
+      id: `${prefix}-${index}`,
+      name: `Concurrent ${index}`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      topicCount: 0,
+    }));
+
+    try {
+      await Promise.all(entries.map(entry => appendIndexEntry(entry)));
+      const afterAppend = readIndex();
+      for (const entry of entries) {
+        assert.ok(afterAppend.some(item => item.id === entry.id), `missing ${entry.id}`);
+      }
+
+      await Promise.all([
+        removeIndexEntries(entries[0].id),
+        appendIndexEntry({ ...entries[1], name: 'Concurrent updated' }),
+      ]);
+      const afterMixedMutations = readIndex();
+      assert.equal(afterMixedMutations.some(item => item.id === entries[0].id), false);
+      assert.equal(
+        afterMixedMutations.find(item => item.id === entries[1].id)?.name,
+        'Concurrent updated',
+      );
+      assert.ok(afterMixedMutations.some(item => item.id === entries[2].id));
+    } finally {
+      await writeIndex(originalIdx);
+    }
   });
 
   it('readIndex handles large index', () => {

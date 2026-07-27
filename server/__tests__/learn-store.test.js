@@ -243,7 +243,7 @@ describe('learn-store', () => {
   describe('createPlanWithPhases (hierarchy)', () => {
     it('should create plan with nested hierarchy (old string format)', async () => {
       const phases = [{ name: '基础', topics: ['变量', '函数'] }];
-      const plan = store.createPlanWithPhases('旧格式兼容', phases);
+      const plan = await store.createPlanWithPhases('旧格式兼容', phases);
       createdPlanIds.push(plan.id);
       assert.strictEqual(plan.topics.length, 2);
       assert.strictEqual(plan.topics[0].title, '变量');
@@ -264,7 +264,7 @@ describe('learn-store', () => {
           { title: '面向对象', level: 1 },
         ],
       }];
-      const plan = store.createPlanWithPhases('层级测试', phases);
+      const plan = await store.createPlanWithPhases('层级测试', phases);
       createdPlanIds.push(plan.id);
       assert.strictEqual(plan.topics.length, 5);
       // Check parent-child relationships
@@ -293,7 +293,7 @@ describe('learn-store', () => {
         { from: 'A', to: 'B', type: 'prerequisite' },
         { from: 'A', to: 'C', type: 'related' },
       ];
-      const plan = store.createPlanWithPhases('关系测试', phases, relations);
+      const plan = await store.createPlanWithPhases('关系测试', phases, relations);
       createdPlanIds.push(plan.id);
       const a = plan.topics.find(t => t.title === 'A');
       const b = plan.topics.find(t => t.title === 'B');
@@ -307,7 +307,7 @@ describe('learn-store', () => {
         { title: 'A', level: 1 },
         { title: 'B', level: 1, prerequisites: ['A'] },
       ]}];
-      const plan = store.createPlanWithPhases('混合前置', phases);
+      const plan = await store.createPlanWithPhases('混合前置', phases);
       createdPlanIds.push(plan.id);
       const b = plan.topics.find(t => t.title === 'B');
       const a = plan.topics.find(t => t.title === 'A');
@@ -414,7 +414,7 @@ describe('learn-store', () => {
       createdPlanIds.push(plan.id);
       await store.deletePlan(plan.id);
       assert.strictEqual(store.getPlan(plan.id), null);
-      store.restorePlan(plan.id);
+      await store.restorePlan(plan.id);
       const restored = store.getPlan(plan.id);
       assert.ok(restored, 'plan should be restored');
       assert.strictEqual(restored.name, 'trash-test-2');

@@ -11,7 +11,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // storage.js lives in store/ subdirectory, need two levels up to reach server/
-const DATA = path.join(__dirname, '..', '..', 'data', 'learn');
+const configuredDataDir = process.env.STUDY_ASSISTANT_DATA_DIR?.trim();
+const DATA = configuredDataDir
+  ? path.resolve(configuredDataDir)
+  : path.join(__dirname, '..', '..', 'data', 'learn');
 const PLANS_INDEX = path.join(DATA, 'plans.json');
 const TRASH_DIR = path.join(DATA, 'trash');
 const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
@@ -255,18 +258,41 @@ function writeIndex(index) {
   });
 }
 
-function updateIndex(planId, updates) {
+function mutateIndex(mutator) {
   return _locked(() => {
-    let index = readIndex();
     const seen = new Set();
-    index = index.filter(e => {
-      if (seen.has(e.id)) return false;
-      seen.add(e.id);
+    const current = readIndex().filter(entry => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
       return true;
     });
+    const next = mutator(current);
+    if (!Array.isArray(next)) throw new Error('Index mutator must return an array');
+    writeAtomic(PLANS_INDEX, JSON.stringify(next, null, 2), { backup: true });
+    return next;
+  });
+}
+
+function appendIndexEntry(entry) {
+  return mutateIndex(index => [
+    ...index.filter(item => item.id !== entry.id),
+    entry,
+  ]);
+}
+
+function removeIndexEntries(planIds) {
+  const ids = new Set(
+    (Array.isArray(planIds) ? planIds : [planIds])
+      .filter(id => typeof id === 'string' && id.length > 0)
+  );
+  return mutateIndex(index => index.filter(entry => !ids.has(entry.id)));
+}
+
+function updateIndex(planId, updates) {
+  return mutateIndex(index => {
     const entry = index.find(e => e.id === planId);
     if (entry) Object.assign(entry, updates);
-    writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2), { backup: true });
+    return index;
   });
 }
 
@@ -320,6 +346,9 @@ export {
   readIndex,
   rebuildIndex,
   writeIndex,
+  mutateIndex,
+  appendIndexEntry,
+  removeIndexEntries,
   updateIndex,
   planPath,
   getCachedPlan,

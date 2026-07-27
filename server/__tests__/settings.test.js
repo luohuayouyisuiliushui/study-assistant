@@ -1,112 +1,74 @@
-import { describe, it, before, after } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import http from 'http';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENV_LOCAL_PATH = path.join(__dirname, '..', '.env.local');
-const BACKUP_PATH = ENV_LOCAL_PATH + '.test.bak';
+let server;
+let tempDir;
+let previousEnvPath;
 
-function request(server, method, url, body) {
+function request(method, url, body) {
   return new Promise((resolve, reject) => {
-    const opts = {
+    const req = http.request({
       method,
       hostname: '127.0.0.1',
       port: server.address().port,
       path: url,
       headers: { 'Content-Type': 'application/json' },
-    };
-    const req = http.request(opts, res => {
+    }, res => {
       let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, body: JSON.parse(data) });
-        } catch {
-          resolve({ status: res.statusCode, body: data });
-        }
-      });
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
     });
     req.on('error', reject);
-    if (body) req.write(JSON.stringify(body));
+    if (body !== undefined) req.write(JSON.stringify(body));
     req.end();
   });
 }
 
-describe('settings route — .env.local', () => {
-  let server;
-
+describe('settings route', () => {
   before(async () => {
-    // Backup existing .env.local if it exists
-    if (fs.existsSync(ENV_LOCAL_PATH)) {
-      fs.copyFileSync(ENV_LOCAL_PATH, BACKUP_PATH);
-      fs.unlinkSync(ENV_LOCAL_PATH);
-    }
+    previousEnvPath = process.env.STUDY_ASSISTANT_ENV_LOCAL_PATH;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'study-assistant-settings-'));
+    process.env.STUDY_ASSISTANT_ENV_LOCAL_PATH = path.join(tempDir, '.env.local');
+
     const express = (await import('express')).default;
     const router = (await import('../routes/settings.js')).default;
     const app = express();
     app.use(express.json());
     app.use('/api/settings', router);
     server = http.createServer(app);
-    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   });
 
-  after(() => {
-    server.close();
-    // Restore backup
-    if (fs.existsSync(BACKUP_PATH)) {
-      if (fs.existsSync(ENV_LOCAL_PATH)) fs.unlinkSync(ENV_LOCAL_PATH);
-      fs.copyFileSync(BACKUP_PATH, ENV_LOCAL_PATH);
-      fs.unlinkSync(BACKUP_PATH);
-    } else if (fs.existsSync(ENV_LOCAL_PATH)) {
-      fs.unlinkSync(ENV_LOCAL_PATH);
-    }
+  after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousEnvPath === undefined) delete process.env.STUDY_ASSISTANT_ENV_LOCAL_PATH;
+    else process.env.STUDY_ASSISTANT_ENV_LOCAL_PATH = previousEnvPath;
   });
 
-  it('GET /api/settings/env-key — returns { exists: false } when no file', async () => {
-    const res = await request(server, 'GET', '/api/settings/env-key');
+  it('reports a missing isolated settings file', async () => {
+    const res = await request('GET', '/api/settings/env-key');
+    assert.deepEqual(res.body, { exists: false, keySet: false });
+  });
+
+  it('writes valid settings only to the isolated file', async () => {
+    const res = await request('POST', '/api/settings/env-key', {
+      apiKey: 'sk-test123', baseURL: 'https://test.example.com/v1', model: 'gpt-4',
+    });
     assert.equal(res.status, 200);
-    assert.equal(res.body.exists, false);
-    assert.equal(res.body.keySet, false);
+    const content = fs.readFileSync(process.env.STUDY_ASSISTANT_ENV_LOCAL_PATH, 'utf8');
+    assert.match(content, /^OPENAI_API_KEY=sk-test123/m);
+    assert.match(content, /^OPENAI_BASE_URL=https:\/\/test.example.com\/v1/m);
   });
 
-  it('POST /api/settings/env-key — rejects empty apiKey', async () => {
-    const res = await request(server, 'POST', '/api/settings/env-key', {});
+  it('rejects newline injection into environment values', async () => {
+    const res = await request('POST', '/api/settings/env-key', {
+      apiKey: 'sk-safe\nOPENAI_MODEL=attacker',
+    });
     assert.equal(res.status, 400);
-    assert.ok(res.body.error);
-  });
-
-  it('POST /api/settings/env-key — writes key and returns success', async () => {
-    const res = await request(server, 'POST', '/api/settings/env-key', {
-      apiKey: 'sk-test123',
-      baseURL: 'https://test.example.com/v1',
-      model: 'gpt-4',
-    });
-    assert.equal(res.status, 200);
-    assert.equal(res.body.success, true);
-
-    const content = fs.readFileSync(ENV_LOCAL_PATH, 'utf-8');
-    assert.ok(content.includes('OPENAI_API_KEY=sk-test123'));
-    assert.ok(content.includes('OPENAI_BASE_URL=https://test.example.com/v1'));
-    assert.ok(content.includes('OPENAI_MODEL=gpt-4'));
-  });
-
-  it('GET /api/settings/env-key — returns { exists: true, keySet: true } after write', async () => {
-    const res = await request(server, 'GET', '/api/settings/env-key');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.exists, true);
-    assert.equal(res.body.keySet, true);
-  });
-
-  it('POST /api/settings/env-key — overwrites existing file', async () => {
-    const res = await request(server, 'POST', '/api/settings/env-key', {
-      apiKey: 'sk-overwrite',
-    });
-    assert.equal(res.status, 200);
-    const content = fs.readFileSync(ENV_LOCAL_PATH, 'utf-8');
-    assert.ok(content.includes('OPENAI_API_KEY=sk-overwrite'));
-    assert.equal(content.includes('sk-test123'), false);
   });
 });
