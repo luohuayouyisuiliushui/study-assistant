@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import TopicDetail from '../components/TopicDetail';
 
@@ -25,6 +25,7 @@ vi.mock('../api', () => ({
     startInteractiveSSE: vi.fn(() => Promise.resolve()),
     continueInteractiveSSE: vi.fn(() => Promise.resolve()),
     generateReview: vi.fn(() => Promise.resolve({ review: '复习内容' })),
+    recommendResources: vi.fn(),
   },
 }));
 
@@ -142,6 +143,53 @@ describe('TopicDetail', () => {
       fireEvent.click(screen.getByRole('button', { name: '全屏查看：JavaScript 闭包 知识点配图' }));
 
       expect(screen.getByRole('dialog', { name: 'JavaScript 闭包 知识点配图 全屏预览' })).toBeInTheDocument();
+    });
+  });
+
+  describe('sticky navigation', () => {
+    it('stays hidden after the title scrolls away until the pointer reaches the top edge', async () => {
+      let observerCallback;
+      const originalIntersectionObserver = global.IntersectionObserver;
+      const originalMatchMedia = global.matchMedia;
+
+      global.IntersectionObserver = class IntersectionObserver {
+        constructor(callback) { observerCallback = callback; }
+        observe() {}
+        disconnect() {}
+      };
+      global.matchMedia = vi.fn(() => ({
+        matches: true,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      }));
+
+      const { container, unmount } = renderTD();
+      try {
+        await act(async () => {
+          observerCallback([{ isIntersecting: false }]);
+        });
+
+        const stickyNav = container.querySelector('nav[aria-label="悬浮知识点导航"]');
+        expect(stickyNav).toBeInTheDocument();
+        expect(stickyNav).toHaveClass('opacity-0');
+
+        fireEvent.mouseMove(document, { clientY: 8 });
+
+        await waitFor(() => expect(stickyNav).toHaveClass('opacity-100'));
+      } finally {
+        unmount();
+        global.IntersectionObserver = originalIntersectionObserver;
+        global.matchMedia = originalMatchMedia;
+      }
+    });
+  });
+
+  describe('resource recommendations', () => {
+    it('treats an empty cached list as not yet recommended', () => {
+      renderTD({ topic: { ...sampleTopic, resources: [] } });
+
+      expect(screen.getByRole('button', { name: '推荐资源' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '重新推荐' })).not.toBeInTheDocument();
     });
   });
 });

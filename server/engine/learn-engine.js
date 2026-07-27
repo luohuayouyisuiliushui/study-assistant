@@ -797,14 +797,26 @@ export function getEngineCacheDiagnostics() {
 }
 
 function parseResourceRecommendations(content, fallbackTitle) {
-  let json = String(content || '').trim();
-  const fenced = json.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenced) json = fenced[1].trim();
+  const raw = String(content || '').trim();
+  const candidates = [];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced) candidates.push(fenced[1].trim());
+  candidates.push(raw);
 
-  let parsed;
-  try {
-    parsed = JSON.parse(json || '{}');
-  } catch {
+  const objectStart = raw.indexOf('{');
+  const objectEnd = raw.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(raw.slice(objectStart, objectEnd + 1));
+  }
+
+  let parsed = null;
+  for (const candidate of candidates) {
+    try {
+      parsed = JSON.parse(candidate || '{}');
+      break;
+    } catch {}
+  }
+  if (!parsed) {
     throw new Error('AI 返回的资源推荐 JSON 不完整');
   }
 
@@ -841,9 +853,10 @@ function parseResourceRecommendations(content, fallbackTitle) {
  * @param {object} plan - Full plan object
  * @param {string} topicId - Topic id
  * @param {string} model - Model name
+ * @param {{signal?: AbortSignal}} options - Cancellation options
  * @returns {Promise<{topicTitle: string, resources: Array}>}
  */
-export async function recommendResources(providerOrConfig, plan, topicId, model = 'gpt-4o-mini') {
+export async function recommendResources(providerOrConfig, plan, topicId, model = 'gpt-4o-mini', options = {}) {
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
@@ -887,6 +900,7 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
     maxTokens: 4096,
     responseFormat: { type: 'json_object' },
     model,
+    signal: options.signal,
   });
 
   let result = await complete();

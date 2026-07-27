@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, Image, Wrench, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal } from 'lucide-react';
@@ -14,6 +14,9 @@ import ActionMenu from './ActionMenu.jsx';
 import MediaViewer from './MediaViewer.jsx';
 import { loadSettings } from '#/lib/settings-storage';
 import { normalizeMermaidSource } from '../lib/mermaid-source.js';
+
+const STICKY_NAV_REVEAL_EDGE_PX = 96;
+const STICKY_NAV_HIDE_DELAY_MS = 400;
 
 function stripExerciseSection(detail) {
   if (!detail) return '';
@@ -78,6 +81,8 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const hiddenStartRef = useRef(null);
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const headerSentinelRef = useRef(null);
+  const stickyNavRef = useRef(null);
+  const stickyNavHideTimerRef = useRef(null);
   const [headerStuck, setHeaderStuck] = useState(false);
   const [headerStuckVisible, setHeaderStuckVisible] = useState(false);
   const relationsInferredRef = useRef(false);
@@ -187,25 +192,62 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }
   }, [urlReview]);
 
+  const clearStickyNavHideTimer = useCallback(() => {
+    if (stickyNavHideTimerRef.current) {
+      clearTimeout(stickyNavHideTimerRef.current);
+      stickyNavHideTimerRef.current = null;
+    }
+  }, []);
+
+  const hideStickyNavSoon = useCallback(() => {
+    if (stickyNavHideTimerRef.current) return;
+    stickyNavHideTimerRef.current = setTimeout(() => {
+      setHeaderStuckVisible(false);
+      stickyNavHideTimerRef.current = null;
+    }, STICKY_NAV_HIDE_DELAY_MS);
+  }, []);
+
   // Sticky header: detect when sentinel scrolls out of view
   useEffect(() => {
     const sentinel = headerSentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        setHeaderStuck(!entry.isIntersecting);
-        // Add a small delay for the fade-in animation
-        if (!entry.isIntersecting) {
-          requestAnimationFrame(() => setHeaderStuckVisible(true));
-        } else {
-          setHeaderStuckVisible(false);
-        }
+        const stuck = !entry.isIntersecting;
+        const autoHide = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? false;
+        clearStickyNavHideTimer();
+        setHeaderStuck(stuck);
+        setHeaderStuckVisible(stuck && !autoHide);
       },
       { threshold: 0, rootMargin: '-1px 0px 0px 0px' }
     );
     observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      clearStickyNavHideTimer();
+    };
+  }, [clearStickyNavHideTimer]);
+
+  useEffect(() => {
+    if (!headerStuck) return;
+    const autoHide = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? false;
+    if (!autoHide) return;
+
+    const handleMouseMove = (event) => {
+      if (event.clientY <= STICKY_NAV_REVEAL_EDGE_PX) {
+        clearStickyNavHideTimer();
+        setHeaderStuckVisible(true);
+      } else if (!stickyNavRef.current?.contains(event.target)) {
+        hideStickyNavSoon();
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove, { passive: true });
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      clearStickyNavHideTimer();
+    };
+  }, [headerStuck, clearStickyNavHideTimer, hideStickyNavSoon]);
 
   // Auto-infer topic relationships when viewing a topic with no relationship data
   // NOTE: only re-run when plan/topic changes; reading plan.topics/plan.relationsInferredAt inside is intentional
@@ -824,9 +866,17 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           )}
       </div>
 
-      {/* Sticky navigation bar — appears when scrolling past the original header */}
-      {headerStuckVisible && (
-        <div className='sticky-nav-enter fixed top-[49px] left-0 right-0 z-40 bg-background border-b border-border/50 shadow-md'>
+      {/* Sticky navigation bar — desktop reveals near the top edge */}
+      {headerStuck && (
+        <nav
+          ref={stickyNavRef}
+          aria-label='悬浮知识点导航'
+          aria-hidden={!headerStuckVisible}
+          inert={!headerStuckVisible}
+          onMouseEnter={clearStickyNavHideTimer}
+          onMouseLeave={hideStickyNavSoon}
+          className={`fixed top-[68px] max-[720px]:top-[60px] left-0 right-0 z-40 bg-background border-b border-border/50 shadow-md transition-[translate,opacity] duration-200 ease-out motion-reduce:transition-none ${headerStuckVisible ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}
+        >
           <div className='w-full max-w-4xl mx-auto px-6 py-1.5'>
             {/* Action toolbar row */}
             <div className='flex items-center flex-wrap gap-2 mb-1'>
@@ -911,7 +961,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               )}
             </div>
           </div>
-        </div>
+        </nav>
       )}
 
       {interactiveMode && (
@@ -1210,7 +1260,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                   <h3 className='text-sm font-medium'>推荐学习资源</h3>
                   <Button variant='ghost' size='sm' onClick={handleRecommendResources} disabled={resourcesLoading} title='基于本知识点推荐多形式、多渠道资源'>
                     {resourcesLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <Lightbulb className='h-3.5 w-3.5 mr-1' />}
-                    {resourcesLoading ? '推荐中...' : (resources ? '重新推荐' : '推荐资源')}
+                    {resourcesLoading ? '推荐中...' : (resources?.length ? '重新推荐' : '推荐资源')}
                   </Button>
                 </div>
                 {resources && resources.length > 0 && (

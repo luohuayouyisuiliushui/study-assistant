@@ -11,6 +11,7 @@ import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './midd
 import { refreshDataFlywheel } from './flywheel.js';
 
 const router = Router();
+const RESOURCE_RECOMMENDATION_TIMEOUT_MS = 60_000;
 
 
 router.post('/plans/:planId/generate/:topicId', async (req, res) => {
@@ -421,14 +422,39 @@ router.post('/plans/:planId/resources/:topicId', async (req, res) => {
   const topic = plan.topics.find(t => t.id === req.params.topicId);
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
+  const abortController = new AbortController();
+  let deadlineReached = false;
+  const timeout = setTimeout(() => {
+    deadlineReached = true;
+    abortController.abort(new Error('资源推荐超时'));
+  }, RESOURCE_RECOMMENDATION_TIMEOUT_MS);
+  const abortOnClose = () => {
+    if (!res.writableEnded) abortController.abort(new Error('客户端已断开'));
+  };
+  res.once('close', abortOnClose);
+
   try {
     const provider = getProvider(req);
-    const result = await recommendResources(provider, plan, req.params.topicId, getModel(req));
+    const result = await recommendResources(
+      provider,
+      plan,
+      req.params.topicId,
+      getModel(req),
+      { signal: abortController.signal }
+    );
     await store.updateTopic(req.params.planId, req.params.topicId, { resources: result.resources });
     res.json(result);
   } catch (err) {
+    if (deadlineReached) {
+      if (!res.headersSent && !res.destroyed) res.status(504).json({ error: '资源推荐超时，请重试' });
+      return;
+    }
+    if (abortController.signal.aborted) return;
     console.error('[resources]', err);
     res.status(500).json({ error: err.message });
+  } finally {
+    clearTimeout(timeout);
+    res.off('close', abortOnClose);
   }
 });
 

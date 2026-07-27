@@ -96,6 +96,35 @@ describe('recommendResources', () => {
     assert.equal(result.resources[1].type, 'video');
   });
 
+  it('accepts a JSON code fence even when the model adds a short introduction', async () => {
+    const json = JSON.stringify({
+      topicTitle: 'Socket 编程基础',
+      resources: [{
+        type: 'doc',
+        title: 'Linux man-pages',
+        source: 'man7.org',
+        level: 'intermediate',
+        paid: false,
+        reason: '权威系统调用文档',
+        url: 'https://man7.org/linux/man-pages/',
+      }],
+    });
+    const provider = createMockProvider(`推荐结果如下：\n\`\`\`json\n${json}\n\`\`\``, 'resource-wrapped-json-model');
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    await store.updateTopic(plan.id, topicId, { detail: `围栏 JSON 恢复测试 ${Date.now()}` });
+
+    const result = await recommendResources(
+      provider,
+      store.getPlan(planId),
+      topicId,
+      'resource-wrapped-json-model'
+    );
+
+    assert.equal(result.resources.length, 1);
+    assert.equal(result.resources[0].title, 'Linux man-pages');
+  });
+
   it('normalizes missing optional fields safely', async () => {
     const json = JSON.stringify({
       topicTitle: 'X',
@@ -190,6 +219,36 @@ describe('recommendResources', () => {
 
     assert.equal(requests.length, 2);
     assert.deepEqual(result.resources, [recoveredResource]);
+  });
+
+  it('forwards a cancellation signal to the provider request', async () => {
+    const resource = {
+      type: 'doc',
+      title: 'POSIX Threads Programming',
+      source: 'LLNL',
+      level: 'beginner',
+      paid: false,
+      reason: '线程 API 入门资料',
+      url: 'https://hpc-tutorials.llnl.gov/posix/',
+    };
+    const { provider, requests } = createSequencedMockProvider([{
+      content: JSON.stringify({ topicTitle: 'Socket 编程基础', resources: [resource] }),
+    }], 'resource-signal-model');
+    const plan = store.getPlan(planId);
+    const topicId = plan.topics[0].id;
+    await store.updateTopic(plan.id, topicId, { detail: `资源取消测试 ${Date.now()}` });
+    const controller = new AbortController();
+
+    await recommendResources(
+      provider,
+      store.getPlan(planId),
+      topicId,
+      'resource-signal-model',
+      { signal: controller.signal }
+    );
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].signal, controller.signal);
   });
 });
 

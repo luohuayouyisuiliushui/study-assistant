@@ -1,6 +1,7 @@
 import { loadSettings, selectTextProvider } from './lib/settings-storage';
 
 const API_BASE = '/api';
+const RESOURCE_RECOMMENDATION_TIMEOUT_MS = 65_000;
 
 function getApiSettings() {
   return loadSettings();
@@ -28,31 +29,59 @@ function injectProvider(body, settings, taskType) {
 }
 
 async function request(url, options = {}, taskType = null) {
-  let body = options.body;
+  const { timeoutMs = 0, timeoutMessage = '', ...requestOptions } = options;
+  let body = requestOptions.body;
 
   if (taskType) {
     const settings = getApiSettings();
     body = injectProvider(body, settings, taskType);
   }
 
-  const fetchOpts = { ...options };
+  const fetchOpts = { ...requestOptions };
   if (body !== undefined) {
     fetchOpts.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
     // Ensure body is a JSON string for fetch
     fetchOpts.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
 
-  const res = await fetch(url, fetchOpts);
-  let data;
+  const timeoutController = timeoutMs > 0 ? new AbortController() : null;
+  let timeoutId = null;
+  let timedOut = false;
+  let externalAbortHandler = null;
+
+  if (timeoutController) {
+    const externalSignal = fetchOpts.signal;
+    if (externalSignal) {
+      externalAbortHandler = () => timeoutController.abort(externalSignal.reason);
+      if (externalSignal.aborted) externalAbortHandler();
+      else externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+    }
+    fetchOpts.signal = timeoutController.signal;
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort();
+    }, timeoutMs);
+  }
+
   try {
-    data = await res.json();
-  } catch {
-    throw new Error(`服务器返回了空响应 (${res.status})${res.statusText ? ': ' + res.statusText : ''}`);
+    const res = await fetch(url, fetchOpts);
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error(`服务器返回了空响应 (${res.status})${res.statusText ? ': ' + res.statusText : ''}`);
+    }
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `请求失败 (${res.status})`);
+    }
+    return data;
+  } catch (err) {
+    if (timedOut) throw new Error(timeoutMessage || '请求超时，请重试');
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (externalAbortHandler) requestOptions.signal?.removeEventListener('abort', externalAbortHandler);
   }
-  if (!res.ok || data.error) {
-    throw new Error(data.error || `请求失败 (${res.status})`);
-  }
-  return data;
 }
 
 const api = {
@@ -141,6 +170,8 @@ const api = {
   async recommendResources(planId, topicId) {
     return request(`${API_BASE}/learn/plans/${planId}/resources/${topicId}`, {
       method: 'POST',
+      timeoutMs: RESOURCE_RECOMMENDATION_TIMEOUT_MS,
+      timeoutMessage: '资源推荐超时，请重试',
     }, 'generate-detail');
   },
 
