@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import TopicDetail from '../components/TopicDetail';
 
@@ -134,6 +134,139 @@ describe('TopicDetail', () => {
 
       expect(api.generateDetail).toHaveBeenCalledWith('plan-1', 't-1');
       expect(screen.getByText('生成中...')).toBeInTheDocument();
+    });
+  });
+
+  describe('related topic navigation', () => {
+    it('opens the related topic directly without returning to the plan overview', () => {
+      const onBack = vi.fn();
+      const onSelectTopic = vi.fn();
+      const relatedTopic = {
+        id: 't-2',
+        title: '词法作用域',
+        detail: '',
+        done: false,
+        level: 1,
+      };
+
+      renderTD({
+        plan: { ...samplePlan, topics: [sampleTopic, relatedTopic] },
+        topic: { ...sampleTopic, relatedTopics: [relatedTopic.id] },
+        onBack,
+        onSelectTopic,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: relatedTopic.title }));
+
+      expect(onSelectTopic).toHaveBeenCalledWith(relatedTopic.id);
+      expect(onBack).not.toHaveBeenCalled();
+    });
+
+    it('starts explanation generation after switching to an empty related topic', async () => {
+      const apiModule = await import('../api');
+      const api = apiModule.default;
+      api.generateDetail.mockResolvedValue({});
+
+      const sourceTopic = {
+        ...sampleTopic,
+        detail: '',
+        relatedTopics: ['t-2'],
+      };
+      const relatedTopic = {
+        id: 't-2',
+        title: '词法作用域',
+        detail: '',
+        done: false,
+        level: 1,
+      };
+      const plan = { ...samplePlan, topics: [sourceTopic, relatedTopic] };
+      const sharedProps = {
+        plan,
+        onBack: vi.fn(),
+        onRefresh: vi.fn(),
+        onSelectTopic: vi.fn(),
+      };
+      const { rerender } = render(
+        <MemoryRouter>
+          <TopicDetail {...sharedProps} topic={sourceTopic} />
+        </MemoryRouter>,
+      );
+
+      await vi.waitFor(() => {
+        expect(api.generateDetail).toHaveBeenCalledWith(plan.id, sourceTopic.id);
+      });
+      api.generateDetail.mockClear();
+
+      rerender(
+        <MemoryRouter>
+          <TopicDetail {...sharedProps} topic={relatedTopic} />
+        </MemoryRouter>,
+      );
+
+      await vi.waitFor(() => {
+        expect(api.generateDetail).toHaveBeenCalledWith(plan.id, relatedTopic.id);
+      });
+    });
+  });
+
+  describe('sticky topic navigation', () => {
+    const originalIntersectionObserver = global.IntersectionObserver;
+    const originalMatchMedia = window.matchMedia;
+    let intersectionCallback;
+
+    beforeEach(() => {
+      window.matchMedia = vi.fn(() => ({
+        matches: true,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      global.IntersectionObserver = class IntersectionObserver {
+        constructor(callback) { intersectionCallback = callback; }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    });
+
+    afterEach(() => {
+      global.IntersectionObserver = originalIntersectionObserver;
+      window.matchMedia = originalMatchMedia;
+    });
+
+    it('reveals near the top edge and hides again over the reading area', async () => {
+      const { container } = renderTD();
+
+      act(() => intersectionCallback([{ isIntersecting: false }]));
+
+      const navigation = container.querySelector('nav[aria-label="悬浮知识点导航"]');
+      expect(navigation).not.toBeNull();
+      expect(navigation).toHaveAttribute('aria-hidden', 'true');
+
+      fireEvent.mouseMove(document, { clientY: 24 });
+      expect(navigation).toHaveAttribute('aria-hidden', 'false');
+
+      fireEvent.mouseMove(document.body, { clientY: 400 });
+      await waitFor(() => {
+        expect(navigation).toHaveAttribute('aria-hidden', 'true');
+      });
+    });
+
+    it('stays hidden on devices without hover', () => {
+      window.matchMedia = vi.fn(() => ({
+        matches: false,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      const { container } = renderTD();
+
+      act(() => intersectionCallback([{ isIntersecting: false }]));
+
+      const navigation = container.querySelector('nav[aria-label="悬浮知识点导航"]');
+      expect(navigation).toHaveAttribute('aria-hidden', 'true');
     });
   });
 
