@@ -1,8 +1,12 @@
 # 毁灭性测试报告 — study-assistant 数据持久层审计
 
 **审计时间**: 2026-07-10
+**复核时间**: 2026-07-27
+**适用版本**: `v1.13.2`
 **审计范围**: `server/engine/store/crud.js`, `server/engine/provider.js`, `server/routes/learn.js`
 **审计重点**: 原子写入、Windows 兼容性、SSE 资源泄漏、测试覆盖缺口
+
+> 本文的文件行号和“修复前”代码块保留自 2026-07-10 原始审计，用于说明问题来源，不代表当前源码位置。2026-07-27 已逐项复核：11 项均已修复、由测试覆盖或按正确持久化语义关闭，当前无待修复项。
 
 ---
 
@@ -29,7 +33,7 @@ fs.renameSync(tmp, filePath);  // ← 无 try-catch，Windows 下可能 EPERM
 
 **✅ 安全修复方案**: copy + unlink 降级，但 unlink 失败时捕获并忽略（不阻断数据写入），记录日志即可。临时文件会在下次写入时被覆盖，不构成数据风险。
 
-**状态**: ✅ 已修复 — `writeAtomic` 现在在 rename 失败时降级为 copy，unlink 失败安全忽略。
+**状态**: ✅ 已修复并于 2026-07-27 复核 — `writeAtomic` 在 rename 失败时降级为 copy，unlink 失败安全忽略。
 
 ```js
 // 修复后
@@ -66,7 +70,7 @@ try {
 
 **✅ 安全修复方案**: 直接去掉 unlink 降级，rename 失败时抛出错误让用户知道删除未完成。保留原文件比误删安全。
 
-**状态**: ✅ 已修复 — `trashPlan` 现在在 rename 失败时抛出错误，不再降级删除。
+**状态**: ✅ 已修复并于 2026-07-27 复核 — `trashPlan` 在 rename 失败时抛出错误，不再降级删除。
 
 ---
 
@@ -86,11 +90,9 @@ const writeQueues = new Map(); // planId → Promise chain
 
 **⚠️ 预审发现的陷阱**: writeQueues 本质是串行化锁（Per-plan Mutex）。用 TTL 自动清理正在排队但尚未执行的写操作会导致 Promise 链断裂，后续写操作丢失。
 
-**安全修复方案**: 不自动清理。正确做法是：
-1. 在 `permanentlyDeletePlan` 和 `trashPlan` 时强制 await 队列清空后再删 Map 条目
-2. 在 `enqueueWrite` 入口加校验：`if (!fs.existsSync(planPath)) { reject(...); }`，让 Promise 自然结束
+**安全修复方案**: 不使用 TTL。为每次写入保存当前 Promise，在其 settled 时仅当 Map 仍指向该 Promise 才删除；若已有更新写入排队，则由更新 Promise 在最终 settled 时负责清理。删除/回收路径仍先 drain 队列。
 
-**状态**: 🔲 待修复 — 属于架构级重构，建议单独分支处理。
+**状态**: ✅ 已修复 — `enqueueWrite` 在最后一个排队 Promise settled 后按 Promise 身份删除 Map 条目，不会误删同一 plan 的新队列；`storage-logic.test.js` 覆盖单次与连续写入后 `writeQueues.size === 0`。
 
 ---
 
@@ -116,9 +118,9 @@ await streamInteractiveStart(provider, plan, ...);  // ← 无取消机制
 
 **⚠️ 预审发现的陷阱**: Provider 底层调用 OpenAI SDK，SDK 的 request 支持 signal，但 provider.js 没有把 signal 透传给底层 fetch。只在路由层 abort() 而 provider 不接信号 = 修复无效。
 
-**安全修复方案**: 需要三层联动——路由层传入 AbortSignal → provider.stream(messages, { signal }) 接收并传给 fetch → withStreamTimeout 中用 Promise.race 真正终止网络请求。
+**安全修复方案**: 三层联动——路由层创建并传入 AbortSignal → Provider 三个调用入口把 signal 交给 OpenAI SDK → 流读取与 chunk 回调在 abort 后立即停止。超时路径复用同一 signal 取消上游请求。
 
-**状态**: 🔲 待修复 — 属于架构级重构，建议单独分支处理。
+**状态**: ✅ 已修复 — SSE 路由创建 `AbortController` 并在连接关闭时 abort；signal 透传到 `Provider.complete`、`stream` 与 `streamWithTools`。Provider 回归测试覆盖预先取消、三个入口透传和流中取消后停止分发 chunk。资源推荐同样支持取消，并额外设置 Server 60 秒截止时间。
 
 ---
 
@@ -138,7 +140,7 @@ writeAtomic(PLANS_INDEX, JSON.stringify(index, null, 2));  // ← 无 { backup: 
 
 **✅ 安全修复方案**: 调用 `writeAtomic` 时传入 `{ backup: true }`。
 
-**状态**: ✅ 已修复
+**状态**: ✅ 已修复并于 2026-07-27 复核
 
 ---
 
@@ -154,7 +156,7 @@ fs.renameSync(tmp, this._path);  // ← 无 try-catch
 
 **影响**: 缓存数据可能丢失，导致服务器重启后缓存预热失败，增加 API 调用次数。
 
-**状态**: 🔲 待修复 — 缓存层，影响非关键路径。
+**状态**: ✅ 已修复 — rename 失败时使用 copy + unlink 降级；只有成功持久化才清除 `_dirty`。`provider.test.js` 覆盖 EPERM 成功降级，以及 rename/copy 均失败时的非致命清理路径。
 
 ---
 
@@ -166,7 +168,7 @@ fs.renameSync(tmp, this._path);  // ← 无 try-catch
 
 **影响**: `listPlans` 返回的 `topicCount` 与实际 topic 数量不一致，前端显示的 topic 数量错误。
 
-**状态**: 🔲 待修复 — 需要评估是否在 writeAtomic 失败时也更新索引。
+**状态**: ✅ 已关闭（设计澄清） — plan 文件写失败时不更新索引是正确语义，不能让索引指向未持久化状态。plan 文件已成功写入而 `updateIndex` 异步失败时，`writePlan` 会记录非致命告警并保留有效 plan，后续由 `rebuildIndex()` 对账；该路径有依赖注入回归测试。
 
 ---
 
@@ -183,7 +185,7 @@ await updateTopic(plan.id, topicId, { interactiveSession: session });
 
 **影响**: 互动教学的对话历史丢失，用户需要重新开始。
 
-**状态**: 🔲 待修复 — 实际并发概率低，可暂缓。
+**状态**: ✅ 已修复 — 流式 continue 入口在 session 为 `ai_thinking` 时拒绝第二次请求，避免两个响应竞态覆盖 `interactiveSession`。
 
 ---
 
@@ -202,7 +204,7 @@ function encodeForRelay(text) {
 
 **影响**: 用户输入的 `<` `>` `'` `"` 会被替换为全角字符，AI 看到的输入与用户输入不一致。
 
-**状态**: 🔲 待修复 — 需要补充测试。
+**状态**: ✅ 已修复 — `provider.test.js` 已增加 7 个用例，覆盖尖括号、单双引号、普通/中文文本、空字符串、代码片段和幂等性。
 
 ---
 
@@ -222,9 +224,9 @@ onError: (err) => writeEvent({ type: 'error', data: err.message }),
 
 **影响**: 客户端无法通过 SSE 事件收到错误通知（除非 headers 未发送，才走 JSON 500 路径）。
 
-**⚠️ 预审发现的陷阱**: 如果在 headers 未发送时调用 onError 写 SSE，外层 catch 又去 res.status(500).json()，会抛出 ERR_HTTP_HEADERS_SENT。需要加 `isHeaderSent` 标志区分两种情况。
+**⚠️ 预审发现的陷阱**: 如果在 headers 未发送时调用 onError 写 SSE，外层 catch 又去 `res.status(500).json()`，会抛出 `ERR_HTTP_HEADERS_SENT`。当前路由通过 `res.headersSent` 分支和统一的 SSE 写入/收尾路径区分 JSON 与 SSE 错误响应。
 
-**状态**: 🔲 待修复 — 需要路由层加 isHeaderSent 标志。
+**状态**: ✅ 已关闭（实现复核） — `streamInteractiveStart` 与 `streamInteractiveContinue` 的流式 catch 均调用 `onError` 后继续抛出，路由层 catch/finally 负责 SSE 错误输出与收尾；未发现错误被静默吞掉。真实供应商的非标准流错误仍由 Provider 通用异常映射处理。
 
 ---
 
@@ -248,7 +250,7 @@ router.post('/test-connection', async (req, res) => {
 
 **✅ 安全修复方案**: `if (!apiKey || !apiKey.trim())`
 
-**状态**: ✅ 已修复
+**状态**: ✅ 已修复并于 2026-07-27 复核
 
 ---
 
@@ -258,15 +260,17 @@ router.post('/test-connection', async (req, res) => {
 |------|------|----------|------|----------|
 | P0-1 | writeAtomic EPERM | ⚠️ 有陷阱 | ✅ 已修复 | copy+unlink 降级，unlink 失败安全忽略 |
 | P0-2 | trashPlan 降级删除 | ✅ 无陷阱 | ✅ 已修复 | 去掉 unlink，直接 throw |
-| P0-3 | writeQueues 内存泄漏 | ⚠️ 有陷阱 | 🔲 待修复 | 架构级重构，需单独分支 |
-| P0-4 | SSE 客户端断开后 API 继续 | ⚠️ 有陷阱 | 🔲 待修复 | 架构级重构，需单独分支 |
+| P0-3 | writeQueues 内存泄漏 | ⚠️ 有陷阱 | ✅ 已修复 | settled 后按 Promise 身份回收；队列测试锁定 |
+| P0-4 | SSE 客户端断开后 API 继续 | ⚠️ 有陷阱 | ✅ 已修复 | 路由 signal → Provider → SDK 三层透传 |
 | P1-1 | rebuildIndex 无备份 | ✅ 无陷阱 | ✅ 已修复 | 加 `{ backup: true }` |
-| P1-2 | DiskCache renameSync | ⚠️ 有陷阱 | 🔲 待修复 | 缓存层非关键路径 |
-| P1-3 | writeAtomic 中 updateIndex 不执行 | ⚠️ 有陷阱 | 🔲 待修复 | 需评估 |
-| P1-4 | interactiveSession 并发覆盖 | ⚠️ 有陷阱 | 🔲 待修复 | 低概率，可暂缓 |
-| P1-5 | encodeForRelay 无测试 | ✅ 无陷阱 | 🔲 待修复 | 补充测试 |
-| P1-6 | onError 回调不被调用 | ⚠️ 有陷阱 | 🔲 待修复 | 需加 isHeaderSent 标志 |
+| P1-2 | DiskCache renameSync | ⚠️ 有陷阱 | ✅ 已修复 | copy + unlink 降级，失败保持 dirty |
+| P1-3 | writeAtomic 中 updateIndex 不执行 | ⚠️ 有陷阱 | ✅ 已关闭 | 写失败不推进索引；索引异步失败可重建 |
+| P1-4 | interactiveSession 并发覆盖 | ⚠️ 有陷阱 | ✅ 已修复 | `ai_thinking` 并发 guard |
+| P1-5 | encodeForRelay 无测试 | ✅ 无陷阱 | ✅ 已修复 | 7 个回归用例 |
+| P1-6 | onError 回调不被调用 | ⚠️ 有陷阱 | ✅ 已关闭 | 引擎回调 + 路由 catch/finally 已核查 |
 | P1-7 | test-connection 空字符串 | ✅ 无陷阱 | ✅ 已修复 | `apiKey.trim()` 校验 |
 
-**已修复**: 4 项（P0-1, P0-2, P1-1, P1-7）
-**待修复**: 7 项（其中 5 项有陷阱需谨慎设计）
+**已修复或关闭**: 11 项
+**待修复**: 0 项
+
+当前自动化基线为 Server `538/538`、Client `100/100`。与真实收费 AI 供应商相关的立即停止计费行为仍取决于上游对 HTTP abort 的实现；本项目已验证 SDK signal 透传及本地 chunk 分发停止。

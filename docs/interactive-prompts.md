@@ -1,5 +1,8 @@
 # 互动教学模式 Prompt 完整文档
 
+> 适用版本：`v1.13.2`。最后复核：2026-07-27。
+> 本文是 7 种互动模式的可读参考；运行时源码以 `server/engine/learn-prompts.js` 和 `server/engine/interactive-teacher.js` 为准。`v1.13.1` 与文档补丁 `v1.13.2` 均未改变这些 prompt 的教学语义。
+
 ## 模式总览
 
 | 模式 | 代号 | 核心定位 | 风格 | AI 角色 |

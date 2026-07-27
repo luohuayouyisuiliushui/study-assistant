@@ -1,9 +1,37 @@
 # FINAL_REPORT - 项目审查与增量改进
 
 > 依据 `C:\.a\提示词\审查并修改项目.txt` 第 11 步终检归档。
-> 终检分支：`codex/fix-review-followups`；版本：`1.12.3`。
+> 原始终检分支：`codex/fix-review-followups`；原始验收版本：`1.12.3`。
+> 当前发布版本：[`v1.13.2`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.13.2)；复核日期：2026-07-27。
 
-## 任务总览
+## v1.13.2 发布补充
+
+原始 12 项终检任务继续保持完成。在该基线上，`v1.13.1` 纳入以下用户可见改进；`v1.13.2` 进一步同步全部发布文档与当前证据：
+
+| 范围 | 当前实现 | 回归证据 |
+|---|---|---|
+| 图片与图表 | `MediaViewer` 支持全屏、缩放、拖动、旋转、翻转、Mermaid 源码编辑及 SVG/位图保存 | `MediaViewer.test.jsx`、`MermaidDiagram.test.jsx` |
+| Mermaid 稳定性 | 首次进入视口时渲染；源码变化后等待用户点击重绘，不再自动反复渲染 | `MermaidDiagram.test.jsx` |
+| 资源推荐 | 兼容 JSON 围栏/说明文字，截断或无效响应自动精简重试；Server 60 秒、Client 65 秒超时并取消上游请求 | `engine-additions.test.js`、`api.test.js`、`TopicDetail.test.jsx` |
+| 失败恢复 | 推荐失败或超时后清除 loading 状态，允许再次请求；空缓存列表仍显示“推荐资源” | `TopicDetail.test.jsx` |
+| 悬浮导航 | 鼠标靠近顶部才显示，离开延迟收起；触屏设备保持可操作 | `TopicDetail.test.jsx` + 桌面/移动端 Playwright 手动检查 |
+
+版本发布证据：三个 `package.json` 均为 `1.13.2`；前序功能版 `v1.13.1` 指向版本校正提交 `281205e`，本次文档同步提交作为 `v1.13.2` 的 tag 与 GitHub Latest Release 目标。
+
+### 当前验证基线
+
+| 套件 | 结果 |
+|---|---|
+| Server | 538 pass / 0 fail |
+| Client | 14 个测试文件，100 pass / 0 fail |
+| Client lint | 0 errors / 29 warnings |
+| Server lint | 0 errors / 105 warnings |
+| Client build | Vite production build success |
+| UI 验证 | Playwright 桌面与移动端关键交互通过 |
+
+Playwright 检查为发布前手动验证，仓库尚未保存独立 E2E 套件。需要真实付费 API 的生成链路仍受下文“端到端验证”限制约束。
+
+## 原始任务总览（v1.12.3）
 
 | 项目 | 数量 |
 |---|---:|
@@ -14,7 +42,7 @@
 
 Reasonix 在本会话中不可用，按提示词约定使用本地 PowerShell、Git、ripgrep、Node Test Runner、Vitest 和 Playwright 完成验证。用户要求 SOLO Agent，本次未使用子 Agent。
 
-## 已完成任务证据
+## 原始终检任务证据
 
 ### H-1：删除 `server/dbg.mjs`
 
@@ -109,7 +137,7 @@ Reasonix 在本会话中不可用，按提示词约定使用本地 PowerShell、
 - **测试结果**：Client 13 个文件、97 项测试全部通过；Vite 生产构建通过。
 - **遗留风险**：仍有 12 个 exhaustive-deps 告警。冻结的量化验收已满足，但这些 effect 的闭包约束需要在后续逐个重构，不能据此声称所有 stale-closure 风险已消失。
 
-## 全量验证
+## 原始终检全量验证（v1.12.3）
 
 | 套件 | 命令 | 结果 | 退出码 |
 |---|---|---|---:|
@@ -121,7 +149,7 @@ Reasonix 在本会话中不可用，按提示词约定使用本地 PowerShell、
 
 Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consistency 行曾显示 20/20；测试进程完全结束后独立读取 `plans.json` 和 `data/learn/plans/` 均为 2，和 pretest 基线一致。未删除任何无法证明来源的对象。
 
-## 端到端验证
+## 原始终检端到端验证（v1.12.3）
 
 - **环境**：当前分支 server `http://127.0.0.1:3001`，client `http://127.0.0.1:5173`。
 - **场景**：GET 计划 API -> 打开首页 -> 进入“Linux 网络编程核心” -> 打开“TCP 服务端创建流程”详情。
@@ -129,7 +157,7 @@ Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consist
 - **截图**：`%TEMP%\study-assistant-review-e2e.png`。
 - **限制**：界面未配置 API Key，因此未执行会消耗 tokens 的知识生成、互动教学和考试生成；这些路径不能记为 E2E 通过，相关本地逻辑由自动化测试覆盖。
 
-## 依赖审计
+## 原始终检依赖审计
 
 | 工作区 | 结果 | 详情 |
 |---|---|---|
@@ -139,7 +167,7 @@ Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consist
 
 审计基于现有 lockfile。依赖声明属于共享文件，且本任务没有引入依赖；未在本任务中执行自动升级。应单独建立依赖升级任务，更新 lockfile 后重新审计和回归。
 
-## 工作区基线变更
+## 原始终检工作区基线变更
 
 本次继续工作涉及 14 个 tracked 文件：
 
@@ -170,7 +198,7 @@ Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consist
 2. 为剩余 12 个 exhaustive-deps 告警逐个建立行为测试，再用 callback/ref 或拆分 effect 消除，不要批量补依赖。
 3. 在具备专用测试 API Key 的环境补跑生成知识点、互动教学和考试三条 AI E2E 路径，并记录 token 成本与 abort 行为。
 
-## 关键指标
+## 原始终检关键指标（v1.12.3）
 
 - 完成任务：12/12
 - 当前续作新增回归测试：10（H-3 5、H-4 2、M-1 2、M-5 1）
@@ -178,3 +206,5 @@ Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consist
 - 全量通过率：536/536 Server + 97/97 Client
 - Lint：0 errors，29 warnings（43 -> 29）
 - 未完成 TODO：0
+
+当前 `v1.13.2` 指标以本文顶部“当前验证基线”为准；原始数字保留用于证明当时验收，不代表最新测试总数。

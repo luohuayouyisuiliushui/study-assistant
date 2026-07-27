@@ -1,6 +1,8 @@
-# Study Assistant v1.12.3
+# Study Assistant v1.13.2
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
+
+当前稳定版：[`v1.13.2`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.13.2)。下载源码归档或查看发布说明，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
 
 ## 它能做什么
 
@@ -9,28 +11,34 @@ AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、�
 ### AI 生成讲解
 1. AI 为每个知识点生成**详细讲解**，包含概念解释、Mermaid 图表、代码示例和练习题
 2. 支持 **SSE 流式输出**，实时看到生成过程
-3. 讲解内容支持 **Markdown 渲染**、**数学公式**（KaTeX）、**思维导图**和 **Mermaid 图表**
+3. 讲解内容支持 **Markdown 渲染**、**思维导图**和 **Mermaid 图表**
+4. 知识点配图和 Mermaid 图可点击进入**全屏查看**，支持缩放、拖动、旋转、翻转、编辑图表源码和保存
 
 ### 互动学习
-4. **5 种互动教学模式**：费曼教学、挑战找错、分段引导、实时互动、脚手架引导
-5. 随时**追问**任何不理解的地方，AI 深入解释
-6. **练习与测验**：随堂练习 AI 自动批改，支持智能组卷考试
+5. **5 种基础互动教学模式 + 2 种复合模式**：费曼教学、挑战找错、分段引导、实时互动、脚手架引导、分段挑战、实时挑战
+6. 随时**追问**任何不理解的地方，AI 深入解释
+7. **练习与测验**：随堂练习 AI 自动批改，支持智能组卷考试
 
 ### 知识图谱
-7. **自动提取知识点关系**：从讲解文本中识别前置依赖、扩展、对比等关系
-8. **交互式图谱可视化**：支持力导向图、鱼眼缩放、拖拽和关系推断
+8. **自动提取知识点关系**：从讲解文本中识别前置依赖、扩展、对比等关系
+9. **交互式图谱可视化**：支持力导向图、鱼眼缩放、拖拽和关系推断
 
 ### 学习分析与画像
-9. **跨计划学习画像**：自动识别你的强项、弱项、学习模式（深度思考型 / 实践应用型 / 类比联想型等）
-10. **当天答题情况显示板**：按天/周追踪练习、试卷、快问的正确率和数量
-11. **费曼教学分析**：记录教学质量、精彩讲解摘录、学生遗留问题
+10. **跨计划学习画像**：自动识别你的强项、弱项、学习模式（深度思考型 / 实践应用型 / 类比联想型等）
+11. **当天答题情况显示板**：按天/周追踪练习、试卷、快问的正确率和数量
+12. **费曼教学分析**：记录教学质量、精彩讲解摘录、学生遗留问题
 
 ### 数据导出
-12. 导出为 **Anki 卡片**、**Markdown**、**OPML**、**JSON**、**Notion** 等格式
+13. 导出为 **Anki CSV**、**Markdown**、**OPML**、**JSON**、**Notion CSV** 等格式
 
 ### 个性化自适应
-13. **越用越懂你**：每次做练习、提问、学习时长都被记录，AI 自动调整难度和讲解风格
-14. **自适应引擎**：根据薄弱点自动推荐复习内容，事实核查你的理解
+14. **越用越懂你**：每次做练习、提问、学习时长都被记录，AI 自动调整难度和讲解风格
+15. **自适应引擎**：根据薄弱点自动推荐复习内容，事实核查你的理解
+
+### 稳定交互
+16. 资源推荐兼容标准 JSON、Markdown JSON 围栏和附带说明文字的模型响应；异常时自动精简重试，并提供明确的超时和重试状态
+17. Mermaid 图表只在首次进入视口时自动渲染，内容变化后由用户点击重绘按钮，避免反复渲染导致页面刷新
+18. 知识点顶部悬浮导航默认隐藏，鼠标靠近页面顶部时显示，离开后自动收起；触屏设备始终保留可操作入口
 
 ---
 
@@ -92,6 +100,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 - 例题与练习题
 - 与相关知识点的联系（自动用于知识图谱）
 
+生成后可直接点击配图或 Mermaid 图表进入全屏查看。全屏工具栏支持缩放、旋转、翻转、拖动和下载；Mermaid 图还可编辑源码并重新生成。图表源码发生变化时不会自动反复渲染，点击图表右上角的重绘图标即可更新。
+
 ### 3. 互动学习
 
 选择一种互动模式深入学习：
@@ -127,7 +137,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 7. 数据导出
 
-支持导出为：**Anki 卡片**（APKG）、**Markdown**、**OPML**（思维导图）、**JSON**、**Notion** 格式。
+支持导出为：**Anki CSV**、**Markdown**、**OPML**（思维导图）、**JSON**、**Notion CSV** 格式。
+
+### 8. 推荐学习资源
+
+在知识点的更多操作菜单中选择“推荐资源”，系统会生成书籍、视频、官方文档、文章、课程和互动练习等多渠道建议。服务端等待上限为 60 秒，客户端等待上限为 65 秒；超时或生成失败后按钮会恢复为可重试状态，不会持续卡在加载中。
 
 ---
 
@@ -141,8 +155,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 | 后端 | Node.js + Express 5 + OpenAI SDK（兼容 DeepSeek / SiliconFlow 等） |
 | AI | OpenAI 兼容 API，SSE 流式输出 |
 | 存储 | JSON 文件系统，原子写入 + 双层备份（无需数据库） |
-| 图表 | Mermaid（流程图）、Recharts（统计图）、Cytoscape（知识图谱） |
-| 数学 | KaTeX |
+| 可视化 | Mermaid（流程图）、Markmap（思维导图）、Recharts（统计图）、原生 SVG（知识图谱） |
 
 ### 项目结构
 
@@ -155,6 +168,8 @@ study-assistant/
 │   │   │   ├── ui/              # shadcn/ui 手写组件
 │   │   │   ├── PlanView.jsx     # 计划详情
 │   │   │   ├── TopicDetail.jsx  # 知识点详情
+│   │   │   ├── MediaViewer.jsx   # 图片/图表全屏查看、编辑与保存
+│   │   │   ├── MermaidDiagram.jsx # Mermaid 手动重绘控制
 │   │   │   ├── KnowledgeGraphModal.jsx  # 知识图谱
 │   │   │   ├── ExercisePanel.jsx       # 练习面板
 │   │   │   ├── ExamPaperModal.jsx      # 考试面板
@@ -199,9 +214,10 @@ study-assistant/
 │   ├── setup.ps1 / setup.cmd
 │   ├── dev.ps1 / dev.cmd
 │   └── start.ps1 / start.cmd / stop.cmd
-├── package.json                 # monorepo 根（workspaces）
-├── CONTEXT.md                   # 领域术语表
-└── AGENTS.md                    # AI 协作规范
+├── docs/                        # 专题说明与审计记录
+├── MODULES.md                   # 模块清单与当前验证基线
+├── FINAL_REPORT.md              # 终检与发布证据
+└── package.json                 # monorepo 根（workspaces）
 ```
 
 ### API 端点
@@ -230,14 +246,19 @@ study-assistant/
 ### 运行测试
 
 ```bash
-npm test                 # 后端测试 + 前端 lint
 npm run pretest          # 清理测试数据（务必先跑）
-cd server && npm test    # 仅后端测试（node --test --test-concurrency=1）
+npm test                 # Server 测试 + Client lint
+npm test --prefix client # Client Vitest
+npx oxlint               # Client lint
+cd server && npx oxlint  # Server lint
+npm run build            # Client 生产构建
 ```
 
 Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防止 JSON 文件竞态），Client 使用 `vitest + jsdom`。
 
 **重要：** AI 相关测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则会挂起超时。
+
+`v1.13.2` 发布基线：Server `538/538`、Client `100/100`；Client lint `0 errors / 29 warnings`，Server lint `0 errors / 105 warnings`；Client production build、桌面与移动端 Playwright 交互检查均通过。Playwright 检查为发布前手动验证，仓库目前尚无持久化的 E2E 测试套件。
 
 ### 代码规范
 
