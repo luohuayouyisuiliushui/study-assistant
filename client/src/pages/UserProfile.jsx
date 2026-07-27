@@ -14,16 +14,26 @@ function formatDate(ts) {
 }
 
 function formatDuration(seconds) {
-  if (!seconds) return '0h';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h === 0) return `${m}min`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}min`;
+  const totalMinutes = Math.max(0, Math.round((Number(seconds) || 0) / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${totalMinutes} 分钟`;
+  if (minutes === 0) return `${hours} 小时`;
+  return `${hours} 小时 ${minutes} 分钟`;
 }
 
 function formatMinutes(v) {
-  return v >= 60 ? `${(v / 60).toFixed(1)}h` : `${v}min`;
+  const minutes = Math.max(0, Math.round(Number(v) || 0));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder === 0 ? `${hours} 小时` : `${hours} 小时 ${remainder} 分钟`;
+}
+
+function readableQuestionStyle(value) {
+  if (typeof value !== 'string' || !value.trim()) return '提问样本不足';
+  if (/未提供|无法识别|无法判断|没有.*(?:文本|数据)|不足以|暂无.*(?:文本|数据)/.test(value)) return '提问样本不足';
+  return value.trim();
 }
 
 function renderMarkdown(text) {
@@ -91,7 +101,7 @@ export default function UserProfile({ onBack }) {
 
   if (loading) {
     return (
-      <div className="w-full max-w-4xl px-8 py-8">
+      <div className="w-full max-w-6xl px-4 sm:px-8 py-8">
         <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
         <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
           <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
@@ -103,7 +113,7 @@ export default function UserProfile({ onBack }) {
 
   if (!summary || !summary.hasData) {
     return (
-      <div className="w-full max-w-4xl px-8 py-8 space-y-6">
+      <div className="w-full max-w-6xl px-4 sm:px-8 py-8 space-y-6">
         <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="h-4 w-4 mr-1" />返回</Button>
@@ -119,7 +129,7 @@ export default function UserProfile({ onBack }) {
   const hasFull = profile && summary.hasAIAnalysis;
 
   return (
-    <div className="w-full max-w-4xl px-8 py-8 pb-10 flex flex-col gap-10">
+    <div className="w-full max-w-6xl px-4 sm:px-8 py-8 pb-10 flex flex-col gap-8">
       <Helmet><title>study-assistant - 我的学习画像</title></Helmet>
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
@@ -161,7 +171,7 @@ export default function UserProfile({ onBack }) {
             <StatCard value={summary.stats.totalPlans} label="学习计划" icon={BookOpen} />
             <StatCard value={summary.stats.totalTopics} label="知识点" icon={Target} />
             <StatCard value={summary.stats.overallCompletionRate + '%'} label="完成率" icon={TrendingUp} />
-            <StatCard value={formatDuration(summary.stats.totalLearningTime)} label="学习时长" icon={Clock} />
+            <StatCard value={formatDuration(summary.stats.totalTimeSeconds)} label="学习时长" icon={Clock} />
             <StatCard value={summary.stats.totalQuestions} label="提问数" icon={FileQuestion} />
             <StatCard
               value={summary.exerciseStats.total > 0 ? summary.exerciseStats.rate + '%' : '-'}
@@ -239,7 +249,7 @@ export default function UserProfile({ onBack }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid grid-cols-4 gap-3 text-center">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
               <div className="p-3 rounded-lg bg-muted/50">
                 <div className="text-2xl font-semibold">{formatDuration(summary.timeDistribution.summary.timeLast7Days)}</div>
                 <div className="text-[10px] text-muted-foreground mt-1">近 7 天</div>
@@ -319,14 +329,48 @@ export default function UserProfile({ onBack }) {
 
       {hasFull && profile.learnerPersona && (
         <Card className="shadow-sm border-0">
-          <CardContent className="pt-6 space-y-3">
-            <h3 className="text-sm font-semibold">学习者画像</h3>
+          <CardContent className="pt-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">学习者画像</h3>
+              {Number.isFinite(profile.learnerPersona.confidence) && (
+                <span className="text-xs text-muted-foreground">
+                  画像可信度 {Math.round(Math.max(0, Math.min(1, profile.learnerPersona.confidence)) * 100)}%
+                </span>
+              )}
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {(profile.learnerPersona.type || []).map(t => (
                 <span key={t} className="text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium">{t}</span>
               ))}
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">{profile.learnerPersona.summary}</p>
+            {Number.isFinite(profile.learnerPersona.confidence) && (
+              <Progress value={Math.max(0, Math.min(1, profile.learnerPersona.confidence)) * 100} className="h-1.5" />
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-y-4 border-y py-4">
+              <div className="md:border-r md:pr-4">
+                <div className="text-lg font-semibold">{summary.stats.totalQuestions || 0}</div>
+                <div className="text-[11px] text-muted-foreground">提问样本</div>
+              </div>
+              <div className="md:border-r md:px-4">
+                <div className="text-lg font-semibold">{summary.timeDistribution?.summary?.activeDays || 0}</div>
+                <div className="text-[11px] text-muted-foreground">学习活跃日</div>
+              </div>
+              <div className="md:border-r md:px-4">
+                <div className="text-lg font-semibold">{(summary.exerciseStats?.total || 0) + (summary.examStats?.total || 0) + (summary.quickQuizStats?.total || 0)}</div>
+                <div className="text-[11px] text-muted-foreground">答题样本</div>
+              </div>
+              <div className="md:pl-4">
+                <div className="text-lg font-semibold">{summary.stats.totalPlans || 0}</div>
+                <div className="text-[11px] text-muted-foreground">覆盖计划</div>
+              </div>
+            </div>
+            {profile.learnerPersona.evidenceFromBehavior && (
+              <div className="flex items-start gap-2 text-xs text-muted-foreground leading-relaxed">
+                <Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <span>{profile.learnerPersona.evidenceFromBehavior}</span>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -405,15 +449,22 @@ export default function UserProfile({ onBack }) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">提问风格</div>
-                <div className="text-sm font-medium">{profile.learningPatterns.questionStyle || '-'}</div>
+                <div className="text-sm font-medium">{readableQuestionStyle(profile.learningPatterns.questionStyle)}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  已分析 {profile.learningPatterns.questionStyleEvidence?.sampleSize ?? summary.stats.totalQuestions ?? 0} 个问题
+                </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">平均提问/知识点</div>
                 <div className="text-sm font-medium">{profile.learningPatterns.avgQuestionsPerTopic || 0}</div>
               </div>
               <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">时间分布</div>
-                <div className="text-sm font-medium">{profile.learningPatterns.timeDistribution || '-'}</div>
+                <div className="text-xs text-muted-foreground">学习节奏</div>
+                <div className="text-sm font-medium">
+                  {summary.timeDistribution?.summary?.activeDays > 0
+                    ? `${summary.timeDistribution.summary.activeDays} 个活跃日 · 日均 ${formatDuration(summary.timeDistribution.summary.avgPerDaySeconds)}`
+                    : '学习记录不足'}
+                </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">互动模式偏好</div>

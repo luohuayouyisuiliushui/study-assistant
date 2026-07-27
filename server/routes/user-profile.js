@@ -6,7 +6,7 @@ import { Router } from 'express';
 import {
   aggregateAllPlans,
   generateUserProfile,
-  getUserProfile,
+  getUserProfileForDisplay,
   getProfileSummary,
 } from '../engine/user-profile.js';
 import { getProvider, getModel } from './middleware.js';
@@ -20,7 +20,7 @@ const router = Router();
  * Get current user profile (if already generated).
  */
 router.get('/', (req, res) => {
-  const profile = getUserProfile();
+  const profile = getUserProfileForDisplay();
   if (!profile) {
     return res.status(404).json({ error: '画像尚未生成，请先调用分析接口' });
   }

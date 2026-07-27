@@ -221,6 +221,11 @@ export function writeUserProfile(data) {
   } catch { fs.writeFileSync(PROFILE_FILE, JSON.stringify(data, null, 2), 'utf-8'); try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
 }
 
+export function getUserProfileForDisplay() {
+  const stored = getUserProfile();
+  return stored ? profileUpdater(stored, loadAllPlans()) : null;
+}
+
 // ─── hasBehaviorEvidence / hasAIProfile ───
 export function hasBehaviorEvidence(profile) {
   if (!profile) return false;
@@ -304,7 +309,15 @@ export function profileUpdater(currentProfile, allPlans) {
   const nms = Date.now(); const S7 = 7 * 86400000, S30 = 30 * 86400000; let l7 = 0, l30 = 0;
   for (const [d, s] of Object.entries(ds)) { const age = nms - new Date(d).getTime(); if (age >= 0 && age <= S7) l7 += s; if (age >= 0 && age <= S30) l30 += s; }
   const sm = Object.entries(mc).sort((a, b) => b[1] - a[1]); const pm = {}; for (const [m, c] of sm) pm[m] = c;
-  profile.learningPatterns = { preferredModes: pm, avgQuestionsPerTopic: tt > 0 ? Math.round((tq / tt) * 10) / 10 : 0, timeStats: { totalSeconds: tts, activeDays: ad, avgSecondsPerActiveDay: avgD, last7DaysSeconds: l7, last30DaysSeconds: l30 }, questionStyle: profile.learningPatterns?.questionStyle || '', timeDistribution: profile.learningPatterns?.timeDistribution || '', completionTrend: profile.learningPatterns?.completionTrend || '' };
+  profile.learningPatterns = {
+    preferredModes: pm,
+    avgQuestionsPerTopic: tt > 0 ? Math.round((tq / tt) * 10) / 10 : 0,
+    timeStats: { totalSeconds: tts, activeDays: ad, avgSecondsPerActiveDay: avgD, last7DaysSeconds: l7, last30DaysSeconds: l30 },
+    questionStyle: '',
+    questionStyleEvidence: { sampleSize: tq, matchedCount: 0, category: null },
+    studyRhythm: { activeDays: ad, avgSecondsPerActiveDay: avgD, last7DaysSeconds: l7, last30DaysSeconds: l30 },
+    completionTrend: profile.learningPatterns?.completionTrend || '',
+  };
 
   // ── 5. Structured evidence ──
   const acc = new Map();
@@ -325,10 +338,17 @@ export function profileUpdater(currentProfile, allPlans) {
   const M3 = 3, MR = 0.3; let tqa = 0; const qt = { why: 0, how: 0, compare: 0, confirm: 0, apply: 0, deep: 0 };
   for (const plan of realPlans) { for (const h of (plan.history || [])) { if (!h || h.role !== 'user') continue; tqa++; const q = (h.content || '').toLowerCase(); if (/为什么|why|原因|原因是|原理|底层|背后/.test(q)) qt.why++; if (/怎么用|如何|怎么|示例|例子|代码|example|实践/.test(q)) qt.how++; if (/区别|对比|vs|versus|不同|比较|还是|差异/.test(q)) qt.compare++; if (/对吗|是不是|对吗|对吧|我的理解|确认/.test(q)) qt.confirm++; if (/应用|场景|实际|项目|生产|工作中/.test(q)) qt.apply++; if (/深入|追问|进一步|再问|还是不懂|换个角度/.test(q)) qt.deep++; } }
   const dt = Object.entries(qt).sort((a, b) => b[1] - a[1])[0];
+  profile.learningPatterns.questionStyleEvidence = {
+    sampleSize: tqa,
+    matchedCount: dt?.[1] || 0,
+    category: dt?.[1] > 0 ? dt[0] : null,
+  };
   if (dt && dt[1] >= M3 && tqa > 0 && (dt[1] / tqa) >= MR) {
     const tmap = { why: '深度思考型', how: '实践应用型', compare: '类比联想型', confirm: '谨慎确认型', apply: '目标驱动型', deep: '深度思考型' };
+    const styleMap = { why: '原理探究型', how: '实践示例型', compare: '对比辨析型', confirm: '验证确认型', apply: '场景应用型', deep: '持续追问型' };
     const lt = tmap[dt[0]];
-    if (lt && profile.learnerPersona) { if (!profile.learnerPersona.type.includes(lt)) profile.learnerPersona.type = [...new Set([...profile.learnerPersona.type, lt])]; const bonus = Math.min(tqa / 50, 0.1); profile.learnerPersona.confidence = Math.min(1, Math.round((0.5 + bonus) * 100) / 100); profile.learnerPersona.evidenceFromBehavior = '用户在 ' + tqa + ' 个问题中，' + dt[0] + ' 类型 ' + dt[1] + ' 次'; }
+    profile.learningPatterns.questionStyle = styleMap[dt[0]] || '';
+    if (lt && profile.learnerPersona) { const existingTypes = Array.isArray(profile.learnerPersona.type) ? profile.learnerPersona.type : []; if (!existingTypes.includes(lt)) profile.learnerPersona.type = [...new Set([...existingTypes, lt])]; const bonus = Math.min(tqa / 50, 0.1); profile.learnerPersona.confidence = Math.min(1, Math.round((0.5 + bonus) * 100) / 100); profile.learnerPersona.evidenceFromBehavior = '在 ' + tqa + ' 个问题中，有 ' + dt[1] + ' 次属于' + profile.learningPatterns.questionStyle + '提问'; }
   }
 
   profile._lastIncrementalUpdate = now;
@@ -354,7 +374,7 @@ export async function generateUserProfile(provider, model = 'gpt-4o-mini', { pla
     weakPointsByPlan: aggregated.weakPoints.map(w => ({ plan: w.plan, topic: w.topic, weakPoints: w.weakPoints })),
   };
 
-  const systemPrompt = '你是一个学习分析专家。请根据以下学习计划聚合数据，生成用户画像。只输出 JSON，不要其他文字。\n\nJSON 结构：{\n  "learnerPersona": { "type": ["类型1", "类型2"], "summary": "一句话总结", "confidence": 0.85 },\n  "strengths": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.9 }],\n  "weaknesses": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.3, "frequency": "high", "suggestedAction": "建议" }],\n  "crossPlanWeakPoints": ["薄弱概念"],\n  "learningPatterns": { "preferredModes": {}, "avgQuestionsPerTopic": 0, "questionStyle": "", "timeDistribution": "", "completionTrend": "" },\n  "recommendations": ["建议"],\n  "aiAnalysis": "Markdown 分析报告"\n}';
+  const systemPrompt = '你是一个学习分析专家。请根据以下学习计划聚合数据，生成用户画像。只输出 JSON，不要其他文字。聚合数据不包含具体提问文本或一天内的学习时刻，因此不得推断提问风格或早晚学习偏好。\n\nJSON 结构：{\n  "learnerPersona": { "type": ["类型1", "类型2"], "summary": "一句话总结", "confidence": 0.85 },\n  "strengths": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.9 }],\n  "weaknesses": [{ "domain": "领域", "topics": ["知识点"], "evidence": "数据证据", "masteryLevel": 0.3, "frequency": "high", "suggestedAction": "建议" }],\n  "crossPlanWeakPoints": ["薄弱概念"],\n  "learningPatterns": { "preferredModes": {}, "avgQuestionsPerTopic": 0, "completionTrend": "" },\n  "recommendations": ["建议"],\n  "aiAnalysis": "Markdown 分析报告"\n}';
 
   const messages = [
     { role: 'system', content: systemPrompt },

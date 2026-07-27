@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Download, RefreshCw, Filter, Eye, Lightbulb, AlertCircle, CheckCircle, Network, FileJson, FileImage, FileText } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { X, Download, RefreshCw, Filter, Eye, Lightbulb, AlertCircle, CheckCircle, Network, ZoomIn, ZoomOut, Maximize2, Move } from 'lucide-react';
 import { Button } from '#/components/ui/button';
+import { collapseGraphToOverview } from '#/lib/knowledge-graph-layout';
 import api from '../api';
 
 const PHASE_COLORS = ['#e0f2fe', '#dcfce7', '#fef3c7', '#fce7f3', '#e0e7ff', '#f3e8ff', '#ffedd5', '#d1fae5'];
@@ -24,6 +25,8 @@ const FILTER_GROUPS = [
   { key: 'association', label: '关联关系',   types: ['related', 'extends', 'exampleOf', 'contrasts', 'references'] },
 ];
 
+const toMermaidNodeId = (nodeId) => 'n' + String(nodeId).replace(/-/g, '_');
+
 export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onSelectTopic, onGenerate: _onGenerate }) {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -32,14 +35,24 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
   const [inferEnabled, setInferEnabled] = useState(false);
   const [activeFilters, setActiveFilters] = useState(() => {
     const f = {};
-    for (const key of Object.keys(RELATION_TYPES)) f[key] = true;
+    for (const [key, type] of Object.entries(RELATION_TYPES)) f[key] = type.group !== 'association';
     return f;
   });
   const [highlightedNode, setHighlightedNode] = useState(null);
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState(null);
+  const [layoutDirection, setLayoutDirection] = useState('auto');
+  const [viewMode, setViewMode] = useState('auto');
+  const [exportFormat, setExportFormat] = useState('json');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
   const graphContainerRef = useRef(null);
+  const graphViewportRef = useRef(null);
   const svgRef = useRef(null);
+  const dragRef = useRef(null);
+  const renderSequenceRef = useRef(0);
   const mountedRef = useRef(true);
   const planIdRef = useRef(plan?.id);
   planIdRef.current = plan?.id;
@@ -55,11 +68,11 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     setLoading(true);
     setError(null);
     setExtractResult(null);
+    setGraphData(null);
+    setGraphSvg('');
     try {
       const d = await api.getKnowledgeGraph(pid, inferEnabled);
       setGraphData(d.graph);
-      const mermaidDef = buildMermaidGraph(plan, d.graph.nodes, d.graph.edges);
-      await renderMermaid(mermaidDef);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -72,11 +85,34 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     loadGraph();
   }, [plan?.id, loadGraph]);
 
+  const filteredGraphEdges = useMemo(() => {
+    if (!graphData) return [];
+    return graphData.edges.filter(edge => {
+      if (!inferEnabled && (edge.source === 'transitive' || edge.source === 'inherited')) return false;
+      return Boolean(activeFilters[edge.type]);
+    });
+  }, [graphData, inferEnabled, activeFilters]);
+
+  const resolvedViewMode = viewMode === 'auto'
+    ? ((graphData?.nodes?.length || 0) > 24 ? 'overview' : 'full')
+    : viewMode;
+
+  const renderedGraph = useMemo(() => {
+    if (!graphData) return null;
+    if (resolvedViewMode === 'overview') {
+      return collapseGraphToOverview(graphData.nodes, filteredGraphEdges, graphData.edges);
+    }
+    return { nodes: graphData.nodes, edges: filteredGraphEdges };
+  }, [graphData, filteredGraphEdges, resolvedViewMode]);
+
   useEffect(() => {
-    if (!graphData) return;
-    const mermaidDef = buildMermaidGraph(plan, graphData.nodes, filteredEdges(graphData.edges));
+    if (!renderedGraph) return;
+    const direction = layoutDirection === 'auto'
+      ? (resolvedViewMode === 'overview' ? 'LR' : ((renderedGraph.nodes.length > 10 || renderedGraph.edges.length > 14 || (plan.phases?.length || 0) > 4) ? 'TB' : 'LR'))
+      : layoutDirection;
+    const mermaidDef = buildMermaidGraph(plan, renderedGraph.nodes, renderedGraph.edges, direction);
     renderMermaid(mermaidDef);
-  }, [activeFilters, highlightedNode, graphData]);
+  }, [renderedGraph, highlightedNode, layoutDirection, resolvedViewMode, plan]);
 
   useEffect(() => {
     if (!graphSvg || !graphContainerRef.current) return;
@@ -85,19 +121,18 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       const svgEl = container.querySelector('svg');
       if (svgEl) {
         svgRef.current = svgEl;
-        attachNodeClickHandlers(svgEl);
+        svgEl.setAttribute('width', '100%');
+        svgEl.setAttribute('height', '100%');
+        svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        svgEl.style.width = '100%';
+        svgEl.style.height = '100%';
+        svgEl.style.maxWidth = 'none';
+        svgEl.style.display = 'block';
+        attachNodeClickHandlers(svgEl, renderedGraph?.nodes || []);
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [graphSvg]);
-
-  const filteredEdges = (edges) => {
-    return edges.filter(e => {
-      if (!inferEnabled && (e.source === 'transitive' || e.source === 'inherited')) return false;
-      if (!activeFilters[e.type]) return false;
-      return true;
-    });
-  };
+  }, [graphSvg, renderedGraph]);
 
   const toggleFilter = (type) => {
     setActiveFilters(prev => ({ ...prev, [type]: !prev[type] }));
@@ -117,6 +152,42 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     } else {
       setHighlightedNode(nodeId);
     }
+  };
+
+  const fitView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const changeZoom = (delta) => {
+    setZoom(current => Math.min(3, Math.max(0.5, Math.round((current + delta) * 100) / 100)));
+  };
+
+  const handlePointerDown = (event) => {
+    if (event.button !== 0 || event.target.closest?.('g.node')) return;
+    dragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+    setIsPanning(true);
+    graphViewportRef.current?.setPointerCapture?.(event.pointerId);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!dragRef.current) return;
+    setPan({
+      x: dragRef.current.panX + event.clientX - dragRef.current.x,
+      y: dragRef.current.panY + event.clientY - dragRef.current.y,
+    });
+  };
+
+  const handlePointerUp = (event) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setIsPanning(false);
+    graphViewportRef.current?.releasePointerCapture?.(event.pointerId);
+  };
+
+  const handleWheel = (event) => {
+    event.preventDefault();
+    changeZoom(event.deltaY < 0 ? 0.15 : -0.15);
   };
 
   const handleExtractRelations = async () => {
@@ -277,35 +348,48 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     downloadBlob(blob, `${sanitizeFilename(plan.name)}.知识图谱.md`);
   };
 
-  const attachNodeClickHandlers = (svgEl) => {
+  const handleExport = () => {
+    if (exportFormat === 'json') handleExportJSON();
+    else if (exportFormat === 'svg') handleExportSVG();
+    else if (exportFormat === 'png') handleExportPNG();
+    else if (exportFormat === 'markdown') handleExportMarkdown();
+  };
+
+  const attachNodeClickHandlers = (svgEl, nodes) => {
+    const nodeIds = nodes.map(node => ({
+      raw: String(node.id),
+      mermaid: toMermaidNodeId(node.id),
+    }));
     const nodeGroups = svgEl.querySelectorAll('g.node');
     for (const g of nodeGroups) {
+      const anchorHref = g.querySelector('a')?.getAttribute('href');
+      const anchorNodeId = anchorHref?.startsWith('#') ? anchorHref.slice(1) : null;
+      const titleNodeId = g.querySelector('title')?.textContent?.trim();
+      const groupId = g.getAttribute('id') || '';
+      const matchedNode = nodeIds.find(node =>
+        anchorNodeId === node.raw ||
+        anchorNodeId === node.mermaid ||
+        titleNodeId === node.raw ||
+        titleNodeId === node.mermaid ||
+        groupId.includes(`-flowchart-${node.mermaid}-`)
+      );
+
+      if (!matchedNode) continue;
+      g.dataset.topicId = matchedNode.raw;
       g.style.cursor = 'pointer';
-      g.onclick = null;
-      g.addEventListener('click', (e) => {
+      g.onclick = (e) => {
         e.stopPropagation();
-        const anchor = g.querySelector('a');
-        if (anchor) {
-          const href = anchor.getAttribute('href');
-          if (href && href.startsWith('#')) {
-            handleNodeClick(href.slice(1));
-            return;
-          }
-        }
-        const titleEl = g.querySelector('title');
-        if (titleEl) {
-          handleNodeClick(titleEl.textContent);
-        }
-      });
+        handleNodeClick(matchedNode.raw);
+      };
     }
-    svgEl.addEventListener('click', (e) => {
+    svgEl.onclick = (e) => {
       if (e.target === svgEl || e.target.tagName === 'svg') {
         setHighlightedNode(null);
       }
-    });
+    };
   };
 
-  const buildMermaidGraph = (plan, nodes, edges) => {
+  const buildMermaidGraph = (plan, nodes, edges, direction = 'LR') => {
     const phaseNames = {};
     const phaseOrder = {};
     for (const p of plan.phases || []) {
@@ -331,15 +415,21 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       phaseIndex[p.id] = plan.phases.indexOf(p) % PHASE_COLORS.length;
     }
 
-    let def = 'flowchart LR;\n';
+    let def = `flowchart ${direction};\n`;
 
-    for (const n of ungroupedNodes) {
-      const nodeId = 'n' + n.id.replace(/-/g, '_');
-      const label = n.title
+    const nodeLabel = (node) => {
+      const rawTitle = String(node.title || '')
         .replace(/"/g, '\u0027')
         .replace(/[[\]]/g, '')
-          .replace(/\(/g, '&#40;').replace(/\)/g, '&#41;')
-        .substring(0, 30) + (n.title.length > 30 ? '...' : '');
+        .replace(/\(/g, '&#40;').replace(/\)/g, '&#41;');
+      const title = rawTitle.substring(0, 30) + (rawTitle.length > 30 ? '...' : '');
+      if (!node.totalCount || node.totalCount <= 1) return title;
+      return `${title}<br/><small>${node.doneCount}/${node.totalCount} 已学习</small>`;
+    };
+
+    for (const n of ungroupedNodes) {
+      const nodeId = toMermaidNodeId(n.id);
+      const label = nodeLabel(n);
       def += `    ${nodeId}["${label}"];\n`;
     }
 
@@ -350,21 +440,17 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       def += `\n    subgraph sg_${phaseId}["${phaseName}"]\n`;
 
       for (const n of phaseNodes) {
-        const nodeId = 'n' + n.id.replace(/-/g, '_');
-        const label = n.title
-          .replace(/"/g, '\u0027')
-          .replace(/[[\]]/g, '')
-            .replace(/\(/g, '&#40;').replace(/\)/g, '&#41;')
-          .substring(0, 30) + (n.title.length > 30 ? '...' : '');
+        const nodeId = toMermaidNodeId(n.id);
+        const label = nodeLabel(n);
         def += `        ${nodeId}["${label}"];\n`;
       }
       def += '    end\n';
     }
 
     for (const n of nodes) {
-      const nodeId = 'n' + n.id.replace(/-/g, '_');
+      const nodeId = toMermaidNodeId(n.id);
       const colorIdx = phaseIndex[n.phaseId] || 0;
-      let fillColor = n.done ? '#bbf7d0' : PHASE_COLORS[colorIdx];
+      let fillColor = (n.totalCount ? n.doneCount === n.totalCount : n.done) ? '#bbf7d0' : PHASE_COLORS[colorIdx];
 
       if (highlightedNode) {
         if (n.id === highlightedNode) {
@@ -387,10 +473,10 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     }
 
     for (const e of edges) {
-      const fromId = 'n' + e.from.replace(/-/g, '_');
-      const toId = 'n' + e.to.replace(/-/g, '_');
+      const fromId = toMermaidNodeId(e.from);
+      const toId = toMermaidNodeId(e.to);
       const typeInfo = RELATION_TYPES[e.type] || RELATION_TYPES.related;
-      const edgeLabel = typeInfo.label;
+      const edgeLabel = e.count > 1 ? `${typeInfo.label} ×${e.count}` : typeInfo.label;
       const _isInferred = e.source === 'detail' || e.source === 'transitive' || e.source === 'inherited';
 
       const isBidirectional = e.type === 'related' || e.type === 'contrasts' ||
@@ -421,6 +507,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
   };
 
   const renderMermaid = async (mermaidDef) => {
+    const sequence = ++renderSequenceRef.current;
     try {
       const mermaid = await import('mermaid');
       mermaid.default.initialize({
@@ -429,7 +516,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
         securityLevel: 'loose',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         flowchart: {
-          useMaxWidth: true,
+          useMaxWidth: false,
           htmlLabels: true,
           curve: 'basis',
           padding: 16,
@@ -437,9 +524,9 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
       });
       const id = 'kg-' + Math.random().toString(36).slice(2, 9);
       const { svg } = await mermaid.default.render(id, mermaidDef);
-      if (mountedRef.current) setGraphSvg(svg);
+      if (mountedRef.current && sequence === renderSequenceRef.current) setGraphSvg(svg);
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || sequence !== renderSequenceRef.current) return;
       setError('图谱渲染失败: ' + err.message);
       setGraphSvg('<pre class="kg-error-pre">' +
         mermaidDef.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>');
@@ -453,38 +540,73 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
     }
   }
 
-  const phaseNodeCounts = {};
-  if (graphData && plan) {
-    for (const n of graphData.nodes) {
-      if (n.phaseId) {
-        phaseNodeCounts[n.phaseId] = (phaseNodeCounts[n.phaseId] || 0) + 1;
-      }
-    }
-  }
-
   return (
     <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
-      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+      <div
+        role='dialog'
+        aria-modal='true'
+        aria-labelledby='knowledge-graph-title'
+        className='flex flex-col w-[calc(100vw-1rem)] h-[calc(100vh-1rem)] sm:w-[calc(100vw-2rem)] sm:h-[calc(100vh-2rem)] max-w-none rounded-lg border bg-card shadow-lg'
+        onClick={e => e.stopPropagation()}
+      >
         <div className='flex items-center justify-between border-b px-4 py-2.5'>
-          <span className='flex items-center gap-2 text-sm font-medium'>
+          <span id='knowledge-graph-title' className='flex min-w-0 items-center gap-2 text-sm font-medium'>
             <Network className='h-4 w-4 text-primary' />
-            知识图谱 — {plan.name}
+            <span className='truncate'>知识图谱 — {plan.name}</span>
           </span>
           <div className='flex items-center gap-1'>
             {graphData && (
-              <div className='flex items-center gap-0.5 mr-2'>
-                <Button variant='ghost' size='sm' onClick={handleExportJSON} title='导出 JSON 数据'><FileJson className='h-3.5 w-3.5 mr-1' />JSON</Button>
-                <Button variant='ghost' size='sm' onClick={handleExportSVG} title='导出 SVG 矢量图'><FileImage className='h-3.5 w-3.5 mr-1' />SVG</Button>
-                <Button variant='ghost' size='sm' onClick={handleExportPNG} title='导出 PNG 图片'><FileImage className='h-3.5 w-3.5 mr-1' />PNG</Button>
-                <Button variant='ghost' size='sm' onClick={handleExportMarkdown} title='导出 Markdown 文档'><FileText className='h-3.5 w-3.5 mr-1' />MD</Button>
+              <div className='flex items-center gap-1'>
+                <select
+                  aria-label='知识图谱导出格式'
+                  value={exportFormat}
+                  onChange={event => setExportFormat(event.target.value)}
+                  className='h-8 rounded-md border bg-background px-2 text-xs'
+                >
+                  <option value='json'>JSON</option>
+                  <option value='svg'>SVG</option>
+                  <option value='png'>PNG</option>
+                  <option value='markdown'>Markdown</option>
+                </select>
+                <Button variant='ghost' size='icon' className='h-8 w-8' onClick={handleExport} aria-label='导出知识图谱' title='导出知识图谱'>
+                  <Download className='h-4 w-4' />
+                </Button>
               </div>
             )}
             <Button variant='ghost' size='sm' onClick={loadGraph} title='重新加载'><RefreshCw className='h-3.5 w-3.5' /></Button>
-            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
+            <Button variant='ghost' size='icon' onClick={onClose} aria-label='关闭知识图谱'><X className='h-4 w-4' /></Button>
           </div>
         </div>
         <div className='flex-1 flex flex-col overflow-hidden'>
           <div className='flex items-center gap-2 border-b px-4 py-2 flex-wrap'>
+            <label className='flex items-center gap-1.5 text-xs'>
+              <span className='text-muted-foreground'>视图</span>
+              <select
+                aria-label='图谱视图'
+                value={viewMode}
+                onChange={(event) => { setViewMode(event.target.value); setHighlightedNode(null); fitView(); }}
+                className='h-8 rounded-md border bg-background px-2 text-xs'
+              >
+                <option value='auto'>自动聚合</option>
+                <option value='overview'>主题骨架</option>
+                <option value='full'>全部知识点</option>
+              </select>
+            </label>
+
+            <label className='flex items-center gap-1.5 text-xs'>
+              <span className='text-muted-foreground'>布局</span>
+              <select
+                aria-label='图谱布局'
+                value={layoutDirection}
+                onChange={(event) => { setLayoutDirection(event.target.value); fitView(); }}
+                className='h-8 rounded-md border bg-background px-2 text-xs'
+              >
+                <option value='auto'>自动</option>
+                <option value='LR'>横向</option>
+                <option value='TB'>纵向</option>
+              </select>
+            </label>
+
             <label className='flex items-center gap-1.5 text-xs cursor-pointer select-none' title='启用 AI 文本提取 + 传递性依赖推导 + 继承依赖'>
               <input type='checkbox' checked={inferEnabled} onChange={() => { setInferEnabled(!inferEnabled); setHighlightedNode(null); }} className='rounded' />
               <Lightbulb className='h-3 w-3 text-muted-foreground' />
@@ -494,6 +616,10 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
             <Button variant='outline' size='sm' onClick={handleExtractRelations} disabled={extracting} title='从 AI 生成的讲解文本中提取知识点关系'>
               {extracting ? <RefreshCw className='h-3 w-3 mr-1 animate-spin' /> : <Eye className='h-3 w-3 mr-1' />}
               {extracting ? '提取中...' : '从文本提取关系'}
+            </Button>
+
+            <Button variant='ghost' size='sm' onClick={() => setFiltersExpanded(value => !value)} aria-expanded={filtersExpanded}>
+              <Filter className='h-3 w-3 mr-1' />关系筛选
             </Button>
 
             {highlightedNode && (
@@ -525,7 +651,7 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
             </div>
           )}
 
-          <div className='flex items-center gap-3 border-b px-4 py-1.5 flex-wrap'>
+          {filtersExpanded && <div className='flex items-center gap-3 border-b px-4 py-1.5 flex-wrap'>
             {FILTER_GROUPS.map(group => {
               const allActive = group.types.every(t => activeFilters[t]);
               const someActive = group.types.some(t => activeFilters[t]);
@@ -554,9 +680,9 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
                 </div>
               );
             })}
-          </div>
+          </div>}
 
-          <div className='flex-1 overflow-auto p-4'>
+          <div className='relative flex-1 min-h-0 overflow-hidden bg-muted/15'>
             {loading ? (
               <div className='flex flex-col items-center justify-center h-full gap-3 text-muted-foreground'>
                 <div className='animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent' />
@@ -569,7 +695,38 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
                 <Button variant='outline' size='sm' onClick={loadGraph}>重试</Button>
               </div>
             ) : graphSvg ? (
-              <div className='w-full h-full flex justify-center overflow-auto' ref={graphContainerRef} dangerouslySetInnerHTML={{ __html: graphSvg }} />
+              <>
+                <div className='absolute right-3 top-3 z-10 flex items-center gap-1 rounded-md border bg-background/95 p-1 shadow-sm'>
+                  <Button variant='ghost' size='icon' className='h-8 w-8' onClick={() => changeZoom(-0.25)} aria-label='缩小' title='缩小'>
+                    <ZoomOut className='h-4 w-4' />
+                  </Button>
+                  <output aria-label='缩放比例' className='w-12 text-center text-xs tabular-nums'>{Math.round(zoom * 100)}%</output>
+                  <Button variant='ghost' size='icon' className='h-8 w-8' onClick={() => changeZoom(0.25)} aria-label='放大' title='放大'>
+                    <ZoomIn className='h-4 w-4' />
+                  </Button>
+                  <Button variant='ghost' size='icon' className='h-8 w-8' onClick={fitView} aria-label='适应视图' title='适应视图'>
+                    <Maximize2 className='h-4 w-4' />
+                  </Button>
+                </div>
+                <div
+                  ref={graphViewportRef}
+                  data-testid='knowledge-graph-viewport'
+                  className={`absolute inset-0 touch-none select-none ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                  onWheel={handleWheel}
+                >
+                  <div
+                    ref={graphContainerRef}
+                    data-testid='knowledge-graph-canvas'
+                    className={`absolute inset-4 origin-center ${isPanning ? '' : 'transition-transform duration-100'}`}
+                    style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+                    dangerouslySetInnerHTML={{ __html: graphSvg }}
+                  />
+                </div>
+              </>
             ) : (
               <div className='flex items-center justify-center h-full text-muted-foreground text-sm'>
                 暂无知识图谱数据
@@ -577,10 +734,16 @@ export default function KnowledgeGraphModal({ plan, onClose, onSelectTopic: _onS
             )}
           </div>
         </div>
-        <div className='flex items-center gap-2 border-t px-4 py-1.5 text-[11px] text-muted-foreground flex-wrap'>
+        <div className='flex shrink-0 items-center gap-2 overflow-x-auto whitespace-nowrap border-t px-4 py-1.5 text-[11px] text-muted-foreground'>
           <span>📘 一级(章)</span>
           <span>📗 二级(节)</span>
           <span>📙 三级(子节)</span>
+          <span className='text-border'>|</span>
+          <span className='flex items-center gap-1'><Move className='h-3 w-3' />拖拽平移 · 滚轮缩放</span>
+          <span className='text-border'>|</span>
+          {graphData && renderedGraph && (
+            <span>{resolvedViewMode === 'overview' ? `主题骨架 ${renderedGraph.nodes.length}/${graphData.nodes.length}` : `全部 ${graphData.nodes.length} 个知识点`}</span>
+          )}
           <span className='text-border'>|</span>
           <span><span className='font-mono'>&rarr;</span> 包含</span>
           <span><span className='font-mono'>- - &rarr;</span> 前置依赖</span>

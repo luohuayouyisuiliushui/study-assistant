@@ -1,8 +1,8 @@
-# Study Assistant v1.13.2
+# Study Assistant v1.14.0
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
-当前稳定版：[`v1.13.2`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.13.2)。下载源码归档或查看发布说明，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
+当前稳定版：[`v1.14.0`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.14.0)。下载源码归档或查看发布说明，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
 
 ## 它能做什么
 
@@ -21,15 +21,15 @@ AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、�
 
 ### 知识图谱
 8. **自动提取知识点关系**：从讲解文本中识别前置依赖、扩展、对比等关系
-9. **交互式图谱可视化**：支持力导向图、鱼眼缩放、拖拽和关系推断
+9. **大屏知识图谱**：自动把大型图谱聚合为主题骨架，也可切换全部知识点；支持横向/纵向布局、节点高亮、缩放、平移、关系筛选和多格式导出
 
 ### 学习分析与画像
-10. **跨计划学习画像**：自动识别你的强项、弱项、学习模式（深度思考型 / 实践应用型 / 类比联想型等）
+10. **跨计划学习画像**：基于真实提问、答题和学习时长证据识别强项、弱项、提问风格与学习节奏，并展示画像可信度和样本量
 11. **当天答题情况显示板**：按天/周追踪练习、试卷、快问的正确率和数量
 12. **费曼教学分析**：记录教学质量、精彩讲解摘录、学生遗留问题
 
 ### 数据导出
-13. 导出为 **Anki CSV**、**Markdown**、**OPML**、**JSON**、**Notion CSV** 等格式
+13. 导出为 **Anki CSV**、**Markdown**、**OPML**、**JSON**、**Notion CSV** 等格式；思维导图还可单独导出 **SVG** 和 **PNG**
 
 ### 个性化自适应
 14. **越用越懂你**：每次做练习、提问、学习时长都被记录，AI 自动调整难度和讲解风格
@@ -124,20 +124,22 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 5. 查看知识图谱
 
-- 打开知识图谱视图，展示所有知识点及其关系
+- 大型计划默认聚合为可读的主题骨架，可随时切换到全部知识点
 - 关系类型：前置依赖、扩展、示例、对比、构建于、引用
-- 支持推断边（隐藏/显示）
-- 力导向图布局，可交互拖拽
+- 支持推断边、分组关系筛选、横向/纵向布局和节点关联高亮
+- 近全屏画布支持拖拽平移、滚轮/按钮缩放和一键适应视图
+- 可导出 JSON、SVG、PNG 或 Markdown
 
 ### 6. 学习画像与今日统计
 
-- **学习画像**：AI 自动分析跨计划的学习数据，生成你的学习风格、强项、弱项和个性化建议
+- **学习画像**：AI 分析与行为证据结合，展示学习风格、强项、弱项、提问样本、答题样本、活跃日和个性化建议
+- **时间与提问风格**：学习时长统一显示为小时/分钟；提问风格只在真实问题样本达到阈值后展示，不再输出模型诊断占位文本
 - **当日答题板**：实时追踪今天做了多少题、正确率多少，按练习/试卷/快问分类展示
 - **上周回顾**：统计本周累计答题数和正确率
 
 ### 7. 数据导出
 
-支持导出为：**Anki CSV**、**Markdown**、**OPML**（思维导图）、**JSON**、**Notion CSV** 格式。
+计划数据支持导出为 **Anki CSV**、**Markdown**、**OPML**、**JSON**、**Notion CSV**。思维导图窗口另提供 **Markdown、SVG、PNG、JSON、OPML** 五种真实格式，并支持一键适应视图。
 
 ### 8. 推荐学习资源
 
@@ -170,7 +172,8 @@ study-assistant/
 │   │   │   ├── TopicDetail.jsx  # 知识点详情
 │   │   │   ├── MediaViewer.jsx   # 图片/图表全屏查看、编辑与保存
 │   │   │   ├── MermaidDiagram.jsx # Mermaid 手动重绘控制
-│   │   │   ├── KnowledgeGraphModal.jsx  # 知识图谱
+│   │   │   ├── KnowledgeGraphModal.jsx  # 聚合/完整知识图谱与导出
+│   │   │   ├── MindMapModal.jsx         # 思维导图查看与多格式导出
 │   │   │   ├── ExercisePanel.jsx       # 练习面板
 │   │   │   ├── ExamPaperModal.jsx      # 考试面板
 │   │   │   ├── InteractivePanel.jsx    # 互动教学
@@ -258,7 +261,7 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 
 **重要：** AI 相关测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则会挂起超时。
 
-`v1.13.2` 发布基线：Server `538/538`、Client `100/100`；Client lint `0 errors / 29 warnings`，Server lint `0 errors / 105 warnings`；Client production build、桌面与移动端 Playwright 交互检查均通过。Playwright 检查为发布前手动验证，仓库目前尚无持久化的 E2E 测试套件。
+`v1.14.0` 发布基线：Server `540/540`、Client `112/112`；Client lint `0 errors / 27 warnings`，Server lint `0 errors / 105 warnings`；数据完整性检查、Client production build、桌面与移动端 Playwright 交互检查均通过。真实页面验证覆盖知识图谱 `13/64` 聚合切换、节点高亮、画像小时/分钟展示和思维导图 OPML 下载。Playwright 检查为发布前手动验证，仓库目前尚无持久化的 E2E 测试套件。
 
 ### 代码规范
 

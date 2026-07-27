@@ -21,7 +21,7 @@ const mockSummary = {
     totalPlans: 3,
     totalTopics: 42,
     overallCompletionRate: 65,
-    totalLearningTime: 36000,
+    totalTimeSeconds: 12893,
     totalQuestions: 128,
   },
   exerciseStats: { total: 20, rate: 75 },
@@ -40,12 +40,28 @@ const mockSummary = {
     sparklingCount: 2,
     lingeringCount: 1,
   },
+  timeDistribution: {
+    last7Days: [
+      { date: '2026-07-21', seconds: 1720 },
+      { date: '2026-07-22', seconds: 0 },
+    ],
+    summary: {
+      totalTimeSeconds: 12893,
+      timeLast7Days: 1720,
+      timeLast30Days: 12773,
+      activeDays: 7,
+      avgPerDaySeconds: 1842,
+      peakDay: { date: '2026-07-12', seconds: 8652 },
+    },
+  },
 };
 
 const mockProfile = {
   learnerPersona: {
     type: ['分析型', '视觉型'],
     summary: '你是一个喜欢深入理解原理的学习者。',
+    confidence: 0.78,
+    evidenceFromBehavior: '在 12 个问题中，有 6 次属于原理探究型提问',
   },
   strengths: [
     { domain: '编程基础', masteryLevel: 0.85, topics: ['变量', '函数'] },
@@ -91,7 +107,7 @@ describe('UserProfile', () => {
     api.getUserProfile.mockResolvedValue({ profile: mockProfile });
     render(<UserProfile onBack={onBack} />);
     await waitFor(() => {
-      expect(screen.getByText('3')).toBeInTheDocument();
+      expect(screen.getAllByText('3').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('42')).toBeInTheDocument();
       expect(screen.getByText('65%')).toBeInTheDocument();
     });
@@ -141,7 +157,47 @@ describe('UserProfile', () => {
     render(<UserProfile onBack={onBack} />);
     await waitFor(() => {
       expect(screen.getByText('深入型')).toBeInTheDocument();
-      expect(screen.getByText('晚间活跃')).toBeInTheDocument();
+      expect(screen.getByText(/7 个活跃日/)).toBeInTheDocument();
+    });
+  });
+
+  it('uses readable Chinese durations without exposing raw seconds', async () => {
+    api.getUserProfileSummary.mockResolvedValue({ summary: mockSummary });
+    api.getUserProfile.mockResolvedValue({ profile: mockProfile });
+    render(<UserProfile onBack={onBack} />);
+    await waitFor(() => {
+      expect(screen.getByText('3 小时 35 分钟')).toBeInTheDocument();
+      expect(screen.getByText('29 分钟')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/12893 秒|1720 秒|8652 秒/)).not.toBeInTheDocument();
+  });
+
+  it('replaces model diagnostics and unsupported time-of-day claims with evidence-based copy', async () => {
+    const placeholderProfile = {
+      ...mockProfile,
+      learningPatterns: {
+        ...mockProfile.learningPatterns,
+        questionStyle: '未提供可用于识别具体提问风格的文本或分类数据。',
+        timeDistribution: '累计学习 12893 秒，晚间更活跃。',
+      },
+    };
+    api.getUserProfileSummary.mockResolvedValue({ summary: mockSummary });
+    api.getUserProfile.mockResolvedValue({ profile: placeholderProfile });
+    render(<UserProfile onBack={onBack} />);
+
+    await waitFor(() => expect(screen.getByText('提问样本不足')).toBeInTheDocument());
+    expect(screen.queryByText(/未提供可用于识别/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/晚间更活跃/)).not.toBeInTheDocument();
+    expect(screen.getByText(/7 个活跃日/)).toBeInTheDocument();
+  });
+
+  it('shows persona confidence and behavioral evidence', async () => {
+    api.getUserProfileSummary.mockResolvedValue({ summary: mockSummary });
+    api.getUserProfile.mockResolvedValue({ profile: mockProfile });
+    render(<UserProfile onBack={onBack} />);
+    await waitFor(() => {
+      expect(screen.getByText('画像可信度 78%')).toBeInTheDocument();
+      expect(screen.getByText(/在 12 个问题中/)).toBeInTheDocument();
     });
   });
 

@@ -37,6 +37,26 @@ describe('profileUpdater', () => {
   it('strength from correct', () => { const r = profileUpdater(null, [{ id:'p', name:'P', topics:[makeTopic('TCP',{exercises:[{correct:true},{correct:true}]})], examPapers:[], quickQuizHistory:[], history:[] }]); assert.ok(r.strengths.some(s => s.masteryLevel >= 0.7)); });
   it('weakness from incorrect', () => { const r = profileUpdater(null, [{ id:'p', name:'P', topics:[makeTopic('UDP',{exercises:[{correct:false},{correct:false}]})], examPapers:[], quickQuizHistory:[], history:[] }]); assert.ok(r.weaknesses.some(w => w.masteryLevel < 0.7)); });
   it('learnerPersona from Q&A', () => { const p = { id:'p', name:'P', topics:[makeTopic('A')], examPapers:[], quickQuizHistory:[], history:[{role:'user',content:'为什么？'},{role:'user',content:'原理？'},{role:'user',content:'原因？'}] }; const r = profileUpdater(null, [p]); assert.ok(r.learnerPersona.type.includes('深度思考型')); });
+  it('derives a readable question style from enough question evidence', () => {
+    const p = { id:'p', name:'P', topics:[makeTopic('A')], examPapers:[], quickQuizHistory:[], history:[
+      {role:'user',content:'为什么会这样？'}, {role:'user',content:'底层原理是什么？'}, {role:'user',content:'背后的原因是什么？'},
+      {role:'user',content:'能给个例子吗？'},
+    ] };
+    const r = profileUpdater(null, [p]);
+    assert.equal(r.learningPatterns.questionStyle, '原理探究型');
+    assert.deepEqual(r.learningPatterns.questionStyleEvidence, { sampleSize: 4, matchedCount: 3, category: 'why' });
+  });
+  it('clears AI diagnostics and unsupported time-of-day claims when evidence is insufficient', () => {
+    const current = {
+      learnerPersona:{type:[], summary:'', confidence:0.5}, strengths:[], weaknesses:[], crossPlanWeakPoints:[], crossPlanWeakEvidence:[], recommendations:[], aiAnalysis:'',
+      learningPatterns:{ questionStyle:'未提供可用于识别具体提问风格的文本或分类数据。', timeDistribution:'晚间活跃', completionTrend:'' },
+    };
+    const p = { id:'p', name:'P', topics:[makeTopic('A')], examPapers:[], quickQuizHistory:[], history:[{role:'user',content:'你好'}] };
+    const r = profileUpdater(current, [p]);
+    assert.equal(r.learningPatterns.questionStyle, '');
+    assert.equal(r.learningPatterns.timeDistribution, undefined);
+    assert.deepEqual(r.learningPatterns.questionStyleEvidence, { sampleSize: 1, matchedCount: 0, category: null });
+  });
   it('crossPlan from multi-plan', () => { const ps = [{ id:'p1', name:'P1', topics:[makeTopic('A',{exercises:[{correct:false},{correct:false}]})], examPapers:[], quickQuizHistory:[], history:[] }, { id:'p2', name:'P2', topics:[makeTopic('B',{exercises:[{correct:false},{correct:false}]})], examPapers:[], quickQuizHistory:[], history:[] }]; assert.equal(profileUpdater(null, ps).crossPlanWeakPoints.length, 2); });
   it('empty returns skeleton', () => { const r = profileUpdater(null, []); assert.ok(r.learnerPersona); assert.equal(r.strengths.length, 0); });
   it('marker isolation', () => { const m = Object.assign({ id:'m', name:'M', topics:[makeTopic('MARKER')], examPapers:[], quickQuizHistory:[], history:[] }, {__testPlan:{marker:'study-assistant/node-test/v1'}}); const r = profileUpdater(null, [{ id:'r', name:'R', topics:[makeTopic('A')], examPapers:[], quickQuizHistory:[], history:[] }, m]); assert.ok(!r.crossPlanWeakPoints.includes('MARKER')); });

@@ -888,7 +888,7 @@ select {
 
 .plan-overview {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   padding: clamp(1.3rem, 3vw, 2rem);
   border: 1px solid color-mix(in oklab, var(--primary) 18%, var(--border));
   border-radius: 1.5rem;
@@ -896,21 +896,9 @@ select {
   box-shadow: var(--ui-shadow-md);
 }
 
-.plan-overview::after {
-  content: "";
-  position: absolute;
-  top: -7rem;
-  right: -7rem;
-  width: 18rem;
-  height: 18rem;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in oklab, var(--primary) 18%, transparent), transparent 68%);
-  pointer-events: none;
-}
-
 .plan-overview__top {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;

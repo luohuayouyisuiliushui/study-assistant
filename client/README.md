@@ -1,4 +1,4 @@
-# Study Assistant Client v1.13.2
+# Study Assistant Client v1.14.0
 
 Study Assistant 的 React 前端。开发服务器运行在 `http://localhost:5173`，并通过 Vite proxy 将 `/api` 请求转发到 `http://localhost:3001`。
 
@@ -38,7 +38,7 @@ npm run build --prefix client  # 生产构建到 client/dist
 npm run preview --prefix client
 ```
 
-`v1.13.2` 验证基线为 `100/100` 项测试通过、`0 errors / 29 warnings`，生产构建通过。
+`v1.14.0` 验证基线为 `112/112` 项测试通过、`0 errors / 27 warnings`，生产构建通过。
 
 ## 目录
 
@@ -50,10 +50,12 @@ src/
 │   ├── TopicDetail.jsx        # 知识点详情与学习操作
 │   ├── MediaViewer.jsx        # 图片/图表全屏、变换、编辑与下载
 │   ├── MermaidDiagram.jsx     # Mermaid 懒加载与手动重绘
+│   ├── KnowledgeGraphModal.jsx # 主题骨架/完整图谱、缩放与导出
+│   ├── MindMapModal.jsx       # 思维导图与五种导出格式
 │   ├── TopicDetailShared.jsx  # Markdown 内容渲染
 │   └── ui/                    # 手写 shadcn/ui 原子组件
-├── lib/                       # 设置、主题、Mermaid 渲染等工具
-├── pages/UserProfile.jsx      # 跨计划学习画像
+├── lib/                       # 设置、主题、Mermaid、图谱布局与导出工具
+├── pages/UserProfile.jsx      # 证据驱动的跨计划学习画像
 ├── styles/                    # 全局、业务与视觉微调样式
 └── test/                      # Vitest/Testing Library 测试
 ```
@@ -64,6 +66,9 @@ src/
 - 配图和 Mermaid 图均可点击全屏。全屏视图支持缩放、拖动、旋转、翻转、源码编辑及下载。
 - 知识点悬浮导航在鼠标靠近页面顶部时出现，离开后延迟收起；无 hover 的触屏设备保持导航可见。
 - 资源推荐客户端超时为 65 秒，失败或超时后必须恢复可重试按钮状态。
+- 大型知识图谱默认显示主题骨架，允许切换全部知识点；节点 ID 必须从 Mermaid DOM 映射回真实 topic ID 后再高亮。
+- 思维导图导出必须生成对应的 Markdown、SVG、PNG、结构化 JSON 或 OPML 内容，不能用 Markdown 冒充专用格式。
+- 学习画像的时间统一显示为小时/分钟；提问风格和学习节奏必须来自当前行为证据，不显示 AI 的诊断占位文本或无依据的早晚偏好。
 
 ## 开发约定
 

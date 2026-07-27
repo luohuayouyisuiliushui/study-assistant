@@ -1,66 +1,43 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Download, Brain } from 'lucide-react';
+import { X, Download, Brain, Maximize2 } from 'lucide-react';
 import { Button } from '#/components/ui/button';
+import { buildTree, treeToJson, treeToMarkdown, treeToOpml } from '#/lib/mind-map-export';
 
-function buildTree(plan) {
-  const phaseMap = {};
-  for (const p of plan.phases || []) {
-    phaseMap[p.id] = { id: p.id, name: p.name, order: p.order || 0, children: [] };
-  }
-
-  const topicMap = {};
-  for (const t of plan.topics) {
-    topicMap[t.id] = { ...t, children: [] };
-  }
-
-  const roots = [];
-  for (const t of plan.topics) {
-    const node = topicMap[t.id];
-    if (t.parentId && topicMap[t.parentId]) {
-      topicMap[t.parentId].children.push(node);
-    } else if (t.phaseId && phaseMap[t.phaseId]) {
-      phaseMap[t.phaseId].children.push(node);
-    } else {
-      roots.push(node);
-    }
-  }
-
-  for (const phaseId of Object.keys(phaseMap)) {
-    const phase = phaseMap[phaseId];
-    phase.children.sort((a, b) => a.order - b.order);
-    roots.push(phase);
-  }
-
-  roots.sort((a, b) => (a.order || 0) - (b.order || 0));
-  return roots;
+function sanitizeFilename(name) {
+  return name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
 }
 
-function treeToMarkdown(nodes, depth = 1) {
-  let md = '';
-  for (const n of nodes) {
-    if (n.name !== undefined) {
-      const done = n.children.every(c => c.done);
-      md += `${'#'.repeat(depth)} ${n.name}${done ? ' ✅' : ''}\n`;
-      if (n.children.length > 0) {
-        n.children.sort((a, b) => a.order - b.order);
-        md += treeToMarkdown(n.children, depth + 1);
-      }
-    } else {
-      const doneMark = n.done ? ' ✅' : n.difficulty === 'hard' ? ' ⚠️' : '';
-      md += `${'#'.repeat(depth)} ${n.title}${doneMark}\n`;
-      if (n.children.length > 0) {
-        n.children.sort((a, b) => a.order - b.order);
-        md += treeToMarkdown(n.children, depth + 1);
-      }
+function serializeSvg(svgElement) {
+  const clone = svgElement.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const viewBox = clone.getAttribute('viewBox');
+  if (viewBox) {
+    const parts = viewBox.trim().split(/\s+/).map(Number);
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      clone.setAttribute('width', String(parts[2]));
+      clone.setAttribute('height', String(parts[3]));
     }
+  } else {
+    const bounds = svgElement.getBoundingClientRect();
+    const width = Math.max(1, Math.round(bounds.width || svgElement.clientWidth || 1600));
+    const height = Math.max(1, Math.round(bounds.height || svgElement.clientHeight || 900));
+    clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    clone.setAttribute('width', String(width));
+    clone.setAttribute('height', String(height));
   }
-  return md;
+  const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  background.setAttribute('width', '100%');
+  background.setAttribute('height', '100%');
+  background.setAttribute('fill', 'white');
+  clone.insertBefore(background, clone.firstChild);
+  return new XMLSerializer().serializeToString(clone);
 }
 
 export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   const svgRef = useRef(null);
   const mmRef = useRef(null);
   const [error, setError] = useState(null);
+  const [exportFormat, setExportFormat] = useState('markdown');
 
   useEffect(() => {
     if (!plan || !svgRef.current) return;
@@ -73,7 +50,7 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
       const idMap = {};
       function collectIds(nodes) {
         for (const n of nodes) {
-          if (n.id) idMap[n.title] = n.id;
+          if (n.id && n.title) idMap[n.title] = n.id;
           if (n.children) collectIds(n.children);
         }
       }
@@ -91,15 +68,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
 
       const transformer = new Transformer();
       const { root } = transformer.transform(md);
-
-      function attachIds(node) {
-        if (node.children) {
-          for (const child of node.children) {
-            attachIds(child);
-          }
-        }
-      }
-      attachIds(root);
 
       if (mmRef.current) {
         mmRef.current.destroy();
@@ -146,31 +114,92 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
     }
   };
 
-  const handleExportXMind = async () => {
-    const md = treeToMarkdown(buildTree(plan));
-    const markdown = `# ${plan.name}\n${md}`;
-    const blob = new Blob([markdown], { type: 'text/markdown' });
+  const downloadBlob = (blob, extension) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${plan.name.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_')}.md`;
+    a.download = `${sanitizeFilename(plan.name)}.思维导图.${extension}`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const handleExportPng = () => {
+    if (!svgRef.current) return;
+    const svgData = serializeSvg(svgRef.current);
+    const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgData)}`;
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      const width = image.naturalWidth || image.width || 1600;
+      const height = image.naturalHeight || image.height || 900;
+      const scale = 2;
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.scale(scale, scale);
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        if (blob) downloadBlob(blob, 'png');
+      }, 'image/png');
+    };
+    image.onerror = () => setError('PNG 导出失败，请改用 SVG 格式');
+    image.src = dataUrl;
+  };
+
+  const handleExport = () => {
+    const tree = buildTree(plan);
+    if (exportFormat === 'markdown') {
+      const markdown = `# ${plan.name}\n\n${treeToMarkdown(tree)}`;
+      downloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), 'md');
+      return;
+    }
+    if (exportFormat === 'json') {
+      downloadBlob(new Blob([JSON.stringify({ name: plan.name, tree: treeToJson(tree) }, null, 2)], { type: 'application/json;charset=utf-8' }), 'json');
+      return;
+    }
+    if (exportFormat === 'opml') {
+      downloadBlob(new Blob([treeToOpml(plan.name, tree)], { type: 'text/x-opml;charset=utf-8' }), 'opml');
+      return;
+    }
+    if (exportFormat === 'svg') {
+      if (!svgRef.current) return;
+      downloadBlob(new Blob([serializeSvg(svgRef.current)], { type: 'image/svg+xml;charset=utf-8' }), 'svg');
+      return;
+    }
+    if (exportFormat === 'png') handleExportPng();
+  };
+
   return (
     <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50' onClick={onClose}>
-      <div className='flex flex-col w-[90vw] h-[85vh] max-w-6xl rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
+      <div role='dialog' aria-modal='true' aria-labelledby='mind-map-title' className='flex flex-col w-[calc(100vw-1rem)] h-[calc(100vh-1rem)] sm:w-[calc(100vw-2rem)] sm:h-[calc(100vh-2rem)] max-w-none rounded-lg border bg-card shadow-lg' onClick={e => e.stopPropagation()}>
         <div className='flex items-center justify-between border-b px-4 py-2.5'>
-          <span className='flex items-center gap-2 text-sm font-medium'>
+          <span id='mind-map-title' className='flex min-w-0 items-center gap-2 text-sm font-medium'>
             <Brain className='h-4 w-4 text-primary' />
-            思维导图 — {plan.name}
+            <span className='truncate'>思维导图 — {plan.name}</span>
           </span>
           <div className='flex items-center gap-1'>
-            <Button variant='ghost' size='sm' onClick={handleExportXMind} title='导出 XMind 兼容格式'>
-              <Download className='h-3.5 w-3.5 mr-1' />导出
+            <select
+              aria-label='导出格式'
+              value={exportFormat}
+              onChange={event => setExportFormat(event.target.value)}
+              className='h-8 rounded-md border bg-background px-2 text-xs'
+            >
+              <option value='markdown'>Markdown</option>
+              <option value='svg'>SVG</option>
+              <option value='png'>PNG</option>
+              <option value='json'>JSON</option>
+              <option value='opml'>OPML</option>
+            </select>
+            <Button variant='ghost' size='icon' className='h-8 w-8' onClick={handleExport} aria-label='导出思维导图' title='导出思维导图'>
+              <Download className='h-4 w-4' />
             </Button>
-            <Button variant='ghost' size='icon' onClick={onClose}><X className='h-4 w-4' /></Button>
+            <Button variant='ghost' size='icon' className='h-8 w-8' onClick={() => mmRef.current?.fit?.()} aria-label='适应视图' title='适应视图'>
+              <Maximize2 className='h-4 w-4' />
+            </Button>
+            <Button variant='ghost' size='icon' onClick={onClose} aria-label='关闭思维导图'><X className='h-4 w-4' /></Button>
           </div>
         </div>
         <div className='flex-1 overflow-auto p-4'>
@@ -184,7 +213,7 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
             </div>
           )}
         </div>
-        <div className='flex items-center gap-3 border-t px-4 py-1.5 text-xs text-muted-foreground'>
+        <div className='flex shrink-0 items-center gap-3 overflow-x-auto whitespace-nowrap border-t px-4 py-1.5 text-xs text-muted-foreground'>
           <span>点击节点跳转到知识点</span>
           <span className='text-border'>|</span>
           <span>滚轮缩放</span>

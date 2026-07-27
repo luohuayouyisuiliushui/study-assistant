@@ -2,7 +2,20 @@
 
 > 依据 `C:\.a\提示词\审查并修改项目.txt` 第 11 步终检归档。
 > 原始终检分支：`codex/fix-review-followups`；原始验收版本：`1.12.3`。
-> 当前发布版本：[`v1.13.2`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.13.2)；复核日期：2026-07-27。
+> 当前发布版本：[`v1.14.0`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.14.0)；复核日期：2026-07-27。
+
+## v1.14.0 发布补充
+
+`v1.14.0` 在 `v1.13.2` 稳定性基线上完成可视化与学习画像升级：
+
+| 范围 | 当前实现 | 回归证据 |
+|---|---|---|
+| 知识图谱 | 近全屏画布；大型图谱自动聚合为主题骨架；支持完整视图、横/纵布局、缩放平移、适应视图、关系筛选、节点高亮和 JSON/SVG/PNG/Markdown 导出 | `KnowledgeGraphModal.test.jsx`、`knowledge-graph-layout.test.js`；真实页面验证 13/64 切换与节点选中 |
+| 思维导图 | 近全屏查看与适应视图；提供真实 Markdown、SVG、PNG、结构化 JSON、OPML 导出 | `MindMapModal.test.jsx`；真实 OPML 下载文件名验证 |
+| 学习画像 | 总时长、近 7/30 天、日均与峰值统一显示小时/分钟；提问风格按真实问题分类；画像增加可信度、样本量、活跃日和行为证据 | `UserProfile.test.jsx`、`user-profile.test.js`；桌面/移动端画像检查 |
+| 菜单可用性 | 修复计划概览容器裁剪“更多操作”菜单的问题 | 桌面 Playwright 手动检查 |
+
+版本发布证据：三个 `package.json` 均为 `1.14.0`；数据完整性检查通过；本次发布未引入依赖变更。
 
 ## v1.13.2 发布补充
 
@@ -18,16 +31,17 @@
 
 版本发布证据：三个 `package.json` 均为 `1.13.2`；前序功能版 `v1.13.1` 指向版本校正提交 `281205e`，本次文档同步提交作为 `v1.13.2` 的 tag 与 GitHub Latest Release 目标。
 
-### 当前验证基线
+## 当前验证基线（v1.14.0）
 
 | 套件 | 结果 |
 |---|---|
-| Server | 538 pass / 0 fail |
-| Client | 14 个测试文件，100 pass / 0 fail |
-| Client lint | 0 errors / 29 warnings |
+| Server | 540 pass / 0 fail |
+| Client | 16 个测试文件，112 pass / 0 fail |
+| Client lint | 0 errors / 27 warnings |
 | Server lint | 0 errors / 105 warnings |
 | Client build | Vite production build success |
-| UI 验证 | Playwright 桌面与移动端关键交互通过 |
+| 数据完整性 | `npm run check:data --prefix server` 通过 |
+| UI 验证 | Playwright 桌面与移动端关键交互、图谱切换/高亮及导出通过 |
 
 Playwright 检查为发布前手动验证，仓库尚未保存独立 E2E 套件。需要真实付费 API 的生成链路仍受下文“端到端验证”限制约束。
 
@@ -207,4 +221,4 @@ Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consist
 - Lint：0 errors，29 warnings（43 -> 29）
 - 未完成 TODO：0
 
-当前 `v1.13.2` 指标以本文顶部“当前验证基线”为准；原始数字保留用于证明当时验收，不代表最新测试总数。
+当前 `v1.14.0` 指标以本文顶部“当前验证基线”为准；原始数字保留用于证明当时验收，不代表最新测试总数。

@@ -1,19 +1,19 @@
 # 模块清单与评估
 
-> 本文件最初由审查边界（提示词第一部分）生成，并于 2026-07-27 按 `v1.13.2` 重新核对。当前证据来自源码树、Server 538 项测试、Client 100 项测试、前后端 Oxlint、生产构建、`docs/compose/reports/security-audit.md` 与 `docs/data-flywheel-audit.md`。
+> 本文件最初由审查边界（提示词第一部分）生成，并于 2026-07-27 按 `v1.14.0` 重新核对。当前证据来自源码树、Server 540 项测试、Client 112 项测试、前后端 Oxlint、数据完整性检查、生产构建、`docs/compose/reports/security-audit.md` 与 `docs/data-flywheel-audit.md`。
 >
-> 各模块行数是 `v1.13.2` 快照，不是接口契约；历史审查基线与完整执行证据保留在 `FINAL_REPORT.md`。
+> 各模块行数是 `v1.14.0` 快照，不是接口契约；历史审查基线与完整执行证据保留在 `FINAL_REPORT.md`。
 
 ## 项目元数据
 
 | 字段 | 值 |
 |---|---|
 | 仓库根 | `c:\.a\study-assistant` |
-| 当前发布 | [`v1.13.2`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.13.2) |
-| 根 `package.json` 版本 | 1.13.2 |
-| `server/package.json` 版本 | 1.13.2 |
-| `client/package.json` 版本 | 1.13.2 |
-| `README.md` 标注版本 | 1.13.2 |
+| 当前发布 | [`v1.14.0`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.14.0) |
+| 根 `package.json` 版本 | 1.14.0 |
+| `server/package.json` 版本 | 1.14.0 |
+| `client/package.json` 版本 | 1.14.0 |
+| `README.md` 标注版本 | 1.14.0 |
 | 测试框架 | Server: `node --test --test-concurrency=1`；Client: `vitest + jsdom` |
 | Lint | `oxlint`（前后端各自配置） |
 | 持久化 | JSON 文件 + 原子写入 + 双层备份（无数据库） |
@@ -32,7 +32,7 @@
 | `CHANGELOG.md` | 缺失 | 当前版本历史由 GitHub Releases 与 Git commit 承载 |
 | CI 配置 | 缺失 | 无 `.github/workflows/` 或其它 CI 配置；测试仅本地手动 |
 | `npm audit` | 已执行（原始终检） | 结果与限制见 `FINAL_REPORT.md` 的“原始终检依赖审计” |
-| 持久化 E2E 套件 | 缺失 | `v1.13.2` 复用已通过的桌面/移动 Playwright 发布检查，但脚本未纳入仓库 |
+| 持久化 E2E 套件 | 缺失 | `v1.14.0` 复用已通过的桌面/移动 Playwright 发布检查，但临时脚本不纳入仓库 |
 
 ---
 
@@ -158,7 +158,7 @@
 
 ### M5. 自适应与画像（server/engine/adaptive-engine.js, user-profile.js, fact-checker.js）
 
-- **路径**：`server/engine/adaptive-engine.js`（783 行）、`server/engine/user-profile.js`（413 行）、`server/engine/fact-checker.js`（459 行）
+- **路径**：`server/engine/adaptive-engine.js`（783 行）、`server/engine/user-profile.js`（433 行）、`server/engine/fact-checker.js`（459 行）
 - **职责**：错误状态机、自适应 prompt 注入、干预推荐、跨计划学习画像、事实核查
 - **入口方式**：`import { ErrorStateMachine, AdaptivePromptInjector, InterventionRecommender } from './engine/adaptive-engine.js'`
 - **内部依赖**：`user-profile.js`、`learn-store.js`、`provider.js`
@@ -169,7 +169,7 @@
 
 ① 结构：三个子模块（ErrorStateMachine / AdaptivePromptInjector / InterventionRecommender）共存于 `adaptive-engine.js`。`user-profile.js` 独立。`fact-checker.js` 独立（最近重构过，`findClaimLocation` 精确匹配）。
 
-② 逻辑与协议：允许列表（persona types / modes）严格校验。`MIN_BEHAVIOR_SAMPLES = 3` 防止小样本噪声。`sanitize` / `sanitizeList` 防注入。事实/评分路径与个性化路径显式隔离。
+② 逻辑与协议：允许列表（persona types / modes）严格校验。`MIN_BEHAVIOR_SAMPLES = 3` 防止小样本噪声。提问风格从当前问答历史按原理、实践、对比、确认、场景与持续追问分类；展示接口会重算行为字段，清除旧 AI 诊断文本与无依据的早晚偏好。`sanitize` / `sanitizeList` 防注入。事实/评分路径与个性化路径显式隔离。
 
 ③ 测试：覆盖充分（错误状态机、注入器、推荐器、画像更新、事实核查）。`batch6-core.test.js` 30 tests 覆盖飞轮核心。
 
@@ -354,24 +354,24 @@
 
 ### M12. 客户端组件（client/src/components/）
 
-- **路径**：`PlanView.jsx`（718 行）、`TopicDetail.jsx`（1316 行）、`KnowledgeGraphModal.jsx`（604 行）、`ExamPaperModal.jsx`（536 行）、`PlanList.jsx`（373 行）、`SettingsModal.jsx`（326 行）、`MediaViewer.jsx`（426 行）、`MermaidDiagram.jsx`（175 行）等 17 个组件
+- **路径**：`PlanView.jsx`（718 行）、`TopicDetail.jsx`（1316 行）、`KnowledgeGraphModal.jsx`（767 行）、`MindMapModal.jsx`（230 行）、`UserProfile.jsx`（546 行）、`MediaViewer.jsx`（426 行）、`MermaidDiagram.jsx`（175 行）等业务组件
 - **职责**：业务 UI 组件
 - **入口方式**：`App.jsx` 引用
 - **内部依赖**：`ui/` 原子组件、`api.js`、`lib/` 工具
 - **外部依赖**：`react`、`recharts`、`mermaid`、`markmap-lib/view`、`lucide-react`
-- **已知测试路径**：`client/src/test/*.test.{js,jsx}`（14 个测试文件）
+- **已知测试路径**：`client/src/test/*.test.{js,jsx}`（16 个测试文件）
 
 #### 评估
 
-① 结构：业务组件 + `ui/` 手写 shadcn 组件。`MediaViewer` 统一承载位图/Mermaid 全屏工具；`TopicDetail.jsx` 1316 行偏大。
+① 结构：业务组件 + `ui/` 手写 shadcn 组件。`MediaViewer` 统一承载位图/Mermaid 全屏工具；知识图谱布局和思维导图导出逻辑已下沉到 `lib/`；`TopicDetail.jsx` 1316 行偏大。
 
-② 逻辑与协议：使用 React 19 + Hooks。`TopicDetail` 包含生成/配图/TTS/互动/练习/考试、资源推荐和顶部感应导航。`MermaidDiagram` 首次懒渲染，后续源码变化等待显式重绘。
+② 逻辑与协议：使用 React 19 + Hooks。`TopicDetail` 包含生成/配图/TTS/互动/练习/考试、资源推荐和顶部感应导航。`MermaidDiagram` 首次懒渲染，后续源码变化等待显式重绘。大型知识图谱自动聚合根主题并允许切换完整视图；思维导图提供 Markdown/SVG/PNG/JSON/OPML 导出；画像时长只以小时/分钟呈现。
 
-③ 测试：14 个测试文件、100 项测试通过。新增覆盖全屏媒体变换/编辑/保存、Mermaid 手动重绘与 StrictMode 单次渲染、资源空缓存及悬浮导航行为。
+③ 测试：16 个测试文件、112 项测试通过。新增覆盖知识图谱聚合、Mermaid 节点 ID 映射、视图切换、思维导图结构化导出，以及画像时间和提问风格展示。
 
 ④ 依赖与副作用：浏览器 DOM。无直接文件系统副作用。
 
-⑤ 异味与可维护性：`TopicDetail.jsx` 1316 行单文件偏大。Client lint 为 29 个 warning / 0 error，其中仍有需要逐项重构的 Hooks 依赖告警。
+⑤ 异味与可维护性：`TopicDetail.jsx` 1316 行单文件偏大。Client lint 为 27 个 warning / 0 error，其中仍有需要逐项重构的 Hooks 依赖告警。
 
 ⑥ 风险与改进点：
 - **中** 剩余 Hooks 依赖告警需逐条用行为测试保护后再重构，避免补依赖触发重复请求
@@ -410,12 +410,12 @@
 
 ### M14. 客户端工具与上下文（client/src/lib/, client/src/utils/）
 
-- **路径**：`lib/mermaid-source.js`、`mermaid-renderer.js`、`plan-context.jsx`、`settings-storage.js`、`theme-context.jsx`、`utils.js`、`utils/encoding.js`
-- **职责**：Mermaid 源码规范化与渲染、计划上下文、设置存储、主题上下文、通用工具、编码工具
+- **路径**：`lib/knowledge-graph-layout.js`、`mind-map-export.js`、`mermaid-source.js`、`mermaid-renderer.js`、`plan-context.jsx`、`settings-storage.js`、`theme-context.jsx`、`utils.js`、`utils/encoding.js`
+- **职责**：知识图谱聚合、思维导图结构化导出、Mermaid 源码规范化与渲染、计划上下文、设置存储、主题上下文、通用工具、编码工具
 - **入口方式**：组件引用
 - **内部依赖**：无
 - **外部依赖**：无
-- **已知测试路径**：`client/src/test/mermaid-source.test.js`、`MermaidDiagram.test.jsx`、`settings-storage.test.js`
+- **已知测试路径**：`client/src/test/knowledge-graph-layout.test.js`、`MindMapModal.test.jsx`、`mermaid-source.test.js`、`MermaidDiagram.test.jsx`、`settings-storage.test.js`
 
 #### 评估
 
@@ -423,7 +423,7 @@
 
 ② 逻辑与协议：`settings-storage.js` 使用 localStorage。`plan-context.jsx` 提供 React context。
 
-③ 测试：Mermaid 源码、渲染触发策略和设置存储有测试。
+③ 测试：图谱聚合、思维导图 OPML/JSON/Markdown、Mermaid 源码与渲染触发策略、设置存储均有测试。
 
 ④ 依赖与副作用：localStorage。
 
@@ -481,10 +481,10 @@
 
 ④ 依赖与副作用：无。
 
-⑤ 异味与可维护性：9 个已跟踪 Markdown 已在 `v1.13.2` 统一复核；历史报告通过明确的快照标签与当前状态区分。
+⑤ 异味与可维护性：9 个已跟踪 Markdown 已在 `v1.14.0` 统一复核；历史报告通过明确的快照标签与当前状态区分。
 
 ⑥ 风险与改进点：
-- **已关闭** README、三个 package 与发布链接均同步到 `v1.13.2`
+- **已关闭** README、三个 package 与发布链接均同步到 `v1.14.0`
 - **已关闭** `security-audit.md` 已补 2026-07-27 复核状态
 
 状态：`[已评估]`
@@ -518,16 +518,18 @@
 | 清理脚本 | [已有] clean-test-plans | [已有] 空目录 | [已有] 损坏索引 | [已有] | [已有] |
 | 前端 PlanView | [已有] PlanView.test | [已有] 空计划 | [缺失待补] API 错误 | [已有] | [已有] |
 | 前端 TopicDetail | [已有] TopicDetail.test | [已有] 无 detail | [缺失待补] 生成失败 | [已有] | [已有] |
-| 前端 KnowledgeGraph | [已有] KnowledgeGraphModal.test | [已有] 空图谱 | [缺失待补] 损坏数据 | [已有] | [已有] |
+| 前端 KnowledgeGraph | [已有] KnowledgeGraphModal.test | [已有] 聚合/完整切换 | [已有] API 错误 | [已有] 节点 ID 映射 | [已有] Mermaid DOM |
+| 前端 MindMap | [已有] MindMapModal.test | [已有] 结构化树 | [已有] PNG fallback 文案 | [已有] 五种导出 | [已有] Markmap |
 | 前端 MediaViewer | [已有] MediaViewer.test | [已有] SVG/位图 | [已有] 编辑失败信息 | [已有] 下载变换 | [已有] TopicDetail |
 | 前端 Mermaid | [已有] MermaidDiagram.test | [已有] StrictMode/源码变化 | [已有] 语法失败重试 | [已有] 手动重绘 | [已有] MediaViewer |
 
-## 当前验证基线（v1.13.2）
+## 当前验证基线（v1.14.0）
 
 | 测试套件 | 命令 | 退出码 | 通过/失败 | 分类 |
 |---|---|---|---|---|
-| Server | `npm test --prefix server` | 0 | 538 / 0 | 全部通过 |
-| Client | `npm test --prefix client` | 0 | 100 / 0 | 全部通过 |
+| Server | `npm test --prefix server` | 0 | 540 / 0 | 全部通过 |
+| Client | `npm test --prefix client` | 0 | 112 / 0 | 全部通过 |
 | Server Lint | `npm run lint --prefix server` | 0 | 105 警告 / 0 错误 | 既有 warning，无 error |
-| Client Lint | `npm run lint --prefix client` | 0 | 29 警告 / 0 错误 | 低于 30 的验收阈值 |
+| Client Lint | `npm run lint --prefix client` | 0 | 27 警告 / 0 错误 | 低于 30 的验收阈值 |
 | Client Build | `npm run build --prefix client` | 0 | production build success | 全部通过 |
+| Data Integrity | `npm run check:data --prefix server` | 0 | all checks passed | 全部通过 |
