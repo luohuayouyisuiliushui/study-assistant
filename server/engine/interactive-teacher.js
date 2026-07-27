@@ -523,6 +523,12 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
     throw new Error('当前没有互动讲解会话，请先点击「分段讲解」或「实时互动」开始');
   }
   const session = topic.interactiveSession;
+  // Guard against concurrent continue calls (e.g. user double-clicks): if a
+  // previous continue is still in flight, refuse rather than letting two
+  // streaming responses race to overwrite topic.interactiveSession.
+  if (session.status === 'ai_thinking') {
+    throw new Error('上一条回复仍在生成中，请等待当前回复完成后再发送下一条消息');
+  }
   if (session.finished) {
     session.finished = false;
   }

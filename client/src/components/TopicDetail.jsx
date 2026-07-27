@@ -199,6 +199,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }
   }, [urlMode]);
 
+  // NOTE: URL-driven effect — only re-run when urlReview changes; other state is intentionally captured
   useEffect(() => {
     if (urlReview && !reviewMode) {
       setReviewMode(true);
@@ -236,6 +237,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   }, []);
 
   // Auto-infer topic relationships when viewing a topic with no relationship data
+  // NOTE: only re-run when plan/topic changes; reading plan.topics/plan.relationsInferredAt inside is intentional
   useEffect(() => {
     if (!plan || !topic || relationsInferredRef.current) return;
     if (plan.relationsInferredAt) { relationsInferredRef.current = true; return; }
@@ -261,6 +263,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     });
   }, [plan?.id, topic?.id]);
 
+  // NOTE: time-tracking effect — only re-run when topic changes; plan.id read inside is intentional
   useEffect(() => {
     const pid = plan?.id;
     const tid = topic?.id;
@@ -341,6 +344,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     };
   }, [topic?.id]);
 
+  // NOTE: sync local state from topic on topic switch only; reading topic.detail/topic.lastError/plan.history inside is intentional
   useEffect(() => {
     setLocalDetail(topic?.detail || '');
     setError(topic?.lastError || null);
@@ -359,6 +363,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     });
   }, [topic?.id]);
 
+  // NOTE: exercises sync — parsedExercisesMemo is derived from localDetail, listing it would cause double-trigger
   useEffect(() => {
     if (!localDetail || generating) return;
     if (topic?.exercises && topic.exercises.length > 0) {
@@ -387,6 +392,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // NOTE: auto-generate on topic switch only; genTriggered guards against re-entry, reading topic.detail/topic.done/topic.lastError inside is intentional
   useEffect(() => {
     if (!topic || genTriggered.current) return;
     if (topic.detail && topic.done) { setGenerating(false); return; }
@@ -420,6 +426,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     }
   };
 
+  // NOTE: polling effect keyed on generating/plan/topic; reading localDetail/plan/onRefresh inside is intentional (would cause re-subscribe loops if listed)
   useEffect(() => {
     if (!generating || !plan) return;
     const timer = setInterval(async () => {

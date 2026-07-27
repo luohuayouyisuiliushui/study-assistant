@@ -11,12 +11,12 @@
  * 3. InterventionRecommender — given a plan, identifies which topics need
  *    attention and what kind (review, reteach, simplify, challenge).
  *
- * === DATA FLYWHEEL ===
+ * === DATA FLYWHEEL (v1.6.1) ===
  *
  * The key insight from [[strategic-moat-analysis]]: user profile data must
  * feed back into the prompt strategy. Without this, the AI treats every user
  * identically — a generic ChatGPT wrapper. With it, the system learns the
- * === DATA FLYWHEEL (v1.6.1) ===
+ * individual user's patterns and adapts.
  *
  *   generateDetail() → injects adaptive context from AdaptivePromptInjector
  *          ↓
