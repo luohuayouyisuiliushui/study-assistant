@@ -1,218 +1,109 @@
 # TODO — 项目审查与增量改进
 
-> 由审查边界生成。所有任务初始状态为 `[待处理]`。实施边界按 ID 顺序逐项执行。
+> 由审查边界生成。已完成项已归档至 `FINAL_REPORT.md`，本文件仅保留未完成项。
 >
 > 优先级：H = 高（数据丢失/安全/死代码）；M = 中（功能静默失败/文档不一致）；L = 低（重构/低概率缺陷）。
 
 ---
 
-## H-1：删除 `server/dbg.mjs` 调试残留
-
-- **优先级**：H
-- **目标**：移除仓库中的临时调试脚本
-- **涉及模块/文件**：`server/dbg.mjs`（M10）
-- **预期改动范围**：删除单文件
-- **验收标准**：
-  1. `server/dbg.mjs` 不存在
-  2. `git status` 显示该文件被删除
-  3. `npm test --prefix server` 退出码 0，测试通过数 ≥ 517
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-
----
-
-## H-2：删除 `server/_final.mjs` 一次性重构脚本
-
-- **优先级**：H
-- **目标**：移除已应用过的一次性重构脚本（死代码）
-- **涉及模块/文件**：`server/_final.mjs`（M10）
-- **预期改动范围**：删除单文件
-- **验收标准**：
-  1. `server/_final.mjs` 不存在
-  2. `git status` 显示该文件被删除
-  3. `npm test --prefix server` 退出码 0，测试通过数 ≥ 517
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-
----
-
-## H-3：修复 P0-4 SSE 客户端断开后 API 调用无取消机制
+## H-3：修复 P0-4 SSE 客户端断开后 API 调用无取消机制（部分完成）
 
 - **优先级**：H
 - **目标**：客户端断开 SSE 连接后，底层 AI API 调用应被取消，避免后台继续消耗 tokens
 - **涉及模块/文件**：`server/engine/provider.js`（M2）、`server/routes/content.js`、`server/routes/assessment.js`、`server/routes/learn.js`（M8）
-- **预期改动范围**：
-  1. `provider.js` 的 `stream` / `complete` 方法接受 `signal: AbortSignal` 选项，并透传给 OpenAI SDK 的 `fetch`
-  2. SSE 路由在 `res.on('close')` 中调用 `controller.abort()`
-  3. `withStreamTimeout` 与 signal 协同（Promise.race）
-- **验收标准**：
-  1. `provider.js` 中 `grep -n "signal\|AbortController"` 有匹配
-  2. SSE 路由中 `grep -n "AbortController\|controller.abort"` 有匹配
-  3. 现有测试全部通过（Server ≥ 517，Client ≥ 88）
-  4. 新增单元测试：模拟客户端断开后 provider 不再写入（用 mock provider 验证 signal 被传递）
-- **验证命令**：`npm test --prefix server && npm test --prefix client`
-- **状态**：`[已完成]`
-- **备注**：架构级改动，三层联动（路由 → provider → fetch）。按 AGENTS.md 应在独立分支。
+- **已完成部分**：
+  1. `provider.js` 的 `complete` / `stream` / `streamWithTools` 方法已接受 `signal` 参数
+  2. `server/routes/content.js` 所有 SSE 路由已加 AbortController
+  3. `server/routes/assessment.js` exam 路由已加 AbortController
+  4. `withStreamTimeout` 已与 signal 协同
+- **未完成部分**：验收标准第 4 项"新增单元测试：模拟客户端断开后 provider 不再写入"
+- **验收标准**（剩余）：
+  1. 新增单元测试：mock OpenAI SDK 验证 `signal` 被透传并在 abort 时抛错
+  2. 测试通过
+- **验证命令**：`node --test --test-concurrency=1 server/__tests__/provider.test.js`
+- **状态**：`[部分完成]`
+- **备注**：产品代码修复已落地并运行正常，仅缺测试覆盖。
 
 ---
 
-## H-4：修复 P0-3 `writeQueues` Map 内存泄漏
+## H-4：修复 P0-3 `writeQueues` Map 内存泄漏（部分完成）
 
 - **优先级**：H
 - **目标**：长时间运行的服务器不应在 `writeQueues` Map 中积累已完成 plan 的条目
 - **涉及模块/文件**：`server/engine/store/storage.js`、`server/engine/store/crud.js`（M1）
-- **预期改动范围**：
-  1. `enqueueWrite` 完成后，若队列长度为 1（无后续排队），清理 Map 条目
-  2. 保留 `drainWriteQueue` 作为删除前的强制清空
-  3. 不能用 TTL 自动清理（会断裂 Promise 链）
-- **验收标准**：
-  1. 模拟同一 plan 多次写入完成后，`writeQueues.size` 回到 0
-  2. 模拟并发写入时，`writeQueues` 仍正确串行化
-  3. 现有测试全部通过
-  4. 新增单元测试覆盖上述两个场景
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-- **备注**：架构级改动。security-audit.md 已分析过陷阱（不能用 TTL）。
+- **已完成部分**：
+  1. `storage.js` 的 `enqueueWrite` 完成后通过 `writeQueues.delete(planId)` 清理条目
+  2. 保留 `drainWriteQueue` 作为强制清空
+  3. 场景 2（并发串行化）已有测试覆盖
+- **未完成部分**：验收标准第 4 项场景 1"多次写入完成后 writeQueues.size 回到 0"的单元测试
+- **验收标准**（剩余）：
+  1. 新增单元测试：显式断言 `writeQueues.size === 0` after 多次 enqueueWrite 完成
+  2. 测试通过
+- **验证命令**：`node --test --test-concurrency=1 server/__tests__/storage-logic.test.js`
+- **状态**：`[部分完成]`
+- **备注**：产品代码修复已落地，仅缺 size 回归测试。
 
 ---
 
-## M-1：修复 P1-2 `DiskPrefixCache.flush` 的 `renameSync` 无 EPERM 保护
+## M-1：修复 P1-2 `DiskPrefixCache.flush` 的 `renameSync` 无 EPERM 保护（部分完成）
 
 - **优先级**：M
 - **目标**：Windows 下 `renameSync` 失败时降级为 copy + unlink，与 `writeAtomic` 行为一致
 - **涉及模块/文件**：`server/engine/provider.js`（M2，约 159 行）
-- **预期改动范围**：在 `flush` 方法中包 try-catch，rename 失败时 `copyFileSync + unlinkSync`（unlink 失败安全忽略）
-- **验收标准**：
-  1. `provider.js` 中 `flush` 方法有 copy 降级逻辑
-  2. 现有测试全部通过
-  3. 新增单元测试：mock `renameSync` 抛 EPERM，验证降级路径被触发且 `_dirty` 被正确重置
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-
----
-
-## M-2：补充 P1-5 `encodeForRelay` 测试
-
-- **优先级**：M
-- **目标**：为 `encodeForRelay` 函数补充单元测试，覆盖正常/边界/异常场景
-- **涉及模块/文件**：`server/__tests__/provider.test.js`（新增测试，可能需要先 export `encodeForRelay`）
-- **预期改动范围**：
-  1. 在 `provider.js` 中 export `encodeForRelay`（若未 export）
-  2. 新增测试：正常输入（含 `<>'"` 全部替换）、空字符串、无特殊字符、纯特殊字符、混合中英文
-- **验收标准**：
-  1. `provider.test.js` 中有 `describe('encodeForRelay', ...)` 块
-  2. 至少 5 个测试用例覆盖正常/边界/异常
-  3. 所有测试通过
+- **已完成部分**：`provider.js` 第 162-168 行已实现 EPERM 降级（copyFileSync + unlinkSync）
+- **未完成部分**：验收标准第 3 项"新增单元测试：mock renameSync 抛 EPERM，验证降级路径被触发且 _dirty 被正确重置"
+- **验收标准**（剩余）：
+  1. 新增单元测试：mock `fs.renameSync` 抛 EPERM，验证 copy 降级路径被触发且 `_dirty` 被正确重置
+  2. 测试通过
 - **验证命令**：`node --test --test-concurrency=1 server/__tests__/provider.test.js`
-- **状态**：`[已完成]`
+- **状态**：`[部分完成]`
+- **备注**：产品代码修复已落地，仅缺测试覆盖。
 
 ---
 
-## M-3：同步文档版本号
-
-- **优先级**：M
-- **目标**：`README.md` 和 `AGENTS.md` 中标注的版本号与 `package.json` 一致
-- **涉及模块/文件**：`README.md`、`AGENTS.md`（M16）
-- **预期改动范围**：将 `v1.9.1` 改为 `v1.11.1`（共 2 处：README 标题、AGENTS 项目架构注释）
-- **验收标准**：
-  1. `grep -n "v1\.9\.1\|1\.9\.1"` 在 `README.md` 和 `AGENTS.md` 中无匹配
-  2. `grep -n "1\.11\.1"` 在两文件中各有 1 处匹配
-  3. 结构化走读：正向（版本号一致）+ 反向（无遗漏的旧版本号）
-- **验证命令**：`grep -n "1\.9\.1\|1\.11\.1" README.md AGENTS.md`
-- **状态**：`[已完成]`
-- **备注**：AGENTS.md 在 .gitignore 中，仅更新 README.md。
-
----
-
-## M-4：验证并补全 P1-6 其他 SSE 路由的 `onError` 调用路径
-
-- **优先级**：M
-- **目标**：核查 detail 生成 / 流式追问等 SSE 路由的 `onError` 回调是否被正确触发，避免客户端收不到错误事件
-- **涉及模块/文件**：`server/engine/learn-engine.js`（M3）、`server/routes/content.js`（M8）
-- **预期改动范围**：
-  1. 走读 `streamDetail` 等函数的 catch 块，确认 `onError` 被调用
-  2. 路由层加 `isHeaderSent` 标志区分 SSE 错误 vs JSON 500
-  3. 若已正确则仅补测试，否则补修复
-- **验收标准**：
-  1. 走读记录列出每个 SSE 路由的 onError 调用状态
-  2. 现有测试全部通过
-  3. 若发现未调用的路径，新增测试覆盖
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-- **备注**：核查后确认所有 SSE 路由的 onError 已正确触发，无需修复。
-
----
-
-## M-5：修复 P1-3 `writePlan` 中 `updateIndex` 失败时的索引一致性
+## M-5：修复 P1-3 `writePlan` 中 `updateIndex` 失败时的索引一致性（部分完成）
 
 - **优先级**：M
 - **目标**：`writeAtomic` 成功但 `updateIndex` 失败时，索引应能从磁盘重建或记录告警
 - **涉及模块/文件**：`server/engine/store/crud.js`（M1，约 1153-1170 行）
-- **预期改动范围**：
-  1. `writePlan` 中 `updateIndex` 包 try-catch
-  2. 失败时记录 warn 日志（不阻断主流程，因为 plan 文件已成功写入）
-  3. 下次 `readIndex` 会从磁盘重建（已有 fallback）
-- **验收标准**：
-  1. `writePlan` 中 `updateIndex` 有 try-catch
-  2. 现有测试全部通过
-  3. 新增测试：mock `updateIndex` 抛错，验证 `writePlan` 不抛、plan 文件已写入
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
+- **已完成部分**：`crud.js` 第 1168-1170 行已加 try-catch 与 warn 日志
+- **未完成部分**：验收标准第 3 项"新增测试：mock updateIndex 抛错，验证 writePlan 不抛、plan 文件已写入"
+- **验收标准**（剩余）：
+  1. 新增测试：mock `updateIndex` 抛错，验证 `writePlan` 不抛、plan 文件已写入
+  2. 测试通过
+- **验证命令**：`node --test --test-concurrency=1 server/__tests__/storage-logic.test.js`
+- **状态**：`[部分完成]`
+- **备注**：产品代码修复已落地，仅缺测试覆盖。
 
 ---
 
-## L-1：修复 P1-4 `interactiveSession` 并发覆盖风险
-
-- **优先级**：L
-- **目标**：避免快速点击导致互动会话状态被覆盖
-- **涉及模块/文件**：`server/engine/interactive-teacher.js`（M4）、`server/engine/store/crud.js`（M1）
-- **预期改动范围**：
-  1. `interactiveSession` 写入通过 `writePlan` 而非 `updateTopic`（确保串行化）
-  2. 或在 `updateTopic` 中加乐观锁（version 字段）
-- **验收标准**：
-  1. 模拟并发 continue 调用，会话状态不丢失
-  2. 现有测试全部通过
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-- **备注**：采用 status 检查方案，在 `streamInteractiveContinue` 入口处拒绝 `ai_thinking` 状态的并发调用。
-
----
-
-## L-2：清理 `adaptive-engine.js` 头部重复注释
-
-- **优先级**：L
-- **目标**：移除文件头部重复的 `=== DATA FLYWHEEL ===` 段落
-- **涉及模块/文件**：`server/engine/adaptive-engine.js`（M5，约 1-30 行）
-- **预期改动范围**：删除重复段落，保留一份
-- **验收标准**：
-  1. `adaptive-engine.js` 头部 `DATA FLYWHEEL` 注释只出现一次
-  2. 现有测试全部通过
-- **验证命令**：`npm test --prefix server`
-- **状态**：`[已完成]`
-
----
-
-## L-3：修复 `TopicDetail.jsx` / `PlanView.jsx` 的 `useEffect` 依赖项 lint 警告
+## L-3：修复 `TopicDetail.jsx` / `PlanView.jsx` 的 `useEffect` 依赖项 lint 警告（未完成）
 
 - **优先级**：L
 - **目标**：消除 react-hooks/exhaustive-deps 警告，避免 stale closure
 - **涉及模块/文件**：`client/src/components/TopicDetail.jsx`、`client/src/components/PlanView.jsx`（M12）
-- **预期改动范围**：补全 `useEffect` 依赖数组，或使用 `useCallback` 稳定引用
-- **验收标准**：
-  1. `npm run lint --prefix client` 警告数 ≤ 30（当前 43，目标减少 ≥ 13）
+- **已完成部分**：在 `TopicDetail.jsx` 的 7 个有意限定依赖的 effect 上方加了 NOTE 注释，表达设计意图
+- **未完成部分**：验收标准第 1 项"lint 警告数 ≤ 30"
+- **实际状态**：lint 警告数仍为 43（与改动前相同）
+- **阻塞原因**：oxlint 1.75.0 不识别 `eslint-disable-next-line` 针对此规则的指令；强行补依赖会引入循环或意外重渲染
+- **验收标准**（剩余）：
+  1. `npm run lint --prefix client` 警告数 ≤ 30（当前 43）
   2. 现有客户端测试全部通过
-  3. 手动验证关键路径（生成/刷新/互动）无回归
 - **验证命令**：`npm run lint --prefix client && npm test --prefix client`
-- **状态**：`[已完成]`
-- **备注**：oxlint 1.75.0 不识别 `eslint-disable-next-line` 针对此规则的指令。经评估，这些 effect 均为有意为之的"按 topic.id 变化触发"模式（URL 同步、mount-style 副作用），强行补依赖会引入循环或意外重渲染。采用 NOTE 注释明确表达意图，避免引入新 bug。PlanView.jsx 经检查无 exhaustive-deps 警告。
+- **状态**：`[未完成]`
+- **后续建议**：
+  1. 等 oxlint 后续版本支持 disable 指令后重新评估
+  2. 或立项重构 effect 用 `useRef` + `useCallback` 包裹变量（工作量较大，需独立任务）
 
 ---
 
 ## 总结
 
-| 优先级 | 数量 | ID | 状态 |
-|---|---|---|---|
-| H | 4 | H-1, H-2, H-3, H-4 | 全部完成 |
-| M | 5 | M-1, M-2, M-3, M-4, M-5 | 全部完成 |
-| L | 3 | L-1, L-2, L-3 | 全部完成 |
-| **合计** | **12** | | **全部完成** |
+| 优先级 | 总数 | 已完成 | 部分完成 | 未完成 | ID |
+|---|---|---|---|---|---|
+| H | 4 | 2 | 2 | 0 | H-3, H-4 部分完成 |
+| M | 5 | 3 | 2 | 0 | M-1, M-5 部分完成 |
+| L | 3 | 2 | 0 | 1 | L-3 未完成 |
+| **合计** | **12** | **7** | **4** | **1** | |
+
+> 已完成的 7 项证据已归档至 `FINAL_REPORT.md`。本文件仅保留 5 项未完成/部分完成项。
