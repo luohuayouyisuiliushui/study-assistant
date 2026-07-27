@@ -872,6 +872,7 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
   const result = await provider.complete(messages, {
     temperature: 0.4,
     maxTokens: 2048,
+    timeoutMs: 120_000,
     responseFormat: { type: 'json_object' },
     model,
   });
