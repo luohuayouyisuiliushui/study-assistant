@@ -41,7 +41,6 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
 
   // Server-side persistence
   const [saveToServer, setSaveToServer] = useState(false);
-  const [savingServer, setSavingServer] = useState(false);
   const [serverSaveResult, setServerSaveResult] = useState(null);
 
   const handleTestConnection = async () => {
@@ -79,15 +78,12 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
     saveSettings(settings);
 
     if (saveToServer && apiKey) {
-      setSavingServer(true);
       setServerSaveResult(null);
       try {
         await api.saveEnvKey(apiKey, baseURL, model);
         setServerSaveResult('ok');
       } catch (err) {
         setServerSaveResult(err.message);
-      } finally {
-        setSavingServer(false);
       }
     }
 

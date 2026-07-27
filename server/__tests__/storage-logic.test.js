@@ -17,9 +17,11 @@ import {
   planPath,
   getCachedPlan,
   invalidatePlanCache,
+  writeQueues,
   DATA,
   PLANS_INDEX,
 } from '../engine/store/storage.js';
+import { writePlan } from '../engine/store/crud.js';
 
 // ── Test helpers ──
 
@@ -203,5 +205,80 @@ describe('plan cache', () => {
   it('returns null from loader when no data', () => {
     const result = getCachedPlan('no-data', () => null);
     assert.strictEqual(result, null);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// H-4: writeQueues memory-leak — entries must be cleaned up after writes settle
+// ═══════════════════════════════════════════════════════════
+
+describe('writeQueues cleanup (H-4)', () => {
+  it('deletes Map entry after a single write completes (size returns to 0)', async () => {
+    const id = 'test-leak-single-' + Date.now();
+    const fp = planPath(id);
+    fs.writeFileSync(fp, JSON.stringify(makePlan(id, 'LeakTest')), 'utf-8');
+    tmpFiles.push(fp);
+
+    assert.strictEqual(writeQueues.size, 0, 'writeQueues should be empty before the test');
+    await enqueueWrite(id, () => Promise.resolve());
+    assert.strictEqual(writeQueues.has(id), false, 'writeQueues should not retain entry for id after write settles');
+    assert.strictEqual(writeQueues.size, 0, 'writeQueues.size should return to 0');
+  });
+
+  it('deletes Map entry after multiple sequential writes complete', async () => {
+    const id = 'test-leak-multi-' + Date.now();
+    const fp = planPath(id);
+    fs.writeFileSync(fp, JSON.stringify(makePlan(id, 'LeakTest')), 'utf-8');
+    tmpFiles.push(fp);
+
+    assert.strictEqual(writeQueues.size, 0, 'writeQueues should be empty before the test');
+    await Promise.all([
+      enqueueWrite(id, () => Promise.resolve()),
+      enqueueWrite(id, () => Promise.resolve()),
+      enqueueWrite(id, () => Promise.resolve()),
+    ]);
+    assert.strictEqual(writeQueues.has(id), false, 'writeQueues should not retain entry after multiple writes settle');
+    assert.strictEqual(writeQueues.size, 0, 'writeQueues.size should return to 0 after multiple writes');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// M-5: writePlan index-update fault tolerance
+// ═══════════════════════════════════════════════════════════
+
+describe('writePlan index-update fault tolerance (M-5)', () => {
+  it('does not throw when updateIndex fails; plan file is still written', async () => {
+    const id = 'test-writeplan-index-' + Date.now();
+    const fp = planPath(id);
+    const plan = makePlan(id, 'WritePlanIndexTest');
+    fs.writeFileSync(fp, JSON.stringify(plan), 'utf-8');
+    tmpFiles.push(fp);
+
+    let updateIndexCalls = 0;
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(' '));
+    try {
+      await writePlan(id, (p) => {
+        p.name = 'UpdatedName';
+      }, {
+        updateIndexFn: async () => {
+          updateIndexCalls++;
+          throw new Error('index update failed (simulated)');
+        },
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.strictEqual(updateIndexCalls, 1, 'writePlan should call the injected index updater once');
+    assert.ok(
+      warnings.some(message => message.includes('index update failed (simulated)')),
+      'writePlan should record the non-fatal index failure',
+    );
+    const raw = fs.readFileSync(fp, 'utf-8');
+    const saved = JSON.parse(raw);
+    assert.strictEqual(saved.name, 'UpdatedName', 'plan file reflects the mutation even if index update failed');
+    assert.deepStrictEqual(saved.topics, [], 'the persisted plan should remain structurally valid');
   });
 });

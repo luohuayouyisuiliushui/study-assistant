@@ -61,7 +61,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
   const svgRef = useRef(null);
   const mmRef = useRef(null);
   const [error, setError] = useState(null);
-  const [topicIdMap, setTopicIdMap] = useState({});
 
   useEffect(() => {
     if (!plan || !svgRef.current) return;
@@ -80,7 +79,6 @@ export default function MindMapModal({ plan, onClose, onSelectTopic }) {
       }
       const tree = buildTree(plan);
       collectIds(tree);
-      setTopicIdMap(idMap);
 
       const md = treeToMarkdown(tree);
       if (!md.trim()) {

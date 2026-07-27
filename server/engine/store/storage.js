@@ -324,4 +324,5 @@ export {
   planPath,
   getCachedPlan,
   invalidatePlanCache,
+  writeQueues,
 };

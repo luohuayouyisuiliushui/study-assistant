@@ -1,4 +1,4 @@
-# Study Assistant v1.11.1
+# Study Assistant v1.12.3
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 

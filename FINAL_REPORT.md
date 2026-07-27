@@ -1,226 +1,180 @@
-# FINAL_REPORT — 项目审查与增量改进
+# FINAL_REPORT - 项目审查与增量改进
 
-> 依据提示词第 11 步生成。归档已完成任务的证据，记录未完成项，清理 TODO.md。
-
----
+> 依据 `C:\.a\提示词\审查并修改项目.txt` 第 11 步终检归档。
+> 终检分支：`codex/fix-review-followups`；版本：`1.12.3`。
 
 ## 任务总览
 
-| 项 | 数量 |
-|---|---|
-| 总数 | 12 |
-| 已完成（验收标准全部满足） | 7 |
-| 部分完成（核心改动已实施，但验收标准中要求的"新增单元测试"未补） | 4 |
-| 未完成 | 1 |
-| 用户保护跳过数 | 0 |
+| 项目 | 数量 |
+|---|---:|
+| 审查任务总数 | 12 |
+| 验收标准全部满足 | 12 |
+| 因用户改动保护跳过 | 0 |
+| 未完成 | 0 |
 
-- **已完成 7 项**：H-1, H-2, M-2, M-3, M-4, L-1, L-2
-- **部分完成 4 项**：H-3, H-4, M-1, M-5（产品代码修复已落地，但验收标准要求的对应单元测试未补）
-- **未完成 1 项**：L-3（lint 警告数仍为 43，未达到 ≤ 30 的目标）
-
----
+Reasonix 在本会话中不可用，按提示词约定使用本地 PowerShell、Git、ripgrep、Node Test Runner、Vitest 和 Playwright 完成验证。用户要求 SOLO Agent，本次未使用子 Agent。
 
 ## 已完成任务证据
 
-### H-1：删除 `server/dbg.mjs` 调试残留
+### H-1：删除 `server/dbg.mjs`
 
-- **改动文件**：删除 `server/dbg.mjs`
-- **执行命令及退出码**：`npm test --prefix server` → exit 0
-- **测试结果**：524 pass / 0 fail
-- **验证证据**：`Glob server/dbg.mjs` → No file found
-- **遗留风险**：无
+- **改动文件与摘要**：`server/dbg.mjs` 已在 `ae8914b` 删除。
+- **验证**：`Test-Path server\dbg.mjs` -> `False`，退出码 0。
+- **测试结果**：Server 全量测试 536/536 通过。
+- **遗留风险**：无。
 
-### H-2：删除 `server/_final.mjs` 一次性重构脚本
+### H-2：删除 `server/_final.mjs`
 
-- **改动文件**：删除 `server/_final.mjs`
-- **执行命令及退出码**：`npm test --prefix server` → exit 0
-- **测试结果**：524 pass / 0 fail
-- **验证证据**：`Glob server/_final.mjs` → No file found
-- **遗留风险**：无
+- **改动文件与摘要**：`server/_final.mjs` 已在 `ae8914b` 删除。
+- **验证**：`Test-Path server\_final.mjs` -> `False`，退出码 0。
+- **测试结果**：Server 全量测试 536/536 通过。
+- **遗留风险**：无。
+
+### H-3：SSE 客户端断开后取消底层 AI 请求
+
+- **改动文件与摘要**：
+  - `server/engine/provider.js`：`complete`、`stream`、`streamWithTools` 将 `AbortSignal` 传给 SDK；流读取在 abort 后停止分发 chunk。
+  - `server/routes/content.js`、`server/routes/assessment.js`、`server/engine/exam-engine.js`：SSE 关闭事件连接到 `AbortController`。
+  - `server/__tests__/provider.test.js`：新增 5 个回归测试，覆盖三个 provider 入口、预先 abort 和流中 abort。
+- **验证**：`rg -c "opts\.signal" server/engine/provider.js` -> 15；content/assessment 共匹配 8 处 controller 创建或 abort。
+- **测试结果**：`node --test --test-concurrency=1 --test-force-exit __tests__/provider.test.js` -> 57 pass / 0 fail；流中 abort 后 `onChunk` 仅收到 abort 前内容。
+- **遗留风险**：真实上游供应商是否立即停止计费取决于其对 HTTP abort 的实现；本地 SDK 透传与停止回调已锁定。
+
+### H-4：清理 `writeQueues` 已完成条目
+
+- **改动文件与摘要**：
+  - `server/engine/store/storage.js`：成功或失败的最后一个写任务 settled 后删除对应 Map 条目，并导出 `writeQueues` 供回归测试观察。
+  - `server/__tests__/storage-logic.test.js`：新增单次和同一 plan 多次排队测试。
+- **验证**：测试在执行前及完成后均显式断言 `writeQueues.size === 0`；原有串行顺序测试继续通过。
+- **测试结果**：`node --test --test-concurrency=1 --test-force-exit __tests__/storage-logic.test.js` -> 17 pass / 0 fail。
+- **遗留风险**：`writeQueues` 导出扩大了内部可观察面，但未从 `learn-store.js` barrel 对外暴露。
+
+### M-1：`DiskPrefixCache.flush` 的 Windows EPERM 降级
+
+- **改动文件与摘要**：
+  - `server/engine/provider.js`：rename 失败后使用 copy + unlink；仅在成功持久化后清除 `_dirty`；导出 `DiskPrefixCache` 作为测试 seam。
+  - `server/__tests__/provider.test.js`：mock `renameSync` 抛 EPERM，验证 copy、unlink、文件内容和 `_dirty`；另覆盖 fallback 也失败的非致命路径。
+- **测试结果**：Provider 定向测试 57 pass / 0 fail。
+- **验证限制**：测试使用独立的系统临时目录并在 finally 中清理；没有操作项目数据目录。
+- **遗留风险**：copy fallback 非原子，这是 Windows rename 不可用时的有意降级。
 
 ### M-2：补充 `encodeForRelay` 测试
 
-- **改动文件**：`server/__tests__/provider.test.js`（新增 describe 块，9 个测试用例）；`server/engine/provider.js`（export `encodeForRelay`）
-- **执行命令及退出码**：`node --test --test-concurrency=1 server/__tests__/provider.test.js` → exit 0
-- **测试结果**：全部通过
-- **验证证据**：`Grep encodeForRelay server/__tests__/provider.test.js` → 11 处匹配（含 describe + 9 个 assert）
-- **遗留风险**：无
+- **改动文件与摘要**：`server/engine/provider.js` 导出函数；`server/__tests__/provider.test.js` 新增 7 个用例。
+- **覆盖**：尖括号、单双引号、普通文本、空字符串、代码片段、中文混合和幂等性，满足至少 5 个用例的标准。
+- **测试结果**：Provider 定向测试 57 pass / 0 fail。
+- **遗留风险**：无。
 
-### M-3：同步文档版本号
+### M-3：同步项目版本号
 
-- **改动文件**：`README.md`（v1.9.1 → v1.11.1）
-- **执行命令及退出码**：结构化走读
-- **验证证据**：
-  - 正向：`Grep "1\.11\.1" README.md` → 1 处匹配（标题）
-  - 反向：`Grep "1\.9\.1" README.md` → 0 处匹配
-- **备注**：AGENTS.md 在 .gitignore 中，仅更新 README.md
-- **遗留风险**：无
+- **改动文件与摘要**：根、server、client 三个 `package.json` 和 `README.md` 同步为 `1.12.3`；被 `.gitignore` 忽略的本地 `AGENTS.md` 架构注释也同步为 `v1.12.3`，不进入提交。
+- **验证**：三个 package 的 `version` 均为 `1.12.3`，README 第一行为 `Study Assistant v1.12.3`。
+- **遗留风险**：三个历史 `package-lock.json` 的根版本字段仍为 `1.9.1`；仓库规则仅要求三个 `package.json` 同步，本次未机械改锁文件。
 
-### M-4：验证 SSE 路由 `onError` 调用路径
+### M-4：核查 SSE 错误回调路径
 
-- **改动文件**：无（核查后确认无需修复）
-- **执行命令及退出码**：`npm test --prefix server` → exit 0
-- **测试结果**：524 pass / 0 fail
-- **验证证据**：走读 `server/routes/content.js` 与 `server/engine/learn-engine.js` 的所有 SSE 路由 catch 块，确认 `onError` / `writeEvent` 在错误路径均被调用
-- **遗留风险**：无
+- **改动文件与摘要**：无需新增产品改动；已走读 SSE 路由 catch/finally 路径，错误会通过 `onError` 或 SSE error event 返回。
+- **验证**：H-3 的 abort 测试和 Server 全量 536 项测试通过。
+- **验证限制**：未使用真实收费 AI API 制造上游错误。
+- **遗留风险**：不同供应商的非标准流错误仍依赖 provider 的通用异常映射。
 
-### L-1：修复 `interactiveSession` 并发覆盖风险
+### M-5：`writePlan` 容忍异步索引更新失败
 
-- **改动文件**：`server/engine/interactive-teacher.js`（在 `streamInteractiveContinue` 入口处加 status 检查）
-- **执行命令及退出码**：`npm test --prefix server` → exit 0
-- **测试结果**：524 pass / 0 fail
-- **验证证据**：`Grep "ai_thinking" server/engine/interactive-teacher.js` → 第 529-530 行有 status 检查与错误抛出
-- **遗留风险**：仅在 `streamInteractiveContinue` 入口检查，未覆盖其他并发入口
+- **改动文件与摘要**：
+  - `server/engine/store/crud.js`：队列回调改为 async，并 `await updateIndexFn(...)`，确保 Promise rejection 落入非致命 catch；第三参数允许测试注入 updater，现有两参数调用不变。
+  - `server/__tests__/storage-logic.test.js`：注入异步 reject 的 updater，验证调用一次、告警产生、`writePlan` 不抛且有效 plan 已持久化。
+- **红灯证据**：修复前新测试失败，`updateIndexCalls` 为 0；旧测试通过 `topics = undefined` 触发的是同步 TypeError，不能代表真实异步失败。
+- **绿灯证据**：修复后 Storage 定向测试 17 pass / 0 fail；`rg` 命中 `await updateIndexFn` 与非致命告警。
+- **遗留风险**：索引写失败后仍需后续 `rebuildIndex()` 对账，这是原设计的最终一致性策略。
 
-### L-2：清理 `adaptive-engine.js` 头部重复注释
+### L-1：阻止 `interactiveSession` 并发覆盖
 
-- **改动文件**：`server/engine/adaptive-engine.js`（移除头部重复的 DATA FLYWHEEL 段落）
-- **执行命令及退出码**：`npm test --prefix server` → exit 0
-- **测试结果**：524 pass / 0 fail
-- **验证证据**：`Grep "DATA FLYWHEEL" server/engine/adaptive-engine.js` → 头部 JSDoc 只在第 14 行出现一次（259、713 是文件内部引用，非头部重复段落）
-- **遗留风险**：无
+- **改动文件与摘要**：`server/engine/interactive-teacher.js` 在 continue 入口拒绝 `ai_thinking` 状态的并发请求。
+- **验证**：`rg -n "ai_thinking"` 命中入口 guard；Server 全量测试 536/536 通过。
+- **遗留风险**：保护点位于 continue 入口，其他新入口未来需要复用同一状态约束。
 
----
+### L-2：清理 `adaptive-engine.js` 重复头部注释
 
-## 未完成任务
+- **改动文件与摘要**：移除重复的 DATA FLYWHEEL JSDoc。
+- **验证**：读取文件前 45 行，`DATA FLYWHEEL` 仅出现一次。
+- **遗留风险**：文件正文中的术语引用不属于重复头部。
 
-### H-3：修复 SSE 客户端断开后 API 调用无取消机制（部分完成）
+### L-3：将 Client lint 警告降至阈值内
 
-- **已完成部分**：
-  1. `provider.js` 的 `complete` / `stream` / `streamWithTools` 方法已接受 `signal` 参数（证据：`Grep signal|AbortController server/engine/provider.js` → 15+ 处匹配）
-  2. `server/routes/content.js` 所有 SSE 路由已加 AbortController（证据：3 处 `new AbortController()` + `res.on('close', ... abortController.abort())`）
-  3. `server/routes/assessment.js` exam 路由已加 AbortController
-  4. `withStreamTimeout` 已与 signal 协同
-- **未完成部分**：验收标准第 4 项"新增单元测试：模拟客户端断开后 provider 不再写入"
-- **阻塞原因**：未补对应单元测试
-- **后续建议**：在 `server/__tests__/provider.test.js` 新增测试，mock OpenAI SDK 验证 `signal` 被透传并在 abort 时抛错
+- **改动文件与摘要**：
+  - `client/src/components/TopicDetail.jsx`：删除未使用图标/组件、未使用错误标签、死函数、未消费的 AbortController、只写 state 和无效 session 同步 effect。
+  - `client/src/components/MindMapModal.jsx`、`client/src/components/SettingsModal.jsx`：移除只写 state，保留实际局部映射和保存行为。
+  - 保留前序提交中对刻意限定依赖 effect 的 NOTE，未盲目补依赖导致重复请求。
+- **验证**：`npx oxlint --format json` -> 0 errors / 29 warnings，较基线 43 减少 14，满足 `<= 30`；分类为 no-unused-vars 13、exhaustive-deps 12、only-export-components 4。
+- **测试结果**：Client 13 个文件、97 项测试全部通过；Vite 生产构建通过。
+- **遗留风险**：仍有 12 个 exhaustive-deps 告警。冻结的量化验收已满足，但这些 effect 的闭包约束需要在后续逐个重构，不能据此声称所有 stale-closure 风险已消失。
 
-### H-4：修复 `writeQueues` Map 内存泄漏（部分完成）
+## 全量验证
 
-- **已完成部分**：
-  1. `storage.js` 的 `enqueueWrite` 完成后通过 `writeQueues.delete(planId)` 清理条目（证据：第 139-140 行）
-  2. 保留 `drainWriteQueue` 作为强制清空
-  3. 现有测试通过
-- **未完成部分**：验收标准第 4 项"新增单元测试覆盖：1) 多次写入完成后 writeQueues.size 回到 0；2) 并发写入仍正确串行化"
-- **实际状态**：场景 2（串行化）已有测试覆盖（`storage-logic.test.js` 第 93-106 行）；场景 1（size 回到 0）未补测试
-- **后续建议**：新增测试显式断言 `writeQueues.size === 0` after 多次 enqueueWrite 完成
+| 套件 | 命令 | 结果 | 退出码 |
+|---|---|---|---:|
+| 预清理 | `npm run pretest` | candidates=0；基线 index=2 / disk=2 | 0 |
+| Server | `npm test --prefix server` | 536 pass / 0 fail / 0 skipped | 0 |
+| Client | `npm test --prefix client` | 13 files，97 pass / 0 fail | 0 |
+| Client lint | `npx oxlint --format json` | 0 errors / 29 warnings | 0 |
+| Client build | `npm run build --prefix client` | Vite build success | 0 |
 
-### M-1：修复 `DiskPrefixCache.flush` 的 `renameSync` 无 EPERM 保护（部分完成）
+Server `posttest` 删除了 18 个带测试标记的 fixture。其即时 consistency 行曾显示 20/20；测试进程完全结束后独立读取 `plans.json` 和 `data/learn/plans/` 均为 2，和 pretest 基线一致。未删除任何无法证明来源的对象。
 
-- **已完成部分**：`provider.js` 第 162-168 行已实现 EPERM 降级（copyFileSync + unlinkSync）
-- **未完成部分**：验收标准第 3 项"新增单元测试：mock renameSync 抛 EPERM，验证降级路径被触发且 _dirty 被正确重置"
-- **阻塞原因**：未补对应单元测试
-- **后续建议**：在 `server/__tests__/provider.test.js` 新增测试，用 `sinon` 或 monkey-patch mock `fs.renameSync` 抛 EPERM
+## 端到端验证
 
-### M-5：修复 `writePlan` 中 `updateIndex` 失败时的索引一致性（部分完成）
+- **环境**：当前分支 server `http://127.0.0.1:3001`，client `http://127.0.0.1:5173`。
+- **场景**：GET 计划 API -> 打开首页 -> 进入“Linux 网络编程核心” -> 打开“TCP 服务端创建流程”详情。
+- **实际结果**：API 200、计划数 2、详情标题和“一句话概括”可见、浏览器 console/page error 均为空。
+- **截图**：`%TEMP%\study-assistant-review-e2e.png`。
+- **限制**：界面未配置 API Key，因此未执行会消耗 tokens 的知识生成、互动教学和考试生成；这些路径不能记为 E2E 通过，相关本地逻辑由自动化测试覆盖。
 
-- **已完成部分**：`crud.js` 第 1168-1170 行已加 try-catch 与 warn 日志
-- **未完成部分**：验收标准第 3 项"新增测试：mock updateIndex 抛错，验证 writePlan 不抛、plan 文件已写入"
-- **阻塞原因**：未补对应单元测试
-- **后续建议**：在 `server/__tests__/storage-logic.test.js` 新增测试，mock `updateIndex` 抛错后验证 `writePlan` 仍成功返回
+## 依赖审计
 
-### L-3：修复 `useEffect` 依赖项 lint 警告（未完成）
+| 工作区 | 结果 | 详情 |
+|---|---|---|
+| Root | 2 high，退出码 1 | direct `concurrently`；transitive `shell-quote`（ReDoS） |
+| Server | 0 vulnerabilities，退出码 0 | 无 |
+| Client | 3 high + 1 low，退出码 1 | `react-router-dom`/`react-router`、`postcss`、`dompurify` |
 
-- **已完成部分**：在 `TopicDetail.jsx` 的 7 个有意限定依赖的 effect 上方加了 NOTE 注释，表达设计意图
-- **未完成部分**：验收标准第 1 项"lint 警告数 ≤ 30"
-- **实际状态**：lint 警告数仍为 43（与改动前相同）
-- **阻塞原因**：oxlint 1.75.0 不识别 `eslint-disable-next-line` 针对此规则的指令；强行补依赖会引入循环或意外重渲染
-- **后续建议**：
-  1. 等 oxlint 后续版本支持 disable 指令后重新评估
-  2. 或重构 effect 用 `useRef` + `useCallback` 包裹变量，工作量较大需独立任务
-
----
-
-## 全量测试结果
-
-| 套件 | 命令 | 通过 | 失败 | 无法运行 | 分类 |
-|---|---|---|---|---|---|
-| Server | `npm test --prefix server` | 524 | 0 | 0 | 全部通过 |
-| Client | `npm test --prefix client` | 88 | 0 | 0 | 全部通过 |
-| Client Lint | `npm run lint --prefix client` | — | — | — | 0 errors, 43 warnings（均为有意限定依赖的 effect） |
-
----
-
-## 端到端验证结果
-
-- **场景**：启动项目、生成知识点、互动教学、考试评估
-- **结论**：未执行（提示词第 9 步要求，但本次实施边界聚焦单元测试，端到端验证留待后续）
-- **说明**：项目可正常 `npm run dev` 启动（前后端端口 3001 + 5173），但未跑完整业务场景
-
----
-
-## 依赖审计结果
-
-- **命令**：`npm audit`（未执行）
-- **说明**：本次改动未引入新依赖，依赖审计留待后续
-
----
+审计基于现有 lockfile。依赖声明属于共享文件，且本任务没有引入依赖；未在本任务中执行自动升级。应单独建立依赖升级任务，更新 lockfile 后重新审计和回归。
 
 ## 工作区基线变更
 
-### 被修改的文件
+本次继续工作涉及 14 个 tracked 文件：
 
-| 文件 | 改动类型 | 提交 |
-|---|---|---|
-| `server/engine/provider.js` | 修改：AbortSignal 支持 + EPERM 降级 + export encodeForRelay | ae8914b, b66360b |
-| `server/engine/store/storage.js` | 修改：writeQueues.delete 清理 | ae8914b |
-| `server/engine/store/crud.js` | 修改：updateIndex try-catch | b66360b |
-| `server/routes/content.js` | 修改：3 处 SSE AbortController | ae8914b |
-| `server/routes/assessment.js` | 修改：exam 路由 AbortController | ae8914b |
-| `server/engine/exam-engine.js` | 修改：generateExamStream 接受 signal | ae8914b |
-| `server/engine/interactive-teacher.js` | 修改：并发 status 检查 | af7b03f |
-| `server/engine/adaptive-engine.js` | 修改：清理重复 JSDoc | af7b03f |
-| `server/__tests__/provider.test.js` | 修改：新增 encodeForRelay 测试 | b66360b |
-| `client/src/components/TopicDetail.jsx` | 修改：NOTE 注释 | af7b03f |
-| `README.md` | 修改：版本号同步 | b66360b |
-| `TODO.md` | 修改：任务状态更新 | af7b03f |
+- 产品代码：`server/engine/provider.js`、`server/engine/store/storage.js`、`server/engine/store/crud.js`、`client/src/components/TopicDetail.jsx`、`client/src/components/MindMapModal.jsx`、`client/src/components/SettingsModal.jsx`
+- 测试：`server/__tests__/provider.test.js`、`server/__tests__/storage-logic.test.js`
+- 版本与文档：根/server/client `package.json`、`README.md`、`TODO.md`、`FINAL_REPORT.md`
+- 本地忽略文件：`AGENTS.md` 仅同步版本注释，不进入 Git 提交
 
-### 被删除的文件
-
-| 文件 | 提交 |
-|---|---|
-| `server/dbg.mjs` | ae8914b |
-| `server/_final.mjs` | ae8914b |
-
-### 被创建的文件
-
-| 文件 | 用途 |
-|---|---|
-| `MODULES.md` | 审查边界模块清单 |
-| `TODO.md` | 审查边界任务清单 |
-| `FINAL_REPORT.md` | 本报告 |
-
----
+完整审查历史还包括提交 `ae8914b`、`b66360b`、`af7b03f` 和 `fae783e` 中的路由、引擎、删除脚本及初次归档改动。
 
 ## 用户改动保护记录
 
-- 本次实施未发现未知变化
-- 所有改动均在 Agent 前序提交中，无冲突
-- AGENTS.md 在 .gitignore 中，仅本地更新未提交
+开始继续任务时已存在以下未跟踪文件，本次未修改、未删除、未暂存：
 
----
+- `server/engine/store/crud-content.js`
+- `server/engine/store/crud-exercises.js`
+- `server/engine/store/crud-flags.js`
+- `server/engine/store/crud-graph.js`
+- `server/engine/store/crud-plans.js`
+- `server/engine/store/crud-trash.js`
+- `现存问题.md`
+
+同事留下的 tracked 改动已由用户明确要求继续，本次在其最新内容上修正测试假绿、异步错误处理和终检证据，没有回退其他人的内容。
 
 ## 改善建议
 
-### 针对未完成项
-
-1. **H-3 / M-1 / M-5**：补对应单元测试。建议在 `server/__tests__/` 下用 monkey-patch 或依赖注入方式 mock 内部函数，验证错误路径行为
-2. **H-4**：补 `writeQueues.size === 0` 断言测试
-3. **L-3**：等待 oxlint 后续版本支持 disable 指令，或立项重构 effect 依赖
-
-### 针对既有失败
-
-- 无既有失败（524 + 88 测试全绿）
-
-### 针对端到端验证缺口
-
-- 建议后续跑一次完整业务场景（生成知识点 → 互动 → 考试 → 导出），确认 SSE abort 与并发检查在真实流量下无回归
-
----
+1. 单独处理依赖审计：升级 `concurrently`、React Router 相关锁定版本、`postcss` 和 `dompurify`，再跑完整回归。
+2. 为剩余 12 个 exhaustive-deps 告警逐个建立行为测试，再用 callback/ref 或拆分 effect 消除，不要批量补依赖。
+3. 在具备专用测试 API Key 的环境补跑生成知识点、互动教学和考试三条 AI E2E 路径，并记录 token 成本与 abort 行为。
 
 ## 关键指标
 
-- 改动文件数：12（修改）+ 2（删除）+ 3（创建）= 17
-- 测试通过率：524/524 server + 88/88 client = 100%
-- 未完成项数：5（4 项部分完成 + 1 项未完成）
-- 提交数：3（ae8914b, b66360b, af7b03f）
+- 完成任务：12/12
+- 当前续作新增回归测试：10（H-3 5、H-4 2、M-1 2、M-5 1）
+- 审查任务相关测试总数：17（本次续作 10 + M-2 既有 7）
+- 全量通过率：536/536 Server + 97/97 Client
+- Lint：0 errors，29 warnings（43 -> 29）
+- 未完成 TODO：0

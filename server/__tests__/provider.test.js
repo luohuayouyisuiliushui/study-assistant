@@ -1,9 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import {
   isUnsupportedParameterError,
   formatConnectionError,
   Provider,
+  DiskPrefixCache,
   sha256,
   computePrefixHash,
   computeTailHash,
@@ -398,5 +402,220 @@ describe('encodeForRelay', () => {
     const once = encodeForRelay('<a href="x">');
     const twice = encodeForRelay(once);
     assert.strictEqual(once, twice);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// H-3: AbortSignal forwarding — cancelled requests must not consume tokens
+// ═══════════════════════════════════════════════════════════
+
+describe('Provider AbortSignal forwarding (H-3)', () => {
+  function makeMockProvider(createImpl) {
+    const mockClient = {
+      chat: { completions: { create: createImpl } },
+    };
+    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+    return provider;
+  }
+
+  it('complete() forwards opts.signal to the underlying SDK client', async () => {
+    const ac = new AbortController();
+    let receivedSignal = null;
+    const provider = makeMockProvider(async (opts) => {
+      receivedSignal = opts.signal || null;
+      return {
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+    });
+
+    await provider.complete([{ role: 'user', content: 'hi' }], { signal: ac.signal });
+    assert.strictEqual(receivedSignal, ac.signal, 'complete() must forward signal to client.chat.completions.create');
+  });
+
+  it('complete() rethrows when the SDK observes an aborted signal', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let createCalled = false;
+    const provider = makeMockProvider(async () => {
+      return { choices: [{ message: { content: 'x' }, finish_reason: 'stop' }], usage: {} };
+    });
+
+    // The SDK would normally throw an AbortError when signal is aborted; we
+    // simulate that by having create throw when signal.aborted is true.
+    const originalCreate = provider._client.chat.completions.create;
+    provider._client.chat.completions.create = async (opts) => {
+      createCalled = true;
+      if (opts.signal?.aborted) {
+        const err = new Error('Request aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return originalCreate(opts);
+    };
+
+    // Use a unique message to avoid the module-level response cache from
+    // earlier tests in this file.
+    await assert.rejects(
+      () => provider.complete([{ role: 'user', content: 'aborted-' + Date.now() }], { signal: ac.signal }),
+      (err) => err.message.includes('aborted') || err.name === 'AbortError',
+    );
+    // The SDK receives the signal and rejects before producing a response.
+    assert.ok(createCalled, 'create() must be called so the signal is forwarded to the SDK');
+  });
+
+  it('stream() forwards opts.signal to the underlying SDK client', async () => {
+    const ac = new AbortController();
+    let receivedSignal = null;
+    const provider = makeMockProvider(async (opts) => {
+      receivedSignal = opts.signal || null;
+      // Return an empty async iterable to let stream() finish cleanly.
+      return (async function* () { /* no chunks */ })();
+    });
+
+    await provider.stream([{ role: 'user', content: 'hi' }], { signal: ac.signal });
+    assert.strictEqual(receivedSignal, ac.signal, 'stream() must forward signal to client.chat.completions.create');
+  });
+
+  it('stream() throws "Stream aborted by client" when signal aborts mid-stream', async () => {
+    const ac = new AbortController();
+    const chunks = [];
+    const provider = makeMockProvider(async () => {
+      // Yield one chunk, then abort the signal, then yield another.
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'partial' } }] };
+        ac.abort();
+        yield { choices: [{ delta: { content: 'after-abort' } }] };
+      })();
+    });
+
+    await assert.rejects(
+      () => provider.stream([{ role: 'user', content: 'hi' }], {
+        signal: ac.signal,
+        onChunk: chunk => chunks.push(chunk),
+      }),
+      /Stream aborted by client/,
+    );
+    assert.deepStrictEqual(chunks, ['partial'], 'no chunks should be delivered after abort');
+  });
+
+  it('streamWithTools() forwards opts.signal to the underlying SDK client', async () => {
+    const ac = new AbortController();
+    let receivedSignal = null;
+    const provider = makeMockProvider(async (opts) => {
+      receivedSignal = opts.signal || null;
+      return (async function* () { /* no chunks */ })();
+    });
+
+    await provider.streamWithTools([{ role: 'user', content: 'tools' }], {
+      signal: ac.signal,
+      tools: [],
+    });
+    assert.strictEqual(receivedSignal, ac.signal, 'streamWithTools() must forward signal to the SDK');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// M-1: DiskPrefixCache.flush — EPERM fallback to copy + unlink
+// ═══════════════════════════════════════════════════════════
+
+describe('DiskPrefixCache.flush EPERM fallback (M-1)', () => {
+  it('falls back to copy + unlink when renameSync throws EPERM, and resets _dirty', () => {
+    // Use a unique temp file for this test.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'diskcache-eperm-'));
+    const cachePath = path.join(tmpDir, 'cache.json');
+    try {
+      const cache = new DiskPrefixCache(cachePath, 100);
+      // Mark an entry so _dirty becomes true.
+      cache.markSeen('prefix-key-1', 'mock-model');
+      assert.strictEqual(cache._dirty, true, 'markSeen should set _dirty=true');
+
+      // Monkey-patch fs.renameSync to simulate Windows EPERM.
+      const realRenameSync = fs.renameSync;
+      const realCopyFileSync = fs.copyFileSync;
+      const realUnlinkSync = fs.unlinkSync;
+      let renameAttempted = false;
+      let copyAttempted = false;
+      let unlinkAttempted = false;
+      fs.renameSync = function () {
+        renameAttempted = true;
+        const err = new Error('operation not permitted, rename');
+        err.code = 'EPERM';
+        throw err;
+      };
+      fs.copyFileSync = function (...args) {
+        copyAttempted = true;
+        return realCopyFileSync.apply(fs, args);
+      };
+      fs.unlinkSync = function (...args) {
+        unlinkAttempted = true;
+        return realUnlinkSync.apply(fs, args);
+      };
+
+      try {
+        cache.flush();
+      } finally {
+        // Restore fs methods.
+        fs.renameSync = realRenameSync;
+        fs.copyFileSync = realCopyFileSync;
+        fs.unlinkSync = realUnlinkSync;
+      }
+
+      // Verify the EPERM path was taken.
+      assert.ok(renameAttempted, 'renameSync must be attempted first');
+      assert.ok(copyAttempted, 'copyFileSync fallback must be triggered when rename throws EPERM');
+      assert.ok(unlinkAttempted, 'unlinkSync must clean up the tmp file after copy fallback');
+
+      // Verify _dirty was reset despite rename failure.
+      assert.strictEqual(cache._dirty, false, '_dirty must be reset after successful copy fallback');
+
+      // Verify the cache file was actually written (copy succeeded).
+      assert.ok(fs.existsSync(cachePath), 'cache file must exist at the target path after copy fallback');
+      const raw = fs.readFileSync(cachePath, 'utf-8');
+      const entries = JSON.parse(raw);
+      assert.ok(Array.isArray(entries), 'written cache file must contain a JSON array');
+      assert.strictEqual(entries.length, 1, 'exactly one entry should be persisted');
+      assert.strictEqual(entries[0].key, 'prefix-key-1', 'the persisted key must match what was marked');
+    } finally {
+      // Clean up temp dir.
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  });
+
+  it('does not throw when both rename and copy fallback fail (best-effort cleanup)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'diskcache-both-fail-'));
+    const cachePath = path.join(tmpDir, 'cache.json');
+    try {
+      const cache = new DiskPrefixCache(cachePath, 100);
+      cache.markSeen('prefix-key-2', 'mock-model');
+
+      const realRenameSync = fs.renameSync;
+      const realCopyFileSync = fs.copyFileSync;
+      fs.renameSync = function () {
+        const err = new Error('operation not permitted, rename');
+        err.code = 'EPERM';
+        throw err;
+      };
+      fs.copyFileSync = function () {
+        throw new Error('copy failed (simulated)');
+      };
+
+      let threw = false;
+      try {
+        cache.flush();
+      } catch {
+        threw = true;
+      } finally {
+        fs.renameSync = realRenameSync;
+        fs.copyFileSync = realCopyFileSync;
+      }
+      assert.strictEqual(threw, false, 'flush must not throw even when both rename and copy fail (best-effort)');
+      // _dirty remains true because neither write succeeded.
+      assert.strictEqual(cache._dirty, true, '_dirty must remain true when no write path succeeded');
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
   });
 });

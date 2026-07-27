@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, MessageSquare, SendHorizonal, Image, Wrench, Mic, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Sparkles, CheckCheck, AlertTriangle, ChevronDown, ChevronRight, Image, Wrench, X, Lightbulb, Brain, CheckCircle, AlertCircle, List, MoreHorizontal } from 'lucide-react';
 import { Button } from '#/components/ui/button';
 import api from '../api';
 import RegenerateDialog from './RegenerateDialog';
-import { ContentArea, QaMessages } from './TopicDetailShared.jsx';
+import { ContentArea } from './TopicDetailShared.jsx';
 import AIStatusIndicator from './AIStatus.jsx';
 import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
@@ -14,17 +14,6 @@ import ActionMenu from './ActionMenu.jsx';
 import MediaViewer from './MediaViewer.jsx';
 import { loadSettings } from '#/lib/settings-storage';
 import { normalizeMermaidSource } from '../lib/mermaid-source.js';
-
-const ERROR_TYPE_LABELS = {
-  boundary: '边界条件偏差',
-  'concept-approx': '概念近似但不精确',
-  'concept-confusion': '概念混淆',
-  'causal-fallacy': '因果谬误',
-  overgeneralization: '过度概括',
-  'code-bug': '代码错误',
-  'symbol-slip': '符号/计算错误',
-  procedural: '步骤缺失/顺序错误',
-};
 
 function stripExerciseSection(detail) {
   if (!detail) return '';
@@ -94,7 +83,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const relationsInferredRef = useRef(false);
   const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
-  const [revealErrors, setRevealErrors] = useState(null);
   const [revealLoading, setRevealLoading] = useState(false);
   const [foundErrorsInput, setFoundErrorsInput] = useState('');
   const lastReportedRef = useRef(0);
@@ -109,7 +97,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [reviewMode, setReviewMode] = useState(false);
   const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
   const [reviewLoading, setReviewLoading] = useState(false);
-  const [reviewError, setReviewError] = useState(null);
   const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
 
   const [interactiveMode, setInteractiveMode] = useState(null);
@@ -152,15 +139,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const [imageGenerating, setImageGenerating] = useState(false);
   const [imageError, setImageError] = useState(null);
 
-  // AI request abort controller — cancels all pending AI calls on unmount / mode switch
-  const abortRef = useRef(null);
-  const getAbortSignal = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
-    return abortRef.current.signal;
-  }, []);
-  useEffect(() => () => abortRef.current?.abort(), []);
-
   // Memoize expensive computed values
   const strippedDetailMemo = useMemo(() => stripExerciseSection(localDetail), [localDetail]);
   const parsedExercisesMemo = useMemo(() => parseExercisesFromMarkdown(localDetail), [localDetail]);
@@ -175,14 +153,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch {} }
     };
   }, []);
-
-  // Load previous session history for display (don't auto-enter interactive mode)
-  const [prevSessionData, setPrevSessionData] = useState(null);
-  useEffect(() => {
-    const session = topic?.interactiveSession;
-    if (!session || !session.transcript || session.transcript.length === 0) { setPrevSessionData(null); return; }
-    setPrevSessionData({ mode: session.mode, sections: session.transcript.map(e => ({ content: e.content || '' })), finished: !!session.finished });
-  }, [topic?.id]);
 
   // Sync URL params with interactive mode and review mode
   useEffect(() => {
@@ -565,7 +535,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     try {
       const recognized = foundErrorsInput.split(/[\n;；,，]+/).map(s => s.trim()).filter(Boolean);
       const result = await api.revealErrors(plan.id, topic.id, recognized);
-      if (result.hasErrors && result.errors?.length > 0) { setRevealErrors(result); setRevealLoading(false); return; }
+      if (result.hasErrors && result.errors?.length > 0) { setRevealLoading(false); return; }
     } catch {}
     setRevealLoading(false);
     await doComplete();
@@ -574,8 +544,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const doComplete = async () => {
     try { await api.updateTopic(plan.id, topic.id, { done: true }); const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan); onBack(); } catch { onBack(); }
   };
-
-  const handleDismissReveal = async () => { setRevealErrors(null); await doComplete(); };
 
   const handleExerciseAnswer = (exerciseIndex, answer) => { setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer })); };
 
@@ -597,7 +565,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       const d = await api.generateReview(plan.id, topic.id);
       setReviewContent(d.review);
       const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch (err) { setReviewError(err.message); setReviewMode(false); } finally { setReviewLoading(false); }
+    } catch { setReviewMode(false); } finally { setReviewLoading(false); }
   };
 
   const prerequisites = topic?.prerequisites?.length ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
@@ -676,7 +644,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     setInteractiveMode(mode); setInteractiveSections([]); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(true);
     try {
       let fullContent = ''; let sessionData = null;
-      const signal = getAbortSignal();
       await api.startInteractiveSSE(plan.id, topic.id, mode, (event) => {
         if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
         else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; }
@@ -702,7 +669,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     interactiveBusyRef.current = true; setInteractiveLoading(true); setInteractiveInput(''); setStreamingContent('');
     try {
       let fullContent = '';
-      const signal = getAbortSignal();
       await api.continueInteractiveSSE(plan.id, topic.id, interactiveMode, feedback, (event) => {
         if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
         else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); }

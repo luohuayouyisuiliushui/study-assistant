@@ -1149,9 +1149,10 @@ export function createPlanWithPhases(name, phases, relations, options = {}) {
 /**
  * Serialized write: execute fn(plan), then atomically save.
  * fn receives the plan object and should mutate it in place.
+ * updateIndexFn is overridable so the best-effort failure path can be tested.
  */
-export function writePlan(planId, fn) {
-  return enqueueWrite(planId, () => {
+export function writePlan(planId, fn, { updateIndexFn = updateIndex } = {}) {
+  return enqueueWrite(planId, async () => {
     const plan = getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
     fn(plan);
@@ -1161,7 +1162,7 @@ export function writePlan(planId, fn) {
     // so a failing index update must not invalidate the write. The index will
     // be reconciled on the next rebuildIndex() pass.
     try {
-      updateIndex(planId, {
+      await updateIndexFn(planId, {
         topicCount: plan.topics.length,
         updatedAt: plan.updatedAt,
       });

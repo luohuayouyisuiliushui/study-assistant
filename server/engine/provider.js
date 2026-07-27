@@ -112,7 +112,7 @@ export function computeRequestHash(model, messages, opts = {}) {
 
 // ─── Disk-Persisted Prefix Cache ───
 
-class DiskPrefixCache {
+export class DiskPrefixCache {
   constructor(filePath = DISK_CACHE_PATH, maxEntries = DISK_CACHE_MAX) {
     this._path = filePath;
     this._max = maxEntries;
