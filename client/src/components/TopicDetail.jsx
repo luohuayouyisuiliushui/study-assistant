@@ -71,7 +71,11 @@ function parseExercisesFromMarkdown(detail) {
   return exercises;
 }
 
-export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
+export default function TopicDetail(props) {
+  return <TopicDetailContent key={props.topic?.id} {...props} />;
+}
+
+function TopicDetailContent({ plan, topic, onBack, onRefresh, onSelectTopic }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlMode = searchParams.get('mode');
   const urlReview = searchParams.get('review') === '1';
@@ -596,7 +600,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   const nextTopics = plan.topics.filter(t => t.prerequisites?.includes(topic?.id)).sort((a, b) => a.order - b.order);
   const relatedTopics = topic?.relatedTopics?.length ? topic.relatedTopics.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
 
-  const handleNavigateToTopic = (targetTopicId) => { onBack(); if (onSelectTopic) onSelectTopic(targetTopicId); };
+  const handleNavigateToTopic = (targetTopicId) => { if (onSelectTopic) onSelectTopic(targetTopicId); };
 
   const handleFactCheck = async () => {
     if (factCheckLoading || !localDetail) return;

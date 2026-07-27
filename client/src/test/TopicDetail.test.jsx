@@ -115,6 +115,78 @@ describe('TopicDetail', () => {
     });
   });
 
+  describe('related topic navigation', () => {
+    it('opens the related topic directly without returning to the plan overview', () => {
+      const onBack = vi.fn();
+      const onSelectTopic = vi.fn();
+      const relatedTopic = {
+        id: 't-2',
+        title: '词法作用域',
+        detail: '',
+        done: false,
+        level: 1,
+      };
+
+      renderTD({
+        plan: { ...samplePlan, topics: [sampleTopic, relatedTopic] },
+        topic: { ...sampleTopic, relatedTopics: [relatedTopic.id] },
+        onBack,
+        onSelectTopic,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: relatedTopic.title }));
+
+      expect(onSelectTopic).toHaveBeenCalledWith(relatedTopic.id);
+      expect(onBack).not.toHaveBeenCalled();
+    });
+
+    it('starts explanation generation after switching to an empty related topic', async () => {
+      const apiModule = await import('../api');
+      const api = apiModule.default;
+      api.generateDetail.mockResolvedValue({});
+
+      const sourceTopic = {
+        ...sampleTopic,
+        detail: '',
+        relatedTopics: ['t-2'],
+      };
+      const relatedTopic = {
+        id: 't-2',
+        title: '词法作用域',
+        detail: '',
+        done: false,
+        level: 1,
+      };
+      const plan = { ...samplePlan, topics: [sourceTopic, relatedTopic] };
+      const sharedProps = {
+        plan,
+        onBack: vi.fn(),
+        onRefresh: vi.fn(),
+        onSelectTopic: vi.fn(),
+      };
+      const { rerender } = render(
+        <MemoryRouter>
+          <TopicDetail {...sharedProps} topic={sourceTopic} />
+        </MemoryRouter>,
+      );
+
+      await vi.waitFor(() => {
+        expect(api.generateDetail).toHaveBeenCalledWith(plan.id, sourceTopic.id);
+      });
+      api.generateDetail.mockClear();
+
+      rerender(
+        <MemoryRouter>
+          <TopicDetail {...sharedProps} topic={relatedTopic} />
+        </MemoryRouter>,
+      );
+
+      await vi.waitFor(() => {
+        expect(api.generateDetail).toHaveBeenCalledWith(plan.id, relatedTopic.id);
+      });
+    });
+  });
+
   describe('image generation', () => {
     beforeEach(() => {
       vi.clearAllMocks();
