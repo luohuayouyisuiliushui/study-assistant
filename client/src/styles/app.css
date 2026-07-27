@@ -80,6 +80,54 @@ body {
   max-width: 100%;
   height: auto;
 }
+.mermaid-shell {
+  position: relative;
+  margin: 16px 0;
+}
+.mermaid-shell > .mermaid-container {
+  margin: 0;
+  padding-top: 48px;
+}
+.mermaid-rerender {
+  position: absolute;
+  top: 8px;
+  right: 48px;
+  z-index: 2;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  color: #52525b;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 12%);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.mermaid-rerender:hover,
+.mermaid-rerender:focus-visible {
+  border-color: #a1a1aa;
+  color: #18181b;
+  background: #fff;
+}
+.mermaid-rerender:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.mermaid-rerender.has-update {
+  border-color: #f59e0b;
+  color: #b45309;
+  background: #fffbeb;
+}
+.mermaid-rerender:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+.mermaid-rerender svg {
+  width: 16px;
+  height: 16px;
+}
 .mermaid-diagram {
   display: flex;
   width: 100%;

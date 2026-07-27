@@ -1,5 +1,7 @@
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import MermaidDiagram from '../components/MermaidDiagram.jsx';
 
 const mermaidMocks = vi.hoisted(() => ({
@@ -66,5 +68,43 @@ describe('MermaidDiagram', () => {
     await screen.getByRole('button', { name: '全屏查看：Mermaid 图表' }).click();
 
     expect(screen.getByRole('dialog', { name: 'Mermaid 图表 全屏预览' })).toBeInTheDocument();
+  });
+
+  it('renders updated source only after the manual rerender button is clicked', async () => {
+    const user = userEvent.setup();
+    mermaidMocks.render.mockResolvedValue({ svg: '<svg aria-label="diagram"></svg>' });
+    const { rerender } = render(<MermaidDiagram code={'flowchart TD\nA --> B'} />);
+
+    await screen.findByRole('button', { name: '全屏查看：Mermaid 图表' });
+    expect(mermaidMocks.render).toHaveBeenCalledTimes(1);
+
+    rerender(<MermaidDiagram code={'flowchart TD\nA --> C'} />);
+
+    const rerenderButton = await screen.findByRole('button', {
+      name: '重新渲染图表（内容已更新）',
+    });
+    expect(mermaidMocks.render).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: '全屏查看：Mermaid 图表' }));
+    await user.click(screen.getByRole('button', { name: '编辑图表源码' }));
+    expect(screen.getByRole('textbox', { name: 'Mermaid 源代码' })).toHaveValue('flowchart TD\nA --> B');
+    await user.click(screen.getByRole('button', { name: '关闭' }));
+
+    await user.click(rerenderButton);
+    await waitFor(() => expect(mermaidMocks.render).toHaveBeenCalledTimes(2));
+    expect(mermaidMocks.render.mock.calls[1][1]).toContain('A --> C');
+  });
+
+  it('renders only once when mounted under StrictMode', async () => {
+    mermaidMocks.render.mockResolvedValue({ svg: '<svg aria-label="strict diagram"></svg>' });
+
+    render(
+      <StrictMode>
+        <MermaidDiagram code={'flowchart TD\nA --> B'} />
+      </StrictMode>
+    );
+
+    await screen.findByLabelText('strict diagram');
+    expect(mermaidMocks.render).toHaveBeenCalledTimes(1);
   });
 });

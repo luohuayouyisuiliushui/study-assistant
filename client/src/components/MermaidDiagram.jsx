@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { renderMermaidSvg } from '../lib/mermaid-renderer.js';
 import MediaViewer from './MediaViewer.jsx';
 
@@ -13,6 +14,19 @@ export default function MermaidDiagram({ code }) {
   const [svg, setSvg] = useState('');
   const [error, setError] = useState(null);
   const [renderAttempt, setRenderAttempt] = useState(0);
+  const [renderedCode, setRenderedCode] = useState(null);
+  const [rendering, setRendering] = useState(false);
+  const latestCodeRef = useRef(code);
+  const mountedRef = useRef(false);
+  const lastStartedAttemptRef = useRef(null);
+  const requestIdRef = useRef(0);
+
+  latestCodeRef.current = code;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Lazy load: observe when element enters viewport
   useEffect(() => {
@@ -38,30 +52,53 @@ export default function MermaidDiagram({ code }) {
     return () => observer.disconnect();
   }, []);
 
-  // Render diagram when visible
+  // Render once when visible. Later source updates wait for an explicit request.
   useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
+    if (!visible || lastStartedAttemptRef.current === renderAttempt) return;
+    lastStartedAttemptRef.current = renderAttempt;
+    const source = latestCodeRef.current;
+    const requestId = ++requestIdRef.current;
 
     setError(null);
-    setSvg('');
+    setRendering(true);
 
     (async () => {
       try {
-        const svgText = await renderMermaidSvg(code);
+        const svgText = await renderMermaidSvg(source);
 
-        if (!cancelled) {
+        if (mountedRef.current && requestId === requestIdRef.current) {
           setSvg(svgText);
+          setRenderedCode(source);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (mountedRef.current && requestId === requestIdRef.current) {
           setError(err.message || String(err));
+        }
+      } finally {
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setRendering(false);
         }
       }
     })();
+  }, [visible, renderAttempt]);
 
-    return () => { cancelled = true; };
-  }, [code, visible, renderAttempt]);
+  const requestRender = () => setRenderAttempt(attempt => attempt + 1);
+  const hasSourceUpdate = renderedCode !== null && renderedCode !== code;
+  const rerenderLabel = hasSourceUpdate
+    ? '重新渲染图表（内容已更新）'
+    : '重新渲染图表';
+  const rerenderControl = (
+    <button
+      type='button'
+      className={`mermaid-rerender${hasSourceUpdate ? ' has-update' : ''}`}
+      onClick={requestRender}
+      disabled={rendering}
+      aria-label={rerenderLabel}
+      title={rerenderLabel}
+    >
+      <RefreshCw className={rendering ? 'animate-spin' : undefined} />
+    </button>
+  );
 
   if (error) {
     // Extract a short, readable error description
@@ -77,7 +114,7 @@ export default function MermaidDiagram({ code }) {
       <div className="mermaid-error">
         <div className="mermaid-error-header">
           <span>图表渲染失败</span>
-          <button className="btn-tiny" onClick={() => setRenderAttempt(attempt => attempt + 1)} title="重新渲染">重试</button>
+          <button className="btn-tiny" onClick={requestRender} disabled={rendering} title="重新渲染">重试</button>
         </div>
         <div className="mermaid-error-body">
           <p className="mermaid-error-reason">{shortMsg}</p>
@@ -110,16 +147,24 @@ export default function MermaidDiagram({ code }) {
   }
 
   if (!svg) {
-    return <div className="mermaid-loading" ref={containerRef}>渲染图表中...</div>;
+    return (
+      <div className='mermaid-shell' ref={containerRef}>
+        {rerenderControl}
+        <div className='mermaid-container'>
+          <div className='mermaid-loading'>渲染图表中...</div>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div ref={containerRef}>
+    <div className='mermaid-shell' ref={containerRef}>
+      {rerenderControl}
       <MediaViewer
         svg={svg}
         alt='Mermaid 图表'
         filename='mermaid-diagram'
-        editableSource={code}
+        editableSource={renderedCode || code}
         renderSource={(nextCode) => renderMermaidSvg(nextCode, 'mermaid-edit')}
         triggerClassName='mermaid-container'
       >
