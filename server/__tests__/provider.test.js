@@ -10,6 +10,7 @@ import {
   computeRequestHash,
   extractUsage,
   assessPrefixStability,
+  encodeForRelay,
 } from '../engine/provider.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -357,5 +358,45 @@ describe('assessPrefixStability', () => {
   it('should return a valid score for empty messages', () => {
     const r = assessPrefixStability([]);
     assert.ok(r.score === undefined || r.score >= 0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// encodeForRelay — WAF-safe encoding for relay compatibility
+// ═══════════════════════════════════════════════════════════
+
+describe('encodeForRelay', () => {
+  it('should replace angle brackets with fullwidth homoglyphs', () => {
+    assert.strictEqual(encodeForRelay('<div>'), '＜div＞');
+  });
+
+  it('should replace single and double quotes with fullwidth homoglyphs', () => {
+    assert.strictEqual(encodeForRelay("don't say \"hi\""), 'don＇t say ＂hi＂');
+  });
+
+  it('should leave non-triggering characters untouched', () => {
+    assert.strictEqual(encodeForRelay('plain text 123 中文'), 'plain text 123 中文');
+  });
+
+  it('should handle empty string', () => {
+    assert.strictEqual(encodeForRelay(''), '');
+  });
+
+  it('should handle strings with no trigger characters', () => {
+    assert.strictEqual(encodeForRelay('hello world'), 'hello world');
+  });
+
+  it('should replace all occurrences in a code block', () => {
+    const code = "if (a < b && b > c) { console.log('hit'); }";
+    const expected = "if (a ＜ b && b ＞ c) { console.log(＇hit＇); }";
+    assert.strictEqual(encodeForRelay(code), expected);
+  });
+
+  it('should be idempotent (no double-replacement of fullwidth chars)', () => {
+    // Fullwidth chars ＜＞＇＂ are not in the trigger set, so encoding again
+    // should not change the result.
+    const once = encodeForRelay('<a href="x">');
+    const twice = encodeForRelay(once);
+    assert.strictEqual(once, twice);
   });
 });

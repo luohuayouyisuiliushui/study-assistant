@@ -1157,10 +1157,17 @@ export function writePlan(planId, fn) {
     fn(plan);
     plan.updatedAt = Date.now();
     writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-    updateIndex(planId, {
-      topicCount: plan.topics.length,
-      updatedAt: plan.updatedAt,
-    });
+    // Index update is best-effort: the plan file is already durably written,
+    // so a failing index update must not invalidate the write. The index will
+    // be reconciled on the next rebuildIndex() pass.
+    try {
+      updateIndex(planId, {
+        topicCount: plan.topics.length,
+        updatedAt: plan.updatedAt,
+      });
+    } catch (indexErr) {
+      console.warn(`[writePlan] index update failed for ${planId} (non-fatal, will be reconciled on rebuild):`, indexErr.message);
+    }
     // 通知标记：写入 .flag 文件（study-trace 通知模式）
     writeFlag(planId);
     return plan;

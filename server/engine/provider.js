@@ -142,6 +142,7 @@ class DiskPrefixCache {
 
   flush() {
     if (!this._dirty) return;
+    const tmp = this._path + '.tmp';
     try {
       const entries = [];
       for (const [, value] of this._data) {
@@ -154,12 +155,24 @@ class DiskPrefixCache {
       const dir = path.dirname(this._path);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       // Atomic write: tmp -> rename
-      const tmp = this._path + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(trimmed, null, 0), 'utf-8');
       fs.renameSync(tmp, this._path);
       this._dirty = false;
     } catch (err) {
-      console.warn('[DiskCache] Flush failed (non-fatal):', err.message);
+      // On Windows, rename can hit EPERM if an antivirus or another process
+      // holds the destination open. Fall back to a non-atomic copy so the
+      // cache still persists, then clean up the tmp file.
+      console.warn('[DiskCache] Flush rename failed (non-fatal):', err.message);
+      try {
+        if (fs.existsSync(tmp)) {
+          fs.copyFileSync(tmp, this._path);
+          fs.unlinkSync(tmp);
+          this._dirty = false;
+        }
+      } catch (fallbackErr) {
+        console.warn('[DiskCache] Flush fallback failed (non-fatal):', fallbackErr.message);
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+      }
     }
   }
 
@@ -443,7 +456,7 @@ export function formatConnectionError(err, baseURL, model) {
  * Applied to user messages at the API call boundary only — cache keys
  * and diagnostics still use the original content.
  */
-function encodeForRelay(text) {
+export function encodeForRelay(text) {
   const map = {
     '<': '＜',  // U+FF1C fullwidth less-than sign
     '>': '＞',  // U+FF1E fullwidth greater-than sign
