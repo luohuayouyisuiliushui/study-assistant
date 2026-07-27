@@ -24,6 +24,9 @@ const ERROR_TYPE_LABELS = {
   procedural: '步骤缺失/顺序错误',
 };
 
+const STICKY_NAV_REVEAL_EDGE_PX = 96;
+const STICKY_NAV_HIDE_DELAY_MS = 400;
+
 function stripExerciseSection(detail) {
   if (!detail) return '';
   const lines = detail.split('\n');
@@ -91,6 +94,8 @@ function TopicDetailContent({ plan, topic, onBack, onRefresh, onSelectTopic }) {
   const hiddenStartRef = useRef(null);
   const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const headerSentinelRef = useRef(null);
+  const stickyNavRef = useRef(null);
+  const stickyNavHideTimerRef = useRef(null);
   const [headerStuck, setHeaderStuck] = useState(false);
   const [headerStuckVisible, setHeaderStuckVisible] = useState(false);
   const relationsInferredRef = useRef(false);
@@ -218,25 +223,61 @@ function TopicDetailContent({ plan, topic, onBack, onRefresh, onSelectTopic }) {
     }
   }, [urlReview]);
 
+  const clearStickyNavHideTimer = useCallback(() => {
+    if (stickyNavHideTimerRef.current) {
+      clearTimeout(stickyNavHideTimerRef.current);
+      stickyNavHideTimerRef.current = null;
+    }
+  }, []);
+
+  const hideStickyNavSoon = useCallback(() => {
+    if (stickyNavHideTimerRef.current) return;
+    stickyNavHideTimerRef.current = setTimeout(() => {
+      setHeaderStuckVisible(false);
+      stickyNavHideTimerRef.current = null;
+    }, STICKY_NAV_HIDE_DELAY_MS);
+  }, []);
+
   // Sticky header: detect when sentinel scrolls out of view
   useEffect(() => {
     const sentinel = headerSentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        setHeaderStuck(!entry.isIntersecting);
-        // Add a small delay for the fade-in animation
-        if (!entry.isIntersecting) {
-          requestAnimationFrame(() => setHeaderStuckVisible(true));
-        } else {
-          setHeaderStuckVisible(false);
-        }
+        const stuck = !entry.isIntersecting;
+        clearStickyNavHideTimer();
+        setHeaderStuck(stuck);
+        setHeaderStuckVisible(false);
       },
       { threshold: 0, rootMargin: '-1px 0px 0px 0px' }
     );
     observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      clearStickyNavHideTimer();
+    };
+  }, [clearStickyNavHideTimer]);
+
+  useEffect(() => {
+    if (!headerStuck) return;
+    const autoHide = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? false;
+    if (!autoHide) return;
+
+    const handleMouseMove = (event) => {
+      if (event.clientY <= STICKY_NAV_REVEAL_EDGE_PX) {
+        clearStickyNavHideTimer();
+        setHeaderStuckVisible(true);
+      } else if (!stickyNavRef.current?.contains(event.target)) {
+        hideStickyNavSoon();
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove, { passive: true });
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      clearStickyNavHideTimer();
+    };
+  }, [headerStuck, clearStickyNavHideTimer, hideStickyNavSoon]);
 
   // Auto-infer topic relationships when viewing a topic with no relationship data
   useEffect(() => {
@@ -853,9 +894,17 @@ function TopicDetailContent({ plan, topic, onBack, onRefresh, onSelectTopic }) {
           )}
       </div>
 
-      {/* Sticky navigation bar — appears when scrolling past the original header */}
-      {headerStuckVisible && (
-        <div className='sticky-nav-enter fixed top-[49px] left-0 right-0 z-40 bg-background border-b border-border/50 shadow-md'>
+      {/* Sticky navigation bar — desktop reveals near the top edge */}
+      {headerStuck && (
+        <nav
+          ref={stickyNavRef}
+          aria-label='悬浮知识点导航'
+          aria-hidden={!headerStuckVisible}
+          inert={!headerStuckVisible}
+          onMouseEnter={clearStickyNavHideTimer}
+          onMouseLeave={hideStickyNavSoon}
+          className={`fixed top-[68px] max-[720px]:top-[60px] left-0 right-0 z-40 bg-background border-b border-border/50 shadow-md transition-[transform,opacity] duration-200 ease-out motion-reduce:transition-none ${headerStuckVisible ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}
+        >
           <div className='w-full max-w-4xl mx-auto px-6 py-1.5'>
             {/* Action toolbar row */}
             <div className='flex items-center flex-wrap gap-2 mb-1'>
@@ -940,7 +989,7 @@ function TopicDetailContent({ plan, topic, onBack, onRefresh, onSelectTopic }) {
               )}
             </div>
           </div>
-        </div>
+        </nav>
       )}
 
       {interactiveMode && (

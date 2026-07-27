@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import TopicDetail from '../components/TopicDetail';
 
@@ -184,6 +184,67 @@ describe('TopicDetail', () => {
       await vi.waitFor(() => {
         expect(api.generateDetail).toHaveBeenCalledWith(plan.id, relatedTopic.id);
       });
+    });
+  });
+
+  describe('sticky topic navigation', () => {
+    const originalIntersectionObserver = global.IntersectionObserver;
+    const originalMatchMedia = window.matchMedia;
+    let intersectionCallback;
+
+    beforeEach(() => {
+      window.matchMedia = vi.fn(() => ({
+        matches: true,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      global.IntersectionObserver = class IntersectionObserver {
+        constructor(callback) { intersectionCallback = callback; }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    });
+
+    afterEach(() => {
+      global.IntersectionObserver = originalIntersectionObserver;
+      window.matchMedia = originalMatchMedia;
+    });
+
+    it('reveals near the top edge and hides again over the reading area', async () => {
+      const { container } = renderTD();
+
+      act(() => intersectionCallback([{ isIntersecting: false }]));
+
+      const navigation = container.querySelector('nav[aria-label="悬浮知识点导航"]');
+      expect(navigation).not.toBeNull();
+      expect(navigation).toHaveAttribute('aria-hidden', 'true');
+
+      fireEvent.mouseMove(document, { clientY: 24 });
+      expect(navigation).toHaveAttribute('aria-hidden', 'false');
+
+      fireEvent.mouseMove(document.body, { clientY: 400 });
+      await waitFor(() => {
+        expect(navigation).toHaveAttribute('aria-hidden', 'true');
+      });
+    });
+
+    it('stays hidden on devices without hover', () => {
+      window.matchMedia = vi.fn(() => ({
+        matches: false,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      const { container } = renderTD();
+
+      act(() => intersectionCallback([{ isIntersecting: false }]));
+
+      const navigation = container.querySelector('nav[aria-label="悬浮知识点导航"]');
+      expect(navigation).toHaveAttribute('aria-hidden', 'true');
     });
   });
 
