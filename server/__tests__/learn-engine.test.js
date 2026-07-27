@@ -603,6 +603,55 @@ describe('generateDetail', () => {
     await store.deletePlan(plan.id);
   });
 
+  it('should replace partial content after an HTTP/2 stream retry', async () => {
+    const plan = await store.createPlan('gendetail-http2-retry');
+    await store.addTopics(plan.id, ['流式重试']);
+    const p = store.getPlan(plan.id);
+    const topicId = p.topics[0].id;
+    let attempts = 0;
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'mock-model',
+    });
+    provider._client = {
+      chat: {
+        completions: {
+          async create() {
+            attempts++;
+            if (attempts === 1) {
+              return {
+                async *[Symbol.asyncIterator]() {
+                  yield { choices: [{ delta: { content: '半截讲解' } }] };
+                  throw new Error('Upstream HTTP/2 stream failed');
+                },
+              };
+            }
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { content: '完整讲解' } }] };
+              },
+            };
+          },
+        },
+      },
+    };
+    provider._autoWarm = false;
+    provider.warmCache = async () => {};
+    provider.complete = async () => '{"flagged":false,"issues":[]}';
+
+    const result = await generateDetail(provider, p, topicId);
+    const savedTopic = store.getPlan(plan.id).topics[0];
+
+    assert.strictEqual(result, '完整讲解');
+    assert.strictEqual(savedTopic.detail, '完整讲解');
+    assert.strictEqual(savedTopic.done, true);
+    assert.strictEqual(savedTopic.lastError, null);
+    assert.strictEqual(attempts, 2);
+
+    await store.deletePlan(plan.id);
+  });
+
   it('should throw for non-existent topic', async () => {
     const plan = await store.createPlan('gendetail-err');
     const provider = createStreamMockProvider('');

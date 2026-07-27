@@ -265,6 +265,55 @@ describe('Provider.testConnection', () => {
   });
 });
 
+describe('Provider.stream transient failures', () => {
+  it('should retry an upstream HTTP/2 stream failure', async () => {
+    let attempts = 0;
+    let observedContent = '';
+    const mockClient = {
+      chat: {
+        completions: {
+          async create() {
+            attempts++;
+            if (attempts === 1) {
+              return {
+                async *[Symbol.asyncIterator]() {
+                  yield { choices: [{ delta: { content: '半截讲解' } }] };
+                  throw new Error('Upstream HTTP/2 stream failed');
+                },
+              };
+            }
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { content: '讲解成功' } }] };
+              },
+            };
+          },
+        },
+      },
+    };
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'test-model',
+    });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+
+    const result = await provider.stream(
+      [{ role: 'user', content: '请生成讲解' }],
+      {
+        streamOptions: false,
+        onChunk: (delta) => { observedContent += delta; },
+        onReset: () => { observedContent = ''; },
+      }
+    );
+
+    assert.strictEqual(result, '讲解成功');
+    assert.strictEqual(observedContent, '讲解成功');
+    assert.strictEqual(attempts, 2);
+  });
+});
+
 // ═══════════════════════════════════════════════════════
 //  Hash function tests (gap coverage)
 // ═══════════════════════════════════════════════════════

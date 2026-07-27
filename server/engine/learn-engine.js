@@ -150,6 +150,11 @@ export async function generateDetail(providerOrConfig, plan, topicId, model = 'g
           updateTopic(plan.id, topicId, { detail: topic.detail });
         }
       },
+      onReset: async () => {
+        topic.detail = '';
+        chunkCount = 0;
+        await updateTopic(plan.id, topicId, { detail: '', done: false, lastError: null });
+      },
       onUsage: (usage) => {
         engineCacheMonitor.recordUsage(usage, 'generateDetail:' + topicId.slice(0, 8));
       },
@@ -274,6 +279,12 @@ export async function generateDetailStream(providerOrConfig, plan, topicId, writ
         if (chunkCount % 20 === 0) {
           updateTopic(plan.id, topicId, { detail: topic.detail });
         }
+      },
+      onReset: async () => {
+        topic.detail = '';
+        chunkCount = 0;
+        await updateTopic(plan.id, topicId, { detail: '', done: false, lastError: null });
+        if (writeEvent) writeEvent({ type: 'reset' });
       },
       onUsage: (usage) => {
         engineCacheMonitor.recordUsage(usage, 'generateDetail:' + topicId.slice(0, 8));
