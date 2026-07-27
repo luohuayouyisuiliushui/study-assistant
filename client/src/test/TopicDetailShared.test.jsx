@@ -104,4 +104,11 @@ describe('markdownComponents', () => {
     expect(codeBlocks[0]).toHaveClass('language-js');
     expect(codeBlocks[1]).toHaveClass('language-py');
   });
+
+  it('wraps Markdown images in the full-screen media viewer', () => {
+    renderMd('![线程结构图](/images/thread.png)');
+
+    const trigger = screen.getByRole('button', { name: '全屏查看：线程结构图' });
+    expect(trigger).toContainElement(screen.getByRole('img', { name: '线程结构图' }));
+  });
 });

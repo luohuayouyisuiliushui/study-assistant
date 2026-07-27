@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import MermaidDiagram from './MermaidDiagram';
+import MediaViewer from './MediaViewer.jsx';
 
 const markdownComponents = {
   p({ children }) {
@@ -35,6 +36,15 @@ const markdownComponents = {
     }
     // Fenced code block — <pre> wrapper is provided by the pre component above
     return <code className={className}>{code}</code>;
+  },
+  img({ src, alt }) {
+    if (!src) return null;
+    const label = alt || 'Detail 图片';
+    return (
+      <MediaViewer src={src} alt={label} filename={label} triggerClassName='markdown-media-trigger'>
+        <img src={src} alt={label} loading='lazy' />
+      </MediaViewer>
+    );
   },
 };
 

@@ -42,4 +42,25 @@ describe('normalizeMermaidSource', () => {
       '    running --> [*]',
     ].join('\n'));
   });
+
+  it('merges labels for duplicate state transitions so Mermaid does not overlap them', () => {
+    const source = [
+      'stateDiagram-v2',
+      '    [*] --> Joinable : pthread_create()',
+      '    Joinable --> Running : 被调度',
+      '    Running --> Zombie : 线程退出(return/pthread_exit)',
+      '    Zombie --> [*] : pthread_join() 回收资源',
+      '    Joinable --> Detached : pthread_detach()',
+      '    Detached --> Running : 被调度',
+      '    Running --> [*] : 线程退出，自动回收资源',
+      '    Zombie --> [*] : 进程结束（强制回收）',
+    ].join('\n');
+
+    const normalized = normalizeMermaidSource(source);
+
+    expect(normalized.match(/Zombie\s*-->\s*\[\*\]/g)).toHaveLength(1);
+    expect(normalized).toContain(
+      'Zombie --> [*] : pthread_join() 回收资源<br/>进程结束（强制回收）'
+    );
+  });
 });

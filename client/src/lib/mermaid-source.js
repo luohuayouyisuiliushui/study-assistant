@@ -7,6 +7,61 @@ const STATE_DECLARATION = new RegExp(
 const STATE_TRANSITION = new RegExp(
   `^(\\s*)(${STATE_REFERENCE})(\\s*-->\\s*)(${STATE_REFERENCE})(.*)$`
 );
+const MERGEABLE_STATE_TRANSITION = new RegExp(
+  `^(\\s*)(${STATE_REFERENCE})\\s*-->\\s*(${STATE_REFERENCE})(?:\\s*:\\s*(.*?))?\\s*$`
+);
+const STATE_BLOCK_START = /^\s*state\s+(.+?)\s*\{\s*$/;
+
+function mergeDuplicateTransitions(lines) {
+  const transitions = new Map();
+  const scope = [];
+  const mergedLines = [];
+  let changed = false;
+
+  for (const line of lines) {
+    const blockStart = line.match(STATE_BLOCK_START);
+    if (blockStart) {
+      scope.push(blockStart[1]);
+      mergedLines.push(line);
+      continue;
+    }
+    if (/^\s*}\s*$/.test(line)) {
+      scope.pop();
+      mergedLines.push(line);
+      continue;
+    }
+
+    const transition = line.match(MERGEABLE_STATE_TRANSITION);
+    if (!transition) {
+      mergedLines.push(line);
+      continue;
+    }
+
+    const [, indent, from, to, rawLabel = ''] = transition;
+    const label = rawLabel.trim();
+    const key = `${scope.join('\u0000')}\u0001${from}\u0001${to}`;
+    const existing = transitions.get(key);
+
+    if (!existing) {
+      transitions.set(key, {
+        index: mergedLines.length,
+        indent,
+        from,
+        to,
+        labels: label ? [label] : [],
+      });
+      mergedLines.push(line);
+      continue;
+    }
+
+    if (label && !existing.labels.includes(label)) existing.labels.push(label);
+    const suffix = existing.labels.length > 0 ? ` : ${existing.labels.join('<br/>')}` : '';
+    mergedLines[existing.index] = `${existing.indent}${existing.from} --> ${existing.to}${suffix}`;
+    changed = true;
+  }
+
+  return { lines: mergedLines, changed };
+}
 
 /**
  * Mermaid state transitions use identifiers for endpoints. AI output often
@@ -58,8 +113,6 @@ export function normalizeMermaidSource(source) {
     return `${indent}${from}${arrow}${to}${suffix}`;
   });
 
-  if (!changed) return source;
-
   if (declarations.length > 0) {
     const firstContentLine = lines.slice(headerIndex + 1).find(line => line.trim());
     const indent = firstContentLine?.match(/^\s*/)?.[0] || '    ';
@@ -69,5 +122,8 @@ export function normalizeMermaidSource(source) {
     normalizedLines.splice(headerIndex + 1, 0, ...declarationLines);
   }
 
-  return normalizedLines.join(newline);
+  const merged = mergeDuplicateTransitions(normalizedLines);
+  if (!changed && !merged.changed) return source;
+
+  return merged.lines.join(newline);
 }

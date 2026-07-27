@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { normalizeMermaidSource } from '../lib/mermaid-source.js';
+import { renderMermaidSvg } from '../lib/mermaid-renderer.js';
+import MediaViewer from './MediaViewer.jsx';
 
 /**
  * Renders a Mermaid diagram from its source code.
@@ -47,19 +48,7 @@ export default function MermaidDiagram({ code }) {
 
     (async () => {
       try {
-        const { default: mermaid } = await import('mermaid');
-
-        // Initialize once with safe defaults
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: 'neutral',
-          securityLevel: 'strict',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        });
-
-        // Use a unique id per render to avoid collisions
-        const id = 'mermaid-' + Math.random().toString(36).slice(2, 9);
-        const { svg: svgText } = await mermaid.render(id, normalizeMermaidSource(code));
+        const svgText = await renderMermaidSvg(code);
 
         if (!cancelled) {
           setSvg(svgText);
@@ -125,10 +114,17 @@ export default function MermaidDiagram({ code }) {
   }
 
   return (
-    <div
-      className="mermaid-container"
-      ref={containerRef}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <div ref={containerRef}>
+      <MediaViewer
+        svg={svg}
+        alt='Mermaid 图表'
+        filename='mermaid-diagram'
+        editableSource={code}
+        renderSource={(nextCode) => renderMermaidSvg(nextCode, 'mermaid-edit')}
+        triggerClassName='mermaid-container'
+      >
+        <div className='mermaid-diagram' dangerouslySetInnerHTML={{ __html: svg }} />
+      </MediaViewer>
+    </div>
   );
 }

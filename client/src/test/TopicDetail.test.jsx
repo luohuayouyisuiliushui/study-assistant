@@ -135,5 +135,13 @@ describe('TopicDetail', () => {
         expect(api.generateDetail).not.toHaveBeenCalled();
       });
     });
+
+    it('opens an existing topic image in the full-screen viewer', () => {
+      renderTD({ topic: { ...sampleTopic, imageUrl: '/images/test.png' } });
+
+      fireEvent.click(screen.getByRole('button', { name: '全屏查看：JavaScript 闭包 知识点配图' }));
+
+      expect(screen.getByRole('dialog', { name: 'JavaScript 闭包 知识点配图 全屏预览' })).toBeInTheDocument();
+    });
   });
 });

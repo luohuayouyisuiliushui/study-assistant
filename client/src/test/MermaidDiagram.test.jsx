@@ -40,6 +40,9 @@ describe('MermaidDiagram', () => {
     expect(normalizedSource).toContain('state "运行中" as mermaid_state_1');
     expect(normalizedSource).toContain('[*] --> mermaid_state_1');
     expect(normalizedSource).not.toContain('--> "运行中"');
+    expect(mermaidMocks.initialize).toHaveBeenCalledWith(expect.objectContaining({
+      state: { nodeSpacing: 70, rankSpacing: 70 },
+    }));
   });
 
   it('allows a failed diagram to be retried', async () => {
@@ -53,5 +56,15 @@ describe('MermaidDiagram', () => {
     await screen.getByRole('button', { name: '重试' }).click();
     await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument());
     expect(mermaidMocks.render).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the rendered diagram in the full-screen viewer', async () => {
+    mermaidMocks.render.mockResolvedValue({ svg: '<svg aria-label="diagram"></svg>' });
+    render(<MermaidDiagram code={'flowchart TD\nA --> B'} />);
+
+    await screen.findByRole('button', { name: '全屏查看：Mermaid 图表' });
+    await screen.getByRole('button', { name: '全屏查看：Mermaid 图表' }).click();
+
+    expect(screen.getByRole('dialog', { name: 'Mermaid 图表 全屏预览' })).toBeInTheDocument();
   });
 });

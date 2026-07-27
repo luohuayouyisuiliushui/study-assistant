@@ -11,6 +11,7 @@ import InteractivePanel from './InteractivePanel.jsx';
 import ExercisePanel from './ExercisePanel.jsx';
 import QAPanel from './QAPanel.jsx';
 import ActionMenu from './ActionMenu.jsx';
+import MediaViewer from './MediaViewer.jsx';
 import { loadSettings } from '#/lib/settings-storage';
 import { normalizeMermaidSource } from '../lib/mermaid-source.js';
 
@@ -983,7 +984,14 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                     {imageGenerating ? <RotateCcw className='h-3 w-3 animate-spin' /> : <RotateCcw className='h-3 w-3' />}
                   </Button>
                 </div>
-                <img src={topic.imageUrl} alt={topic.title} className='w-full' />
+                <MediaViewer
+                  src={topic.imageUrl}
+                  alt={`${topic.title} 知识点配图`}
+                  filename={`${topic.title}-知识点配图`}
+                  triggerClassName='topic-image-trigger'
+                >
+                  <img src={topic.imageUrl} alt={topic.title} className='w-full' />
+                </MediaViewer>
               </div>
             ) : localDetail && !generating && settings.imageApiKey && (
               <div className='flex items-center gap-2'>
