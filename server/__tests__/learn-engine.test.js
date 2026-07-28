@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, generateImageWithFallback } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, generateImageWithFallback, generateImageWithKeyFallback, getImageFallbackModels } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -1191,6 +1191,70 @@ describe('generateImageWithFallback', () => {
     assert.strictEqual(result.data[0].b64_json, 'aW1hZ2UtYnl0ZXM=');
     assert.strictEqual(requests.length, 2);
     assert.strictEqual(requests[1].prompt, compactPrompt);
+  });
+
+  it('retries a repeatedly blocked request through the configured fallback model', async () => {
+    const requests = [];
+    const client = {
+      images: {
+        async generate(request) {
+          requests.push(request);
+          if (requests.length < 3) {
+            const error = new Error('Your request was blocked.');
+            error.status = 403;
+            throw error;
+          }
+          return { data: [{ b64_json: 'aW1hZ2UtYnl0ZXM=' }] };
+        },
+      },
+    };
+
+    const compactPrompt = 'Create a simple, neutral educational illustration of the topic "Binary search".';
+    await generateImageWithFallback(client, {
+      model: 'primary-image-model',
+      prompt: 'Long generated prompt with detail context and restrictive clauses.',
+      response_format: 'url',
+    }, compactPrompt, ['fallback-image-model']);
+
+    assert.strictEqual(requests.length, 3);
+    assert.strictEqual(requests[1].model, 'primary-image-model');
+    assert.strictEqual(requests[1].prompt, compactPrompt);
+    assert.strictEqual(requests[2].model, 'fallback-image-model');
+    assert.strictEqual(requests[2].prompt, compactPrompt);
+  });
+});
+
+describe('getImageFallbackModels', () => {
+  it('uses the configured fallback model before provider defaults', () => {
+    assert.deepStrictEqual(
+      getImageFallbackModels('primary-image-model', 'https://api.siliconflow.cn/v1', 'custom-fallback-model'),
+      ['custom-fallback-model'],
+    );
+  });
+
+  it('uses compatible defaults for the SiliconFlow image endpoint', () => {
+    assert.deepStrictEqual(
+      getImageFallbackModels('black-forest-labs/FLUX.1-pro', 'https://api.siliconflow.cn/v1'),
+      ['black-forest-labs/FLUX.1-dev', 'Kwai-Kolors/Kolors', 'stabilityai/stable-diffusion-xl-base-1.0'],
+    );
+  });
+});
+
+describe('generateImageWithKeyFallback', () => {
+  it('retries the next image key after the first key receives a 403 block', async () => {
+    const attemptedKeys = [];
+    const result = await generateImageWithKeyFallback(['primary-key', 'backup-key'], async apiKey => {
+      attemptedKeys.push(apiKey);
+      if (apiKey === 'primary-key') {
+        const error = new Error('Your request was blocked.');
+        error.status = 403;
+        throw error;
+      }
+      return 'image-created';
+    });
+
+    assert.strictEqual(result, 'image-created');
+    assert.deepStrictEqual(attemptedKeys, ['primary-key', 'backup-key']);
   });
 });
 

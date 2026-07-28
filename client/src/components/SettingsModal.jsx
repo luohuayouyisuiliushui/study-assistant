@@ -31,6 +31,7 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
   const [imageApiKey, setImageApiKey] = useState(saved.imageApiKey || '');
   const [imageBaseUrl, setImageBaseUrl] = useState(saved.imageBaseUrl || 'https://api.siliconflow.cn/v1');
   const [imageModel, setImageModel] = useState(saved.imageModel || 'black-forest-labs/FLUX.1-pro');
+  const [imageFallbackModel, setImageFallbackModel] = useState(saved.imageFallbackModel || '');
   const [showImageKey, setShowImageKey] = useState(false);
 
   // Routing mode
@@ -71,7 +72,7 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
     const settings = {
       apiKey, baseURL, model,
       economyApiKey, economyBaseURL, economyModel,
-      imageApiKey, imageBaseUrl, imageModel,
+      imageApiKey, imageBaseUrl, imageModel, imageFallbackModel,
       routingMode,
       explainStyle,
     };
@@ -248,6 +249,7 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
                     {showImageKey ? <EyeOff className='h-4 w-4' /> : <Eye className='h-4 w-4' />}
                   </button>
                 </div>
+                <p className='text-xs text-muted-foreground mt-1'>可用逗号或空格分隔多个 Key；被拒绝时会自动尝试下一个。</p>
               </div>
 
               <div className='flex flex-col gap-1.5'>
@@ -261,6 +263,12 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
                   <option value='stabilityai/stable-diffusion-xl-base-1.0' label='SDXL 1.0（兼容性好）' />
                 </datalist>
                 <p className='text-xs text-muted-foreground mt-1'>可从建议中选择，也可填写接口支持的任意模型标识</p>
+              </div>
+
+              <div className='flex flex-col gap-1.5'>
+                <Label htmlFor='image-fallback-model'>备用生图模型（可选）</Label>
+                <Input id='image-fallback-model' list='image-model-options' value={imageFallbackModel} onChange={e => setImageFallbackModel(e.target.value)} placeholder='主模型被 403 拦截时尝试此模型' />
+                <p className='text-xs text-muted-foreground mt-1'>留空时，硅基流动会自动尝试兼容模型；自定义接口请填写服务商支持的备用模型。</p>
               </div>
             </div>
 

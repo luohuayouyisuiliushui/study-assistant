@@ -160,6 +160,7 @@ const api = {
   async generateDetail(planId, topicId) {
     const settings = getApiSettings();
     let body = settings.imageApiKey ? { imageApiKey: settings.imageApiKey, imageModel: settings.imageModel, imageBaseUrl: settings.imageBaseUrl || '' } : undefined;
+    if (body && settings.imageFallbackModel) body.imageFallbackModel = settings.imageFallbackModel;
     if (settings.explainStyle) {
       body = { ...(body || {}), explainStyle: settings.explainStyle };
     }
@@ -323,6 +324,7 @@ const api = {
     if (settings.imageApiKey) body.imageApiKey = settings.imageApiKey;
     if (settings.imageModel) body.imageModel = settings.imageModel;
     if (settings.imageBaseUrl) body.imageBaseUrl = settings.imageBaseUrl;
+    if (settings.imageFallbackModel) body.imageFallbackModel = settings.imageFallbackModel;
     return request(`${API_BASE}/learn/plans/${planId}/image/${topicId}`, {
       method: 'POST',
       body,

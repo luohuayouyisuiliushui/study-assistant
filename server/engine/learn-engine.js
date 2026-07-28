@@ -15,6 +15,7 @@
  */
 
 import { Provider, isRelayBlockedError, isUnsupportedParameterError } from './provider.js';
+import { KeyPool } from './key-pool.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
@@ -640,6 +641,33 @@ function buildRelaySafeImagePrompt(title) {
   return `Create a simple, neutral educational illustration of the topic "${topicTitle}". Use clear shapes, a light background, and a diagram-like composition.`;
 }
 
+const DEFAULT_IMAGE_MODEL = 'black-forest-labs/FLUX.1-pro';
+const SILICONFLOW_IMAGE_MODEL_FALLBACKS = [
+  'black-forest-labs/FLUX.1-dev',
+  'Kwai-Kolors/Kolors',
+  'stabilityai/stable-diffusion-xl-base-1.0',
+];
+
+export function getImageFallbackModels(imageModel, imageBaseUrl, configuredFallbackModel = '') {
+  const primaryModel = String(imageModel || '').trim();
+  const configuredModel = String(configuredFallbackModel || '').trim();
+  const candidates = configuredModel
+    ? [configuredModel]
+    : /^https:\/\/api\.siliconflow\.cn(?:\/|$)/i.test(String(imageBaseUrl || ''))
+      ? SILICONFLOW_IMAGE_MODEL_FALLBACKS
+      : [];
+
+  return [...new Set(candidates.filter(candidate => candidate && candidate !== primaryModel))];
+}
+
+function getImageApiKeys(imageApiKey) {
+  return [...new Set(KeyPool.parse(imageApiKey))];
+}
+
+function shouldRetryImageChannel(err) {
+  return isRelayBlockedError(err) || [401, 403, 429].includes(Number(err?.status));
+}
+
 /**
  * Generate an illustration for a knowledge point using SiliconFlow API.
  * Calls the text-to-image model, downloads the result, and saves it to server/data/images/.
@@ -649,54 +677,74 @@ function buildRelaySafeImagePrompt(title) {
  * @param {string} [imageBaseUrl] - Custom API base URL (default: SiliconFlow)
  * @returns {Promise<string|null>} The local URL path to the saved image, or null on failure
  */
-export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl) {
+export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl, imageFallbackModel = '') {
   if (!topic?.id || !topic?.title || !imageApiKey) return null;
 
-  const imageModel = model || 'black-forest-labs/FLUX.1-pro';
-  const baseUrl = imageBaseUrl || 'https://api.siliconflow.cn/v1';
+  const imageKeys = getImageApiKeys(imageApiKey);
+  if (imageKeys.length === 0) return null;
 
-  // Build a structured prompt based on the topic title
-  const prompt = buildImagePrompt(topic);
+  const imageModel = model || DEFAULT_IMAGE_MODEL;
+  const baseUrl = imageBaseUrl || 'https://api.siliconflow.cn/v1';
+  const fallbackModels = getImageFallbackModels(imageModel, baseUrl, imageFallbackModel);
 
   const imageDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'images');
   fs.mkdirSync(imageDir, { recursive: true });
 
   try {
-    const client = new OpenAI({
-      apiKey: imageApiKey,
-      baseURL: baseUrl,
-      maxRetries: 2,
-      timeout: 60_000,
-    });
-
-    const response = await generateImageWithFallback(client, {
-      model: imageModel,
-      prompt,
-      n: 1,
-      size: '1024x1024',
-      response_format: 'url',
-    }, buildRelaySafeImagePrompt(topic.title));
-
-    const generatedImage = extractGeneratedImage(response);
-    if (!generatedImage) {
-      const fields = Object.keys(response?.data?.[0] || {}).join(', ') || 'none';
-      throw new Error(`图片 API 未返回可用的 URL 或 Base64 图片数据（字段: ${fields}）`);
-    }
-
-    const safeName = topic.id.replace(/[^a-zA-Z0-9_-]/g, '_') + '.png';
-    const localPath = path.join(imageDir, safeName);
-    const imageBytes = generatedImage.kind === 'base64'
-      ? decodeBase64Image(generatedImage.value)
-      : await downloadGeneratedImage(generatedImage.value, baseUrl);
-    await fs.promises.writeFile(localPath, imageBytes);
-
-    const relativePath = '/images/' + safeName;
-    console.log('[generateTopicImage] Saved:', relativePath);
-    return relativePath;
+    return await generateImageWithKeyFallback(imageKeys, apiKey =>
+      generateTopicImageWithKey(topic, apiKey, imageModel, baseUrl, imageDir, fallbackModels)
+    );
   } catch (err) {
     console.warn('[generateTopicImage] Failed:', err.message);
     throw err;
   }
+}
+
+export async function generateImageWithKeyFallback(imageKeys, generate) {
+  let lastError;
+  for (const [index, apiKey] of imageKeys.entries()) {
+    try {
+      return await generate(apiKey);
+    } catch (err) {
+      lastError = err;
+      if (index === imageKeys.length - 1 || !shouldRetryImageChannel(err)) throw err;
+      console.warn('[generateTopicImage] Image channel rejected the request; trying the next configured image key');
+    }
+  }
+  throw lastError;
+}
+
+async function generateTopicImageWithKey(topic, imageApiKey, imageModel, baseUrl, imageDir, fallbackModels) {
+  const client = new OpenAI({
+    apiKey: imageApiKey,
+    baseURL: baseUrl,
+    maxRetries: 2,
+    timeout: 60_000,
+  });
+  const response = await generateImageWithFallback(client, {
+    model: imageModel,
+    prompt: buildImagePrompt(topic),
+    n: 1,
+    size: '1024x1024',
+    response_format: 'url',
+  }, buildRelaySafeImagePrompt(topic.title), fallbackModels);
+
+  const generatedImage = extractGeneratedImage(response);
+  if (!generatedImage) {
+    const fields = Object.keys(response?.data?.[0] || {}).join(', ') || 'none';
+    throw new Error(`图片 API 未返回可用的 URL 或 Base64 图片数据（字段: ${fields}）`);
+  }
+
+  const safeName = topic.id.replace(/[^a-zA-Z0-9_-]/g, '_') + '.png';
+  const localPath = path.join(imageDir, safeName);
+  const imageBytes = generatedImage.kind === 'base64'
+    ? decodeBase64Image(generatedImage.value)
+    : await downloadGeneratedImage(generatedImage.value, baseUrl);
+  await fs.promises.writeFile(localPath, imageBytes);
+
+  const relativePath = '/images/' + safeName;
+  console.log('[generateTopicImage] Saved:', relativePath);
+  return relativePath;
 }
 
 /**
@@ -722,7 +770,7 @@ export function extractGeneratedImage(response) {
   return null;
 }
 
-export async function generateImageWithFallback(client, request, relaySafePrompt) {
+export async function generateImageWithFallback(client, request, relaySafePrompt, fallbackModels = []) {
   try {
     return await generateImageRequest(client, request);
   } catch (err) {
@@ -732,7 +780,23 @@ export async function generateImageWithFallback(client, request, relaySafePrompt
     // Some relays block verbose prompts before the image model evaluates them.
     // Keep the topic title intact, but retry once without generated detail or restrictive clauses.
     console.warn('[generateTopicImage] Image request blocked by relay; retrying with a compact educational prompt');
-    return generateImageRequest(client, { ...request, prompt: relaySafePrompt });
+    try {
+      return await generateImageRequest(client, { ...request, prompt: relaySafePrompt });
+    } catch (safePromptErr) {
+      if (!isRelayBlockedError(safePromptErr)) throw safePromptErr;
+
+      let lastError = safePromptErr;
+      for (const model of [...new Set(fallbackModels)].filter(candidate => candidate && candidate !== request.model)) {
+        try {
+          console.warn(`[generateTopicImage] Image model ${request.model} was blocked; retrying with fallback model ${model}`);
+          return await generateImageRequest(client, { ...request, model, prompt: relaySafePrompt });
+        } catch (fallbackErr) {
+          lastError = fallbackErr;
+          if (!isRelayBlockedError(fallbackErr)) throw fallbackErr;
+        }
+      }
+      throw lastError;
+    }
   }
 }
 
@@ -770,14 +834,14 @@ async function downloadGeneratedImage(rawUrl, baseUrl) {
 /**
  * Generate a detail + illustration for a topic (combines text and image generation).
  */
-export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel, explainStyle, imageBaseUrl) {
+export async function generateDetailWithImage(providerOrConfig, plan, topicId, imageApiKey, model = 'gpt-4o-mini', imageModel, explainStyle, imageBaseUrl, imageFallbackModel) {
   // First generate the text detail
   const content = await generateDetail(providerOrConfig, plan, topicId, model, explainStyle);
 
   // Then generate an illustration (fire-and-forget on the image, don't block)
   const topic = plan.topics.find(t => t.id === topicId);
   if (topic && imageApiKey) {
-    generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl)
+    generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl, imageFallbackModel)
       .then(imageUrl => {
         if (imageUrl && topic) {
           updateTopic(plan.id, topicId, { imageUrl });

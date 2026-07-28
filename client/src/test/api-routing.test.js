@@ -90,6 +90,7 @@ describe('API routing — fetch integration', () => {
       loadSettings.mockReturnValue({
         imageApiKey: 'sk-image',
         imageModel: 'FLUX.1-dev',
+        imageFallbackModel: 'FLUX.1-schnell',
       });
 
       await api.generateTopicImage('plan-1', 'topic-1');
@@ -100,6 +101,7 @@ describe('API routing — fetch integration', () => {
       // Should only contain image credentials
       expect(body.imageApiKey).toBe('sk-image');
       expect(body.imageModel).toBe('FLUX.1-dev');
+      expect(body.imageFallbackModel).toBe('FLUX.1-schnell');
       // Should NOT contain text channel credentials
       expect(body.apiKey).toBeUndefined();
       expect(body.baseURL).toBeUndefined();
