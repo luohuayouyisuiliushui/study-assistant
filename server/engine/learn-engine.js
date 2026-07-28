@@ -14,7 +14,7 @@
  * will produce IDENTICAL first-2-messages = HIGH cache hit rate.
  */
 
-import { Provider } from './provider.js';
+import { Provider, isUnsupportedParameterError } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
@@ -33,7 +33,6 @@ import { answerFollowUp, analyzeLearning, answerAnalysisFollowUp,
   analyzeCoreTopics, generateReview, gradeExercises, analyzeWeakPoints,
   generateQuickQuiz, analyzeFeynmanSession } from './learning-analyzer.js';
 import OpenAI from 'openai';
-import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -665,7 +664,7 @@ export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl
       timeout: 60_000,
     });
 
-    const response = await client.images.generate({
+    const response = await generateImageWithFallback(client, {
       model: imageModel,
       prompt,
       n: 1,
@@ -673,39 +672,80 @@ export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl
       response_format: 'url',
     });
 
-    const imageUrl = response.data?.[0]?.url;
-    if (!imageUrl) {
-      console.warn('[generateTopicImage] No image URL returned');
-      return null;
+    const generatedImage = extractGeneratedImage(response);
+    if (!generatedImage) {
+      const fields = Object.keys(response?.data?.[0] || {}).join(', ') || 'none';
+      throw new Error(`图片 API 未返回可用的 URL 或 Base64 图片数据（字段: ${fields}）`);
     }
 
-    // Download the image from the temporary URL
     const safeName = topic.id.replace(/[^a-zA-Z0-9_-]/g, '_') + '.png';
     const localPath = path.join(imageDir, safeName);
-
-    await new Promise((resolve, reject) => {
-      https.get(imageUrl, (res) => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`Download failed: ${res.statusCode}`));
-          return;
-        }
-        const fileStream = fs.createWriteStream(localPath);
-        res.pipe(fileStream);
-        fileStream.on('finish', () => {
-          fileStream.close();
-          resolve();
-        });
-        fileStream.on('error', reject);
-      }).on('error', reject);
-    });
+    const imageBytes = generatedImage.kind === 'base64'
+      ? decodeBase64Image(generatedImage.value)
+      : await downloadGeneratedImage(generatedImage.value, baseUrl);
+    await fs.promises.writeFile(localPath, imageBytes);
 
     const relativePath = '/images/' + safeName;
     console.log('[generateTopicImage] Saved:', relativePath);
     return relativePath;
   } catch (err) {
     console.warn('[generateTopicImage] Failed:', err.message);
-    return null;
+    throw err;
   }
+}
+
+/**
+ * Normalize the common image payload shapes used by OpenAI-compatible APIs.
+ * Providers may ignore response_format=url and return b64_json instead.
+ */
+export function extractGeneratedImage(response) {
+  const image = response?.data?.[0] || response?.images?.[0] || response?.output?.[0];
+  if (!image || typeof image !== 'object') return null;
+
+  const base64 = image.b64_json || image.b64 || image.image_base64;
+  if (typeof base64 === 'string' && base64.trim()) {
+    return { kind: 'base64', value: base64.trim() };
+  }
+
+  const candidates = [image.url, image.image_url, image.uri, image.image?.url];
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' ? candidate : candidate?.url;
+    if (typeof value === 'string' && value.trim()) {
+      return { kind: 'url', value: value.trim() };
+    }
+  }
+  return null;
+}
+
+export async function generateImageWithFallback(client, request) {
+  try {
+    return await client.images.generate(request);
+  } catch (err) {
+    if (!request.response_format || !isUnsupportedParameterError(err, 'response_format')) {
+      throw err;
+    }
+    console.warn('[generateTopicImage] Image API does not support response_format; retrying without it');
+    const fallbackRequest = { ...request };
+    delete fallbackRequest.response_format;
+    return client.images.generate(fallbackRequest);
+  }
+}
+
+function decodeBase64Image(value) {
+  const base64 = value.replace(/^data:image\/[^;,]+;base64,/i, '').trim();
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length === 0) throw new Error('图片 API 返回的 Base64 数据为空');
+  return bytes;
+}
+
+async function downloadGeneratedImage(rawUrl, baseUrl) {
+  const imageUrl = new URL(rawUrl, baseUrl);
+  if (!['https:', 'http:', 'data:'].includes(imageUrl.protocol)) {
+    throw new Error(`图片 URL 使用了不支持的协议: ${imageUrl.protocol}`);
+  }
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error(`图片下载失败 (${response.status})`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /**
@@ -718,11 +758,13 @@ export async function generateDetailWithImage(providerOrConfig, plan, topicId, i
   // Then generate an illustration (fire-and-forget on the image, don't block)
   const topic = plan.topics.find(t => t.id === topicId);
   if (topic && imageApiKey) {
-    generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl).then(imageUrl => {
-      if (imageUrl && topic) {
-        updateTopic(plan.id, topicId, { imageUrl });
-      }
-    });
+    generateTopicImage(topic, imageApiKey, imageModel, imageBaseUrl)
+      .then(imageUrl => {
+        if (imageUrl && topic) {
+          updateTopic(plan.id, topicId, { imageUrl });
+        }
+      })
+      .catch(err => console.warn('[generateDetailWithImage] Image generation failed:', err.message));
   }
 
   return content;

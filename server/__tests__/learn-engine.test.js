@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, generateImageWithFallback } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -1113,6 +1113,56 @@ describe('buildImagePrompt', () => {
   it('generateTopicImage should return null for missing apiKey', async () => {
     const result = await generateTopicImage({ id: 't1', title: '测试' }, null);
     assert.strictEqual(result, null);
+  });
+});
+
+describe('extractGeneratedImage', () => {
+  it('accepts an OpenAI-compatible image URL', () => {
+    assert.deepStrictEqual(
+      extractGeneratedImage({ data: [{ url: 'https://images.example/generated.png' }] }),
+      { kind: 'url', value: 'https://images.example/generated.png' },
+    );
+  });
+
+  it('accepts base64 image data when the API does not return a URL', () => {
+    assert.deepStrictEqual(
+      extractGeneratedImage({ data: [{ b64_json: 'aW1hZ2UtYnl0ZXM=' }] }),
+      { kind: 'base64', value: 'aW1hZ2UtYnl0ZXM=' },
+    );
+  });
+
+  it('accepts the image_url field returned by compatible providers', () => {
+    assert.deepStrictEqual(
+      extractGeneratedImage({ data: [{ image_url: { url: 'https://images.example/custom.webp' } }] }),
+      { kind: 'url', value: 'https://images.example/custom.webp' },
+    );
+  });
+});
+
+describe('generateImageWithFallback', () => {
+  it('retries without response_format when an image model rejects it', async () => {
+    const requests = [];
+    const client = {
+      images: {
+        async generate(request) {
+          requests.push(request);
+          if (requests.length === 1) {
+            throw new Error('response_format is not supported by this model');
+          }
+          return { data: [{ b64_json: 'aW1hZ2UtYnl0ZXM=' }] };
+        },
+      },
+    };
+
+    const result = await generateImageWithFallback(client, {
+      model: 'gpt-image-1',
+      prompt: 'test image',
+      response_format: 'url',
+    });
+
+    assert.strictEqual(result.data[0].b64_json, 'aW1hZ2UtYnl0ZXM=');
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1].response_format, undefined);
   });
 });
 

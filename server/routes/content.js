@@ -156,7 +156,7 @@ router.post('/plans/:planId/image/:topicId', async (req, res) => {
     res.json({ imageUrl });
   } catch (err) {
     console.error('[generate-image]', err);
-    res.status(500).json({ error: '图片生成失败: ' + (err.message || '未知错误') });
+    res.status(502).json({ error: '图片生成失败: ' + (err.message || '未知错误') });
   }
 });
 
