@@ -1164,6 +1164,34 @@ describe('generateImageWithFallback', () => {
     assert.strictEqual(requests.length, 2);
     assert.strictEqual(requests[1].response_format, undefined);
   });
+
+  it('retries a relay-blocked image request with the compact educational prompt', async () => {
+    const requests = [];
+    const client = {
+      images: {
+        async generate(request) {
+          requests.push(request);
+          if (requests.length === 1) {
+            const error = new Error('Your request was blocked.');
+            error.status = 403;
+            throw error;
+          }
+          return { data: [{ b64_json: 'aW1hZ2UtYnl0ZXM=' }] };
+        },
+      },
+    };
+
+    const compactPrompt = 'Create a simple, neutral educational illustration of the topic "Binary search".';
+    const result = await generateImageWithFallback(client, {
+      model: 'image-model',
+      prompt: 'Long generated prompt with detail context and restrictive clauses.',
+      response_format: 'url',
+    }, compactPrompt);
+
+    assert.strictEqual(result.data[0].b64_json, 'aW1hZ2UtYnl0ZXM=');
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1].prompt, compactPrompt);
+  });
 });
 
 // ═══════════════════════════════════════════════════════

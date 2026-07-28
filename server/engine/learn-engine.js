@@ -14,7 +14,7 @@
  * will produce IDENTICAL first-2-messages = HIGH cache hit rate.
  */
 
-import { Provider, isUnsupportedParameterError } from './provider.js';
+import { Provider, isRelayBlockedError, isUnsupportedParameterError } from './provider.js';
 import { CacheMonitor } from './cache-diagnostics.js';
 import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
@@ -635,6 +635,11 @@ export function buildImagePrompt(topic) {
   ].join(' ');
 }
 
+function buildRelaySafeImagePrompt(title) {
+  const topicTitle = String(title).replace(/\s+/g, ' ').trim().slice(0, 160);
+  return `Create a simple, neutral educational illustration of the topic "${topicTitle}". Use clear shapes, a light background, and a diagram-like composition.`;
+}
+
 /**
  * Generate an illustration for a knowledge point using SiliconFlow API.
  * Calls the text-to-image model, downloads the result, and saves it to server/data/images/.
@@ -670,7 +675,7 @@ export async function generateTopicImage(topic, imageApiKey, model, imageBaseUrl
       n: 1,
       size: '1024x1024',
       response_format: 'url',
-    });
+    }, buildRelaySafeImagePrompt(topic.title));
 
     const generatedImage = extractGeneratedImage(response);
     if (!generatedImage) {
@@ -717,7 +722,21 @@ export function extractGeneratedImage(response) {
   return null;
 }
 
-export async function generateImageWithFallback(client, request) {
+export async function generateImageWithFallback(client, request, relaySafePrompt) {
+  try {
+    return await generateImageRequest(client, request);
+  } catch (err) {
+    if (!relaySafePrompt || !isRelayBlockedError(err) || relaySafePrompt === request.prompt) {
+      throw err;
+    }
+    // Some relays block verbose prompts before the image model evaluates them.
+    // Keep the topic title intact, but retry once without generated detail or restrictive clauses.
+    console.warn('[generateTopicImage] Image request blocked by relay; retrying with a compact educational prompt');
+    return generateImageRequest(client, { ...request, prompt: relaySafePrompt });
+  }
+}
+
+async function generateImageRequest(client, request) {
   try {
     return await client.images.generate(request);
   } catch (err) {
