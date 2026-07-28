@@ -15,6 +15,7 @@ import {
   extractUsage,
   assessPrefixStability,
   encodeForRelay,
+  isRelayBlockedError,
 } from '../engine/provider.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -90,6 +91,14 @@ describe('formatConnectionError', () => {
     const result = formatConnectionError(err, 'https://api.openai.com/v1', 'gpt-4o');
     assert.ok(result.includes('403'));
     assert.ok(result.includes('gpt-4o'));
+  });
+
+  it('should explain relay content filtering separately from model permission errors', () => {
+    const err = { status: 403, message: 'Your request was blocked.' };
+    const result = formatConnectionError(err, 'https://api.openai.com/v1', 'gpt-4o');
+    assert.strictEqual(isRelayBlockedError(err), true);
+    assert.ok(result.includes('内容安全策略'));
+    assert.ok(result.includes('拆分'));
   });
 
   it('should return 404 error message suggesting /v1 suffix', () => {
@@ -396,6 +405,13 @@ describe('encodeForRelay', () => {
     assert.strictEqual(encodeForRelay(code), expected);
   });
 
+  it('should encode code punctuation in aggressive compatibility mode', () => {
+    assert.strictEqual(
+      encodeForRelay('pthread_join(thread);', { aggressive: true }),
+      'pthread＿join（thread）；',
+    );
+  });
+
   it('should be idempotent (no double-replacement of fullwidth chars)', () => {
     // Fullwidth chars ＜＞＇＂ are not in the trigger set, so encoding again
     // should not change the result.
@@ -514,6 +530,40 @@ describe('Provider AbortSignal forwarding (H-3)', () => {
       tools: [],
     });
     assert.strictEqual(receivedSignal, ac.signal, 'streamWithTools() must forward signal to the SDK');
+  });
+});
+
+describe('Provider relay content-filter recovery', () => {
+  it('retries a blocked completion with compatibility encoding', async () => {
+    const requests = [];
+    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+    provider._autoWarm = false;
+    provider._client = {
+      chat: {
+        completions: {
+          async create(request) {
+            requests.push(request);
+            if (requests.length === 1) {
+              throw Object.assign(new Error('Your request was blocked.'), { status: 403 });
+            }
+            return {
+              choices: [{ message: { content: '线程会等待。' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            };
+          },
+        },
+      },
+    };
+
+    const result = await provider.complete([
+      { role: 'system', content: 'Explain <pthread_join>.' },
+      { role: 'user', content: 'pthread_join 会阻塞吗？' },
+    ]);
+
+    assert.strictEqual(result.content, '线程会等待。');
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1].messages[0].content, 'Explain ＜pthread＿join＞.');
+    assert.strictEqual(requests[1].messages[1].content, 'pthread＿join 会阻塞吗？');
   });
 });
 
