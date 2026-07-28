@@ -161,6 +161,19 @@ describe('buildDeterministicContext', () => {
     assert.ok(!result.includes('学习历史记录'), 'orphan user message should not create history');
   });
 
+  it('should exclude previously failed answers from the request context', () => {
+    const plan = makePlan({
+      history: [
+        { topicId: 't1', role: 'user', content: '上一次提问', timestamp: 1000 },
+        { topicId: 't1', role: 'ai', content: '回答失败: AI 服务的内容安全策略拦截了请求。', timestamp: 1001 },
+      ],
+    });
+
+    const result = buildDeterministicContext(plan, 't1');
+    assert.ok(!result.includes('上一次提问'));
+    assert.ok(!result.includes('内容安全策略'));
+  });
+
   it('should include done count in progress', () => {
     const plan = makePlan();
     const result = buildDeterministicContext(plan, 't2');

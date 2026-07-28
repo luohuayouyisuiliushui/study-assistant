@@ -677,6 +677,25 @@ describe('answerFollowUp', () => {
     );
     await store.deletePlan(plan.id);
   });
+
+  it('should not store an error response as a completed Q&A pair', async () => {
+    const plan = await store.createPlan('followup-blocked');
+    await store.addTopics(plan.id, ['被拦截追问']);
+    const currentPlan = store.getPlan(plan.id);
+    const provider = createMockProvider('');
+    provider._client.chat.completions.create = async () => {
+      throw Object.assign(new Error('Your request was blocked.'), { status: 403 });
+    };
+
+    await assert.rejects(
+      () => answerFollowUp(provider, currentPlan, currentPlan.topics[0].id, '请解释这个问题'),
+      /内容安全策略/,
+    );
+
+    const history = store.getPlan(plan.id).history.filter(h => h.topicId === currentPlan.topics[0].id);
+    assert.deepStrictEqual(history, []);
+    await store.deletePlan(plan.id);
+  });
 });
 
 // ═══════════════════════════════════════════════════════

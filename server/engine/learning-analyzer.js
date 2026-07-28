@@ -21,8 +21,6 @@ export async function answerFollowUp(providerOrConfig, plan, topicId, question, 
   const topic = plan.topics.find(t => t.id === topicId);
   if (!topic) throw new Error('Topic not found');
 
-  await addHistory(plan.id, topicId, 'user', question);
-
   const provider = resolveProvider(providerOrConfig, model || 'gpt-4o-mini');
 
   try {
@@ -37,12 +35,11 @@ export async function answerFollowUp(providerOrConfig, plan, topicId, question, 
     engineCacheMonitor.recordUsage(result.usage, 'answerFollowUp:' + topicId.slice(0, 8));
 
     const answer = result.content || '（无法生成回复）';
+    await addHistory(plan.id, topicId, 'user', question);
     await addHistory(plan.id, topicId, 'ai', answer);
     return answer;
   } catch (err) {
     console.error('[answerFollowUp]', err);
-    const errMsg = '回答失败: ' + err.message;
-    await addHistory(plan.id, topicId, 'ai', errMsg);
     throw err;
   }
 }

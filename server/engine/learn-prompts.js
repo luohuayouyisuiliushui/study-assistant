@@ -449,7 +449,12 @@ export function buildDeterministicContext(plan, topicId, generationFeedback, exp
     const pairs = [];
     for (let i = 0; i < history.length; i++) {
       if (history[i].role === 'user' && i + 1 < history.length && history[i + 1].role === 'ai') {
-        pairs.push({ question: history[i].content, answer: history[i + 1].content });
+        const answer = history[i + 1].content;
+        // Older versions persisted failed AI calls as answers. Never replay them
+        // into a future prompt, because relay error text can trigger another block.
+        if (!String(answer || '').startsWith('回答失败:')) {
+          pairs.push({ question: history[i].content, answer });
+        }
         i++; // skip the next ai entry
       }
     }
