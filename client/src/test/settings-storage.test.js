@@ -5,6 +5,7 @@ import {
   loadSettings,
   saveSettings,
   selectTextProvider,
+  selectTextFallbackProvider,
   ROUTING_MODES,
 } from '../lib/settings-storage';
 
@@ -122,5 +123,32 @@ describe('selectTextProvider', () => {
       expect(result.apiKey).toBe('sk-old');
       expect(result.baseURL).toBe('https://old.test/v1');
     });
+  });
+});
+
+describe('selectTextFallbackProvider', () => {
+  const dualSettings = {
+    apiKey: 'sk-quality',
+    baseURL: 'https://quality.test/v1',
+    model: 'gpt-4o',
+    economyApiKey: 'sk-economy',
+    economyBaseURL: 'https://economy.test/v1',
+    economyModel: 'gpt-4o-mini',
+    routingMode: ROUTING_MODES.BALANCED,
+  };
+
+  it('returns the quality channel after an economy task is blocked', () => {
+    const fallback = selectTextFallbackProvider(dualSettings, 'ask-question');
+    expect(fallback).toMatchObject({ apiKey: 'sk-quality', tier: 'quality' });
+  });
+
+  it('returns the economy channel after a quality task is blocked', () => {
+    const fallback = selectTextFallbackProvider(dualSettings, 'generate-detail');
+    expect(fallback).toMatchObject({ apiKey: 'sk-economy', tier: 'economy' });
+  });
+
+  it('returns null when there is no other text channel', () => {
+    const fallback = selectTextFallbackProvider({ apiKey: 'sk-quality' }, 'ask-question');
+    expect(fallback).toBeNull();
   });
 });

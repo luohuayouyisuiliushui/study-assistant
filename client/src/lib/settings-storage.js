@@ -88,6 +88,21 @@ export function selectTextProvider(settings, taskType) {
   return pickQuality(settings);
 }
 
+/**
+ * Return the other configured text channel for a single retry.
+ * This is intentionally separate from regular task routing so normal requests
+ * continue to follow the user's selected cost/quality mode.
+ */
+export function selectTextFallbackProvider(settings, taskType) {
+  const primary = selectTextProvider(settings, taskType);
+  const fallback = primary.tier === 'economy'
+    ? pickQuality(settings)
+    : pickEconomy(settings);
+
+  if (!fallback.apiKey || isSameTextProvider(primary, fallback)) return null;
+  return fallback;
+}
+
 function pickQuality(settings) {
   if (!settings) {
     return { apiKey: '', baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini', tier: 'quality' };
@@ -114,6 +129,10 @@ function pickEconomy(settings) {
 
 function fallbackToQuality(settings) {
   return pickQuality(settings);
+}
+
+function isSameTextProvider(a, b) {
+  return a.apiKey === b.apiKey && a.baseURL === b.baseURL && a.model === b.model;
 }
 
 // ─── Settings persistence ───

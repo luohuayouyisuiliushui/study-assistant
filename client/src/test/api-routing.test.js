@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import api from '../api';
-import { loadSettings, saveSettings, selectTextProvider, ROUTING_MODES } from '../lib/settings-storage';
+import { loadSettings, selectTextProvider, selectTextFallbackProvider, ROUTING_MODES } from '../lib/settings-storage';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -14,6 +14,7 @@ vi.mock('../lib/settings-storage', async (importOriginal) => {
     loadSettings: vi.fn(),
     saveSettings: vi.fn(),
     selectTextProvider: vi.fn(),
+    selectTextFallbackProvider: vi.fn(),
   };
 });
 
@@ -62,6 +63,27 @@ describe('API routing — fetch integration', () => {
       const body = JSON.parse(opts.body);
       expect(body.apiKey).toBe('sk-economy');
       expect(body.baseURL).toBe('https://economy.test/v1');
+    });
+
+    it('retries a blocked question through the other text channel', async () => {
+      selectTextProvider.mockReturnValue(economyProvider);
+      selectTextFallbackProvider.mockReturnValue(qualityProvider);
+      loadSettings.mockReturnValue({ routingMode: ROUTING_MODES.BALANCED });
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          json: () => Promise.resolve({ error: 'AI 服务的内容安全策略拦截了请求。' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ answer: '已通过备用通道回答。' }),
+        });
+
+      await expect(api.askQuestion('plan-1', 'topic-1', '什么是闭包？')).resolves.toEqual({ answer: '已通过备用通道回答。' });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(mockFetch.mock.calls[0][1].body).apiKey).toBe('sk-economy');
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body).apiKey).toBe('sk-quality');
     });
 
     it('does not send text credentials for image generation', async () => {

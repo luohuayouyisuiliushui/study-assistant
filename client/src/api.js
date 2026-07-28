@@ -1,4 +1,4 @@
-import { loadSettings, selectTextProvider } from './lib/settings-storage';
+import { loadSettings, selectTextProvider, selectTextFallbackProvider } from './lib/settings-storage';
 
 const API_BASE = '/api';
 const RESOURCE_RECOMMENDATION_TIMEOUT_MS = 65_000;
@@ -11,8 +11,8 @@ function getApiSettings() {
  * Inject provider credentials from the selected channel into the request body.
  * Accepts body as undefined, JSON string, or plain object.
  */
-function injectProvider(body, settings, taskType) {
-  const provider = selectTextProvider(settings, taskType);
+function injectProvider(body, settings, taskType, providerOverride) {
+  const provider = providerOverride || selectTextProvider(settings, taskType);
   if (!provider.apiKey) return body;
 
   let parsed = {};
@@ -28,13 +28,13 @@ function injectProvider(body, settings, taskType) {
   return JSON.stringify(parsed);
 }
 
-async function request(url, options = {}, taskType = null) {
+async function request(url, options = {}, taskType = null, providerOverride = null) {
   const { timeoutMs = 0, timeoutMessage = '', ...requestOptions } = options;
   let body = requestOptions.body;
 
   if (taskType) {
     const settings = getApiSettings();
-    body = injectProvider(body, settings, taskType);
+    body = injectProvider(body, settings, taskType, providerOverride);
   }
 
   const fetchOpts = { ...requestOptions };
@@ -82,6 +82,16 @@ async function request(url, options = {}, taskType = null) {
     if (timeoutId) clearTimeout(timeoutId);
     if (externalAbortHandler) requestOptions.signal?.removeEventListener('abort', externalAbortHandler);
   }
+}
+
+function isContentSafetyBlock(err) {
+  const message = String(err?.message || '').toLowerCase();
+  return message.includes('内容安全策略') ||
+    message.includes('request was blocked') ||
+    message.includes('content_filter') ||
+    message.includes('content filter') ||
+    message.includes('content policy') ||
+    message.includes('safety policy');
 }
 
 const api = {
@@ -157,10 +167,23 @@ const api = {
       { method: 'POST', body }, 'generate-detail');
   },
   async askQuestion(planId, topicId, question) {
-    return request(`${API_BASE}/learn/plans/${planId}/ask/${topicId}`, {
+    const settings = getApiSettings();
+    const provider = selectTextProvider(settings, 'ask-question');
+    const requestOptions = {
       method: 'POST',
       body: JSON.stringify({ question }),
-    }, 'ask-question');
+    };
+    const url = `${API_BASE}/learn/plans/${planId}/ask/${topicId}`;
+
+    try {
+      return await request(url, requestOptions, 'ask-question', provider);
+    } catch (err) {
+      const fallbackProvider = isContentSafetyBlock(err)
+        ? selectTextFallbackProvider(settings, 'ask-question')
+        : null;
+      if (!fallbackProvider) throw err;
+      return request(url, requestOptions, 'ask-question', fallbackProvider);
+    }
   },
 
   // ─── Resource Recommendations ───
