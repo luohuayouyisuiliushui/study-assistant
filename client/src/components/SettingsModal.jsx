@@ -251,14 +251,16 @@ export default function SettingsModal({ isOpen, onClose, onSave }) {
               </div>
 
               <div className='flex flex-col gap-1.5'>
-                <Label>生图模型</Label>
-                <select value={imageModel} onChange={e => setImageModel(e.target.value)} className='flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring'>
-                  <option value='black-forest-labs/FLUX.1-pro'>FLUX.1-pro（最高质量，推荐）</option>
-                  <option value='black-forest-labs/FLUX.1-dev'>FLUX.1-dev（高质量）</option>
-                  <option value='Kwai-Kolors/Kolors'>Kolors（中等质量，速度快）</option>
-                  <option value='stabilityai/stable-diffusion-3-5-large'>SD3.5 Large（高质量）</option>
-                  <option value='stabilityai/stable-diffusion-xl-base-1.0'>SDXL 1.0（兼容性好）</option>
-                </select>
+                <Label htmlFor='image-model'>生图模型</Label>
+                <Input id='image-model' list='image-model-options' value={imageModel} onChange={e => setImageModel(e.target.value)} placeholder='输入模型标识' />
+                <datalist id='image-model-options'>
+                  <option value='black-forest-labs/FLUX.1-pro' label='FLUX.1-pro（最高质量，推荐）' />
+                  <option value='black-forest-labs/FLUX.1-dev' label='FLUX.1-dev（高质量）' />
+                  <option value='Kwai-Kolors/Kolors' label='Kolors（中等质量，速度快）' />
+                  <option value='stabilityai/stable-diffusion-3-5-large' label='SD3.5 Large（高质量）' />
+                  <option value='stabilityai/stable-diffusion-xl-base-1.0' label='SDXL 1.0（兼容性好）' />
+                </datalist>
+                <p className='text-xs text-muted-foreground mt-1'>可从建议中选择，也可填写接口支持的任意模型标识</p>
               </div>
             </div>
 
