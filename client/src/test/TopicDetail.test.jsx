@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -5,7 +6,7 @@ import TopicDetail from '../components/TopicDetail';
 
 vi.mock('../api', () => ({
   default: {
-    generateDetail: vi.fn(),
+    generateDetail: vi.fn(() => Promise.resolve()),
     generateTopicImage: vi.fn(() => Promise.resolve({ imageUrl: '/images/test.png' })),
     askQuestion: vi.fn(),
     recordTime: vi.fn(),
@@ -113,6 +114,42 @@ describe('TopicDetail', () => {
     it('does not show review button when topic is not done', () => {
       renderTD({ topic: { ...sampleTopic, done: false } });
       expect(screen.queryByTitle('复习模式')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('related topic navigation', () => {
+    it('selects the related topic, generates its missing detail, and does not navigate back', async () => {
+      const onBack = vi.fn();
+      const relatedTopic = { id: 't-2', title: 'JavaScript 原型链', detail: '', done: false, level: 1 };
+      const sourceTopic = { ...sampleTopic, relatedTopics: [relatedTopic.id] };
+      const plan = { ...samplePlan, topics: [sourceTopic, relatedTopic] };
+
+      function RelatedTopicNavigation() {
+        const [selectedTopicId, setSelectedTopicId] = useState(sampleTopic.id);
+        const selectedTopic = plan.topics.find(t => t.id === selectedTopicId);
+
+        return (
+          <MemoryRouter>
+            <TopicDetail
+              plan={plan}
+              topic={selectedTopic}
+              onBack={onBack}
+              onRefresh={vi.fn()}
+              onSelectTopic={setSelectedTopicId}
+            />
+          </MemoryRouter>
+        );
+      }
+
+      render(<RelatedTopicNavigation />);
+
+      fireEvent.click(screen.getByRole('button', { name: relatedTopic.title }));
+
+      expect(onBack).not.toHaveBeenCalled();
+      const apiModule = await import('../api');
+      await waitFor(() => {
+        expect(apiModule.default.generateDetail).toHaveBeenCalledWith(plan.id, relatedTopic.id);
+      });
     });
   });
 
