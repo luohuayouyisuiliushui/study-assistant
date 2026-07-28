@@ -510,11 +510,14 @@ const BACKOFF_MULTIPLIER = 2;
 function isRetryableError(err) {
   const status = err?.status;
   if (!status) {
-    return err?.message?.includes('ECONNRESET') ||
-           err?.message?.includes('ETIMEDOUT') ||
-           err?.message?.includes('timeout') ||
-           err?.message?.includes('socket hang up') ||
-           err?.message?.includes('network');
+    const message = err?.message?.toLowerCase() || '';
+    return message.includes('econnreset') ||
+           message.includes('etimedout') ||
+           message.includes('timeout') ||
+           message.includes('socket hang up') ||
+           message.includes('http/2') ||
+           message.includes('http2') ||
+           message.includes('network');
   }
   return status === 429 || status >= 500;
 }
@@ -572,7 +575,7 @@ async function* withStreamTimeout(iterable, timeoutMs = 60_000, signal) {
   }
 }
 
-async function retryWithBackoff(fn, attempt = 0) {
+async function retryWithBackoff(fn, attempt = 0, onRetry) {
   try {
     return await fn();
   } catch (err) {
@@ -580,8 +583,9 @@ async function retryWithBackoff(fn, attempt = 0) {
       const delay = Math.min(INITIAL_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt), MAX_DELAY);
       const jitter = delay * (0.75 + Math.random() * 0.5);
       console.warn('[provider] Retry ' + (attempt + 1) + '/' + MAX_RETRIES + ' after ' + Math.round(jitter) + 'ms: ' + err.message);
+      if (onRetry) await onRetry(err);
       await sleep(jitter);
-      return retryWithBackoff(fn, attempt + 1);
+      return retryWithBackoff(fn, attempt + 1, onRetry);
     }
     throw err;
   }
@@ -635,17 +639,19 @@ export class Provider {
    * Tries the primary model first; on retryable failure, falls back through this._fallbackModels.
    * Skips cache update for fallback models to avoid stale data.
    */
-  async _executeWithModelFallback(fn) {
+  async _executeWithModelFallback(fn, hooks = {}) {
     const modelsToTry = [this._model, ...this._fallbackModels.filter(m => m !== this._model)];
     let lastError;
-    for (const model of modelsToTry) {
+    for (let index = 0; index < modelsToTry.length; index++) {
+      const model = modelsToTry[index];
       try {
-        const result = await retryWithBackoff(() => fn(model));
+        const result = await retryWithBackoff(() => fn(model), 0, hooks.onRetry);
         return { result, usedFallback: model !== this._model };
       } catch (err) {
         lastError = err;
         if (!isRetryableError(err)) throw err;
         console.warn(`[provider] Model ${model} failed, trying fallback: ${err.message}`);
+        if (index < modelsToTry.length - 1 && hooks.onRetry) await hooks.onRetry(err);
       }
     }
     throw lastError;
@@ -716,10 +722,16 @@ export class Provider {
       if (opts.signal) {
         requestOpts.signal = opts.signal;
       }
+      const apiRequestOptions = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+        ? { timeout: opts.timeoutMs }
+        : undefined;
+      const createRequest = (requestOptions) => apiRequestOptions
+        ? this._client.chat.completions.create(requestOptions, apiRequestOptions)
+        : this._client.chat.completions.create(requestOptions);
 
       let resp;
       try {
-        resp = await this._client.chat.completions.create(requestOpts);
+        resp = await createRequest(requestOpts);
       } catch (err) {
         if (opts.signal?.aborted) throw err;
         if (opts.responseFormat && !responseFormatFailed && isUnsupportedParameterError(err, 'response_format')) {
@@ -732,7 +744,7 @@ export class Provider {
             max_tokens: opts.maxTokens ?? 4096,
           };
           if (opts.signal) retryOpts.signal = opts.signal;
-          resp = await this._client.chat.completions.create(retryOpts);
+          resp = await createRequest(retryOpts);
         } else {
           throw err;
         }
@@ -848,65 +860,91 @@ export class Provider {
 
     this._totalCalls++;
 
-    // Shared stream reader: accumulates content and usage
+    // Shared stream reader: accumulates content and reports completion status.
     const readStream = async (stream) => {
+      let finishReason = null;
       for await (const chunk of withStreamTimeout(stream, 60_000, opts.signal)) {
         if (opts.signal?.aborted) throw new Error('Stream aborted by client');
         if (chunk.usage) {
           finalUsage = chunk.usage;
           continue;
         }
-        const delta = chunk.choices?.[0]?.delta?.content || '';
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta?.content || '';
         if (delta) {
           fullContent += delta;
           if (opts.onChunk) opts.onChunk(delta);
         }
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
       }
+      return finishReason;
+    };
+
+    const resetAttempt = async () => {
+      fullContent = '';
+      finalUsage = null;
+      if (opts.onReset) await opts.onReset();
     };
 
     await this._executeWithModelFallback(async (model) => {
-      let useStreamOptions = opts.streamOptions !== false;
+      const useStreamOptions = opts.streamOptions !== false;
       let streamOptionsFailed = false;
       const apiMessages = mergedMessages.map(m =>
         m.role === 'user' ? { ...m, content: encodeForRelay(m.content) } : m
       );
-      const requestOpts = {
-        model,
-        messages: apiMessages,
-        temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
-        max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
-        stream: true,
+      const maxContinuations = Number.isInteger(opts.maxContinuations)
+        ? Math.max(0, opts.maxContinuations)
+        : 2;
+      const continuationPrompt = encodeForRelay(
+        '上一次回答因输出长度限制而被截断。请从截断处直接继续，保持原有格式，不要重复已经生成的内容。'
+      );
+
+      const runStreamSequence = async (includeStreamOptions) => {
+        let requestMessages = apiMessages;
+        let continuationCount = 0;
+
+        while (true) {
+          const requestOpts = {
+            model,
+            messages: requestMessages,
+            temperature: opts.temperature ?? this._agentTemperature ?? 0.7,
+            max_tokens: opts.maxTokens ?? this._agentMaxTokens ?? 8192,
+            stream: true,
+          };
+          if (includeStreamOptions) requestOpts.stream_options = { include_usage: true };
+          if (opts.signal) requestOpts.signal = opts.signal;
+
+          const stream = await this._client.chat.completions.create(requestOpts);
+          const finishReason = await readStream(stream);
+          if (finishReason !== 'length') return;
+
+          if (continuationCount >= maxContinuations) {
+            throw new Error('AI 输出达到长度上限，自动续写后仍未完成，请重试');
+          }
+
+          continuationCount++;
+          requestMessages = [
+            ...apiMessages,
+            { role: 'assistant', content: fullContent },
+            { role: 'user', content: continuationPrompt },
+          ];
+        }
       };
-      if (useStreamOptions && !streamOptionsFailed) {
-        requestOpts.stream_options = { include_usage: true };
-      }
-      if (opts.signal) {
-        requestOpts.signal = opts.signal;
-      }
 
       try {
-        const stream = await this._client.chat.completions.create(requestOpts);
-        await readStream(stream);
+        await runStreamSequence(useStreamOptions);
       } catch (err) {
         if (opts.signal?.aborted) throw err;
         if (useStreamOptions && !streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
-          const fallbackOpts = {
-            model,
-            messages: apiMessages,
-            temperature: opts.temperature ?? 0.7,
-            max_tokens: opts.maxTokens ?? 8192,
-            stream: true,
-          };
-          if (opts.signal) fallbackOpts.signal = opts.signal;
-          const fallbackStream = await this._client.chat.completions.create(fallbackOpts);
-          await readStream(fallbackStream);
+          await resetAttempt();
+          await runStreamSequence(false);
           return;
         }
         throw err;
       }
-    });
+    }, { onRetry: resetAttempt });
 
     const usage = extractUsage({ usage: finalUsage || {} });
     const prefixChanged = this._lastPrefixHash && this._lastPrefixHash !== prefixHash;
@@ -997,6 +1035,14 @@ export class Provider {
       }
     };
 
+    const resetToolStreamAttempt = async () => {
+      fullContent = '';
+      finalUsage = null;
+      toolCallsAccumulator = null;
+      finishReason = null;
+      if (opts.onReset) await opts.onReset();
+    };
+
     await this._executeWithModelFallback(async (model) => {
       let streamOptionsFailed = false;
       const apiMessages = mergedMessages.map(m =>
@@ -1026,6 +1072,7 @@ export class Provider {
         if (!streamOptionsFailed && isUnsupportedParameterError(err, 'stream_options')) {
           console.warn('[provider] ⚠️ Relay does not support stream_options, retrying without it');
           streamOptionsFailed = true;
+          await resetToolStreamAttempt();
           const fallbackOpts = { ...requestOpts };
           delete fallbackOpts.stream_options;
           const fallbackStream = await this._client.chat.completions.create(fallbackOpts);
@@ -1034,7 +1081,7 @@ export class Provider {
         }
         throw err;
       }
-    });
+    }, { onRetry: resetToolStreamAttempt });
 
     const usage = extractUsage({ usage: finalUsage || {} });
     const prefixChanged = this._lastPrefixHash && this._lastPrefixHash !== prefixHash;

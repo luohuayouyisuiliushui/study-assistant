@@ -1023,6 +1023,7 @@ export async function recommendResources(providerOrConfig, plan, topicId, model 
   ], {
     temperature: recovery ? 0.2 : 0.4,
     maxTokens: 4096,
+    timeoutMs: 120_000,
     responseFormat: { type: 'json_object' },
     model,
     signal: options.signal,

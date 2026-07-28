@@ -117,6 +117,27 @@ describe('TopicDetail', () => {
     });
   });
 
+  describe('failed generation', () => {
+    it('shows the error and starts generation again when retried', async () => {
+      const apiModule = await import('../api');
+      apiModule.default.generateDetail.mockResolvedValue({ status: 'generating' });
+
+      renderTD({
+        topic: {
+          ...sampleTopic,
+          detail: '半截讲解',
+          lastError: '生成失败: Upstream HTTP/2 stream failed',
+        },
+      });
+
+      expect(screen.getByRole('alert')).toHaveTextContent('讲解生成失败');
+      fireEvent.click(screen.getByRole('button', { name: '重新生成' }));
+
+      expect(apiModule.default.generateDetail).toHaveBeenCalledWith('plan-1', 't-1');
+      expect(screen.getByText('生成中...')).toBeInTheDocument();
+    });
+  });
+
   describe('related topic navigation', () => {
     it('selects the related topic, generates its missing detail, and does not navigate back', async () => {
       const onBack = vi.fn();

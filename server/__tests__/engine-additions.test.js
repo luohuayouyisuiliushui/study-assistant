@@ -13,11 +13,12 @@ import { generateSingleQuestion, gradeExam } from '../engine/exam-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Mock provider that returns a fixed completion ───
-function createMockProvider(resultContent, modelName = 'mock-model') {
+function createMockProvider(resultContent, modelName = 'mock-model', onCreate) {
   const mockClient = {
     chat: {
       completions: {
-        async create() {
+        async create(request, options) {
+          if (onCreate) onCreate(request, options);
           return {
             choices: [{ message: { content: resultContent, role: 'assistant' } }],
             model: modelName,
@@ -142,6 +143,20 @@ describe('recommendResources', () => {
     assert.equal(result.resources[0].type, 'article'); // defaulted
     assert.equal(result.resources[0].paid, false); // defaulted
     assert.equal(result.resources[0].level, 'intermediate'); // defaulted
+  });
+
+  it('allows enough time for the resource recommendation request', async () => {
+    let requestTimeout;
+    const provider = createMockProvider(
+      JSON.stringify({ topicTitle: 'Socket 编程基础', resources: [{ title: 'Beej Guide' }] }),
+      'timeout-model',
+      (_request, options) => { requestTimeout = options?.timeout; }
+    );
+    const plan = store.getPlan(planId);
+
+    await recommendResources(provider, plan, plan.topics[0].id, 'timeout-model');
+
+    assert.equal(requestTimeout, 120_000);
   });
 
   it('throws on unknown topic', async () => {

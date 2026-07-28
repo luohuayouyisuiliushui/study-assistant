@@ -866,6 +866,21 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
           )}
       </div>
 
+      {error && !interactiveMode && (
+        <div role='alert' className='flex flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex min-w-0 items-start gap-3'>
+            <AlertCircle className='mt-0.5 h-5 w-5 shrink-0 text-destructive' />
+            <div className='min-w-0'>
+              <p className='text-sm font-semibold text-destructive'>讲解生成失败</p>
+              <p className='break-words text-sm text-muted-foreground'>{error}</p>
+            </div>
+          </div>
+          <Button variant='outline' size='sm' className='shrink-0' onClick={handleRetry}>
+            <RotateCcw className='h-3.5 w-3.5 mr-1' />重新生成
+          </Button>
+        </div>
+      )}
+
       {/* Sticky navigation bar — desktop reveals near the top edge */}
       {headerStuck && (
         <nav

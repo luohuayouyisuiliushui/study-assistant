@@ -279,6 +279,191 @@ describe('Provider.testConnection', () => {
   });
 });
 
+describe('Provider.stream transient failures', () => {
+  it('should retry an upstream HTTP/2 stream failure', async () => {
+    let attempts = 0;
+    let observedContent = '';
+    const mockClient = {
+      chat: {
+        completions: {
+          async create() {
+            attempts++;
+            if (attempts === 1) {
+              return {
+                async *[Symbol.asyncIterator]() {
+                  yield { choices: [{ delta: { content: '半截讲解' } }] };
+                  throw new Error('Upstream HTTP/2 stream failed');
+                },
+              };
+            }
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { content: '讲解成功' } }] };
+              },
+            };
+          },
+        },
+      },
+    };
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'test-model',
+    });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+
+    const result = await provider.stream(
+      [{ role: 'user', content: '请生成讲解' }],
+      {
+        streamOptions: false,
+        onChunk: (delta) => { observedContent += delta; },
+        onReset: () => { observedContent = ''; },
+      }
+    );
+
+    assert.strictEqual(result, '讲解成功');
+    assert.strictEqual(observedContent, '讲解成功');
+    assert.strictEqual(attempts, 2);
+  });
+
+  it('should continue when the model reaches its output token limit', async () => {
+    const requests = [];
+    let observedContent = '';
+    const mockClient = {
+      chat: {
+        completions: {
+          async create(request) {
+            requests.push(request);
+            const isContinuation = requests.length === 2;
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield {
+                  choices: [{
+                    delta: { content: isContinuation ? '并完成剩余内容。' : '第一部分讲解，' },
+                    finish_reason: null,
+                  }],
+                };
+                yield {
+                  choices: [{
+                    delta: {},
+                    finish_reason: isContinuation ? 'stop' : 'length',
+                  }],
+                };
+              },
+            };
+          },
+        },
+      },
+    };
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'test-model',
+      fallbackModels: [],
+    });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+
+    const result = await provider.stream(
+      [{ role: 'user', content: '请生成完整讲解' }],
+      {
+        streamOptions: false,
+        onChunk: (delta) => { observedContent += delta; },
+      }
+    );
+
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1].messages.at(-2).role, 'assistant');
+    assert.strictEqual(requests[1].messages.at(-2).content, '第一部分讲解，');
+    assert.match(requests[1].messages.at(-1).content, /继续/);
+    assert.strictEqual(result, '第一部分讲解，并完成剩余内容。');
+    assert.strictEqual(observedContent, result);
+  });
+
+  it('should fail explicitly when continuation attempts also reach the token limit', async () => {
+    let attempts = 0;
+    const mockClient = {
+      chat: {
+        completions: {
+          async create() {
+            attempts++;
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield {
+                  choices: [{ delta: { content: `第${attempts}段` }, finish_reason: null }],
+                };
+                yield {
+                  choices: [{ delta: {}, finish_reason: 'length' }],
+                };
+              },
+            };
+          },
+        },
+      },
+    };
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'test-model',
+      fallbackModels: [],
+    });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+
+    await assert.rejects(
+      provider.stream(
+        [{ role: 'user', content: '请生成完整讲解' }],
+        { streamOptions: false, maxContinuations: 2 }
+      ),
+      /自动续写后仍未完成/
+    );
+
+    assert.strictEqual(attempts, 3);
+  });
+});
+
+describe('Provider.complete request options', () => {
+  it('preserves the custom timeout when retrying without response_format', async () => {
+    const requests = [];
+    const mockClient = {
+      chat: {
+        completions: {
+          async create(request, options) {
+            requests.push({ request, options });
+            if (requests.length === 1) {
+              throw new Error('response_format is not supported by this model');
+            }
+            return {
+              choices: [{ message: { content: '{}', role: 'assistant' }, finish_reason: 'stop' }],
+              usage: {},
+            };
+          },
+        },
+      },
+    };
+    const provider = new Provider({
+      apiKey: 'test-key',
+      baseURL: 'https://test.api/v1',
+      model: 'test-model',
+      fallbackModels: [],
+    });
+    provider._client = mockClient;
+    provider._autoWarm = false;
+
+    await provider.complete(
+      [{ role: 'user', content: '返回一个空 JSON 对象' }],
+      { responseFormat: { type: 'json_object' }, timeoutMs: 120_000 }
+    );
+
+    assert.strictEqual(requests.length, 2);
+    assert.deepStrictEqual(requests[0].options, { timeout: 120_000 });
+    assert.deepStrictEqual(requests[1].options, { timeout: 120_000 });
+    assert.ok(requests[0].request.response_format);
+    assert.ok(!requests[1].request.response_format);
+  });
+});
+
 // ═══════════════════════════════════════════════════════
 //  Hash function tests (gap coverage)
 // ═══════════════════════════════════════════════════════
