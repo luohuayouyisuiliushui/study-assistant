@@ -9,12 +9,13 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  DATA, PLANS_INDEX,
-  writeAtomic, removePlanBackups, drainWriteQueue,
-  readJSON, readIndex, appendIndexEntry, removeIndexEntries, planPath,
+  DATA,
+  removePlanBackups, drainWriteQueue,
+  readJSON, readIndex, removeIndexEntries, planPath,
   getCachedPlan, invalidatePlanCache,
 } from './storage.js';
 import { markPlanForTestCleanup } from './test-plan-marker.js';
+import { createPlanRecord } from './write-plan.js';
 import {
   trashPlan, readTrashIndex, writeTrashIndex, findTrashFile,
 } from './crud-trash.js';
@@ -85,7 +86,7 @@ export function getPlan(planId) {
 
 export async function createPlan(name, options = {}) {
   const id = uuidv4();
-  const plan = {
+  const initial = {
     id,
     name,
     createdAt: Date.now(),
@@ -94,10 +95,16 @@ export async function createPlan(name, options = {}) {
     phases: [],
     history: [],
   };
-  markPlanForTestCleanup(plan, options);
-  writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
-  await appendIndexEntry({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: 0 });
-  return plan;
+  markPlanForTestCleanup(initial, options);
+  return createPlanRecord(id, initial, {
+    indexEntry: (meta) => ({
+      id,
+      name,
+      createdAt: initial.createdAt,
+      updatedAt: meta.updatedAt,
+      topicCount: 0,
+    }),
+  });
 }
 
 // ─── Trash / Recycle Bin ───

@@ -32,10 +32,10 @@ import {
   readJSON,
   removePlanBackups,
   withPlanWriteLocks,
-  writeAtomic,
 } from './storage.js';
 import { getPlan, listPlans } from './crud-plans.js';
 import { writePlan } from './crud-content.js';
+import { writePlansAtomic } from './write-plan.js';
 
 export const MASTERY_BACKUP_SCHEMA_VERSION = 'study-assistant-backup-v1';
 
@@ -727,12 +727,9 @@ export async function restoreMasteryBackup(rawBackup) {
     const originalEntries = originalIndex.filter(entry => restoredIds.has(entry.id));
     const applied = [];
     try {
-      for (const snapshot of backup.plans) {
-        const plan = clone(snapshot);
-        applied.push(plan.id);
-        writeAtomic(planPath(plan.id), JSON.stringify(plan, null, 2), { backup: true });
-        invalidatePlanCache(plan.id);
-      }
+      const snapshots = backup.plans.map(snapshot => clone(snapshot));
+      await writePlansAtomic(snapshots, { lock: false });
+      for (const plan of snapshots) applied.push(plan.id);
 
       const restoredEntries = backup.plans.map(plan => ({
         id: plan.id,
@@ -747,19 +744,28 @@ export async function restoreMasteryBackup(rawBackup) {
       ]);
     } catch (error) {
       const rollbackErrors = [];
-      for (const planId of applied.reverse()) {
-        try {
-          const original = originals.get(planId);
-          if (original) {
-            writeAtomic(planPath(planId), JSON.stringify(original, null, 2), { backup: true });
-          } else {
+      const appliedIds = applied.slice().reverse();
+      const rollbackPlans = [];
+      for (const planId of appliedIds) {
+        const original = originals.get(planId);
+        if (original) rollbackPlans.push(original);
+      }
+      try {
+        if (rollbackPlans.length > 0) {
+          await writePlansAtomic(rollbackPlans, { lock: false });
+          for (const plan of rollbackPlans) invalidatePlanCache(plan.id);
+        }
+        for (const planId of appliedIds) {
+          // Value-based check: a null entry means the Plan file did not exist
+          // before the restore, so rollback must delete it again.
+          if (!originals.get(planId)) {
             if (fs.existsSync(planPath(planId))) fs.unlinkSync(planPath(planId));
             removePlanBackups(planId, { strict: true });
+            invalidatePlanCache(planId);
           }
-          invalidatePlanCache(planId);
-        } catch (rollbackError) {
-          rollbackErrors.push(`${planId}: ${rollbackError.message}`);
         }
+      } catch (rollbackError) {
+        rollbackErrors.push(`${rollbackError.message}`);
       }
       try {
         await mutateIndex(index => [
@@ -780,3 +786,5 @@ export async function restoreMasteryBackup(rawBackup) {
     return { restored: backup.plans.length, preview };
   });
 }
+
+

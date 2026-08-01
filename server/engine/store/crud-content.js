@@ -7,13 +7,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import {
-  writeAtomic, enqueueWrite,
-  appendIndexEntry, updateIndex, planPath, invalidatePlanCache,
-} from './storage.js';
 import { markPlanForTestCleanup } from './test-plan-marker.js';
-import { getPlan } from './crud-plans.js';
-import { writeFlag } from './crud-flags.js';
+import { createPlanRecord, writePlan } from './write-plan.js';
 
 // ─── Phase / topic flattening (AI import) ───
 
@@ -151,7 +146,7 @@ export async function createPlanWithPhases(name, phases, relations, options = {}
     }
   }
 
-  const plan = {
+  const initial = {
     id,
     name,
     createdAt: Date.now(),
@@ -160,44 +155,22 @@ export async function createPlanWithPhases(name, phases, relations, options = {}
     topics,
     history: [],
   };
-  markPlanForTestCleanup(plan, options);
+  markPlanForTestCleanup(initial, options);
 
-  writeAtomic(planPath(id), JSON.stringify(plan, null, 2));
-  await appendIndexEntry({ id, name, createdAt: plan.createdAt, updatedAt: plan.updatedAt, topicCount: plan.topics.length });
-  return plan;
-}
-
-// ─── Serialized write wrapper ───
-
-/**
- * Serialized write: execute fn(plan), then atomically save.
- * fn receives the plan object and should mutate it in place.
- */
-export function writePlan(planId, fn, { updateIndexFn = updateIndex } = {}) {
-  return enqueueWrite(planId, async () => {
-    const current = getPlan(planId);
-    if (!current) throw new Error(`Plan not found: ${planId}`);
-    const plan = structuredClone(current);
-    fn(plan);
-    plan.updatedAt = Date.now();
-    writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-    invalidatePlanCache(planId);
-    // Index update is best-effort: the plan file is already durably written,
-    // so a failing index update must not invalidate the write. The index will
-    // be reconciled on the next rebuildIndex() pass.
-    try {
-      await updateIndexFn(planId, {
-        topicCount: plan.topics.length,
-        updatedAt: plan.updatedAt,
-      });
-    } catch (indexErr) {
-      console.warn(`[writePlan] index update failed for ${planId} (non-fatal, will be reconciled on rebuild):`, indexErr.message);
-    }
-    // 通知标记：写入 .flag 文件（study-trace 通知模式）
-    writeFlag(planId);
-    return plan;
+  return createPlanRecord(id, initial, {
+    indexEntry: (meta) => ({
+      id,
+      name,
+      createdAt: initial.createdAt,
+      updatedAt: meta.updatedAt,
+      topicCount: initial.topics.length,
+    }),
   });
 }
+
+// ─── Serialized write wrapper (delegated to the plan-mutation seam) ───
+
+export { writePlan } from './write-plan.js';
 
 // ─── Topic operations ───
 
