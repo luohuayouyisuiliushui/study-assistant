@@ -1,8 +1,8 @@
-# Study Assistant v1.14.0
+# Study Assistant v3.1.0
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
-当前稳定版：[`v1.14.0`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.14.0)。下载源码归档或查看发布说明，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
+当前工作区版本：`v3.1.0`。下载源码归档或查看已发布版本，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
 
 ## 它能做什么
 
@@ -265,7 +265,7 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 
 **重要：** AI 相关测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则会挂起超时。
 
-`v1.14.0` 发布基线：Server `540/540`、Client `112/112`；Client lint `0 errors / 27 warnings`，Server lint `0 errors / 105 warnings`；数据完整性检查、Client production build、桌面与移动端 Playwright 交互检查均通过。真实页面验证覆盖知识图谱 `13/64` 聚合切换、节点高亮、画像小时/分钟展示和思维导图 OPML 下载。Playwright 检查为发布前手动验证，仓库目前尚无持久化的 E2E 测试套件。
+`v3.1.0` 的验证入口统一为根目录 `npm test`、`npm run lint` 和 `npm run build`。测试数量随功能变化，不在文档中维护可漂移的固定计数。
 
 ### 代码规范
 

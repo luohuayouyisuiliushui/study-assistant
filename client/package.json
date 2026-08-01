@@ -1,7 +1,7 @@
 {
   "name": "study-assistant-client",
   "private": true,
-  "version": "1.14.10",
+  "version": "3.1.0",
   "type": "module",
   "imports": {
     "#/*": "./src/*"

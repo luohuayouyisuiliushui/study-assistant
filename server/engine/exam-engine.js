@@ -4,7 +4,7 @@
  * streaming exam generation, grading, and practice generation.
  */
 
-import { addExamPaper, getExamPapers, updateExamResults, updateTopic } from './learn-store.js';
+import { addExamPaper, getExamPapers, saveExamAssessment, updateTopic } from './learn-store.js';
 import {
   STABLE_EXAM_GENERATION_PROMPT, STABLE_EXAM_GRADING_PROMPT,
   STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT,
@@ -384,10 +384,15 @@ export async function gradeExam(providerOrConfig, plan, examId, answers) {
     throw new Error('AI 评分结果格式错误');
   }
 
-  const results = gradingResults.results || [];
+  let results = gradingResults.results || [];
 
   // Save exam results to store
-  await updateExamResults(plan.id, examId, results);
+  const savedPlan = await saveExamAssessment(plan.id, examId, {
+    attemptId: crypto.randomUUID(),
+    occurredAt: Date.now(),
+    results,
+  });
+  results = savedPlan.examPapers.find(paper => paper.id === examId)?.results || results;
 
   // ── Weak point feedback: update topic.weakPoints from wrong answers ──
   const wrongByTopic = {}; // topicId → Set of conceptTags

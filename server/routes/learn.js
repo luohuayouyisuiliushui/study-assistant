@@ -677,7 +677,7 @@ router.post('/plans/:planId/quick-quiz/submit', async (req, res) => {
     if (!Array.isArray(questions) || !Array.isArray(results)) {
       return res.status(400).json({ error: 'questions 和 results 必须是数组' });
     }
-    await store.saveQuickQuizResults(req.params.planId, { questions, results });
+    await store.saveQuickQuizAssessment(req.params.planId, { questions, results });
     // Flywheel best-effort after successful save
     try { refreshDataFlywheel('quick-quiz'); } catch {}
     res.json({ success: true });

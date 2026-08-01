@@ -385,6 +385,55 @@ const api = {
     return request(`${API_BASE}/learn/plans/${planId}/review-needs`);
   },
 
+  // ─── Mastery & Today Review ───
+  async getTodayReview(budgetMinutes = 30) {
+    return request(`${API_BASE}/learn/today-review?budgetMinutes=${encodeURIComponent(budgetMinutes)}`);
+  },
+  async getMasteryMetrics(budgetMinutes = 30) {
+    return request(`${API_BASE}/learn/mastery/metrics?budgetMinutes=${encodeURIComponent(budgetMinutes)}`);
+  },
+  async getMasteryState(planId, topicId) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/mastery`);
+  },
+  async createReviewSession(planId, topicId, options = {}) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/review-session`, {
+      method: 'POST', body: JSON.stringify(options),
+    });
+  },
+  async createMistakeRepairSession(planId, topicId, conceptKey, options = {}) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/mistakes/${encodeURIComponent(conceptKey)}/repair-session`, {
+      method: 'POST', body: JSON.stringify(options),
+    });
+  },
+  async submitReviewSession(planId, topicId, submission) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/review-session/submit`, {
+      method: 'POST', body: JSON.stringify(submission),
+    });
+  },
+  async deferReview(planId, topicId, until) {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/review/defer`, {
+      method: 'POST', body: JSON.stringify({ until }),
+    });
+  },
+  async dismissMistake(planId, topicId, conceptKey, reason = '') {
+    return request(`${API_BASE}/learn/plans/${planId}/topics/${topicId}/mistakes/${encodeURIComponent(conceptKey)}/dismiss`, {
+      method: 'POST', body: JSON.stringify({ reason }),
+    });
+  },
+  async createMasteryBackup() {
+    return request(`${API_BASE}/learn/mastery/backup`);
+  },
+  async previewMasteryRestore(backup) {
+    return request(`${API_BASE}/learn/mastery/restore/preview`, {
+      method: 'POST', body: JSON.stringify({ backup }),
+    });
+  },
+  async restoreMasteryBackup(backup) {
+    return request(`${API_BASE}/learn/mastery/restore`, {
+      method: 'POST', body: JSON.stringify({ backup, confirm: true }),
+    });
+  },
+
   // ─── Quick Quiz ───
   async generateQuickQuiz(planId) {
     return request(`${API_BASE}/learn/plans/${planId}/quick-quiz`, {

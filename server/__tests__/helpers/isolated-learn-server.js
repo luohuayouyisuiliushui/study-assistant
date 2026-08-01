@@ -1,9 +1,11 @@
 import express from 'express';
 import http from 'node:http';
 import learnRouter from '../../routes/learn.js';
+import masteryRouter from '../../routes/mastery.js';
 
 const app = express();
 app.use(express.json());
+app.use('/api/learn', masteryRouter);
 app.use('/api/learn', learnRouter);
 
 const server = http.createServer(app);

@@ -5,7 +5,7 @@
 
 import { Provider } from './provider.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
-import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory, addHistory, updateTopic, saveCoreAnalysis } from './learn-store.js';
+import { buildLearningProfile, parseExercisesFromDetail, getTopicHistory, addHistory, updateTopic, saveCoreAnalysis, saveExerciseAssessment } from './learn-store.js';
 import {
   STABLE_REVIEW_SYSTEM_PROMPT, STABLE_EXERCISE_GRADING_PROMPT,
   STABLE_WEAK_POINT_PROMPT, FEYNMAN_ANALYSIS_PROMPT,
@@ -335,7 +335,7 @@ export async function gradeExercises(providerOrConfig, plan, topicId, userAnswer
   const provider = resolveProvider(providerOrConfig);
 
   // Get exercises from topic or parse from detail
-  let exercises = topic.exercises || [];
+  let exercises = structuredClone(topic.exercises || []);
   if (exercises.length === 0 && topic.detail) {
     exercises = parseExercisesFromDetail(topic.detail);
   }
@@ -386,15 +386,22 @@ export async function gradeExercises(providerOrConfig, plan, topicId, userAnswer
 
   // Update topic exercises with user answers and grading
   if (gradingResults.results && Array.isArray(gradingResults.results)) {
+    const occurredAt = Date.now();
+    const attemptId = crypto.randomUUID();
     for (const grade of gradingResults.results) {
       const idx = grade.exerciseIndex;
       if (idx >= 0 && idx < exercises.length) {
         exercises[idx].userAnswer = grade.userAnswer || exercises[idx].userAnswer;
         exercises[idx].correct = grade.correct;
-        exercises[idx].gradedAt = Date.now();
+        exercises[idx].gradedAt = occurredAt;
       }
     }
-    await updateTopic(plan.id, topicId, { exercises });
+    await saveExerciseAssessment(plan.id, topicId, {
+      attemptId,
+      occurredAt,
+      exercises,
+      results: gradingResults.results,
+    });
     topic.exercises = exercises;
   }
 

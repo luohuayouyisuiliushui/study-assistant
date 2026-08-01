@@ -9,7 +9,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import {
   writeAtomic, enqueueWrite,
-  appendIndexEntry, updateIndex, planPath,
+  appendIndexEntry, updateIndex, planPath, invalidatePlanCache,
 } from './storage.js';
 import { markPlanForTestCleanup } from './test-plan-marker.js';
 import { getPlan } from './crud-plans.js';
@@ -175,11 +175,13 @@ export async function createPlanWithPhases(name, phases, relations, options = {}
  */
 export function writePlan(planId, fn, { updateIndexFn = updateIndex } = {}) {
   return enqueueWrite(planId, async () => {
-    const plan = getPlan(planId);
-    if (!plan) throw new Error(`Plan not found: ${planId}`);
+    const current = getPlan(planId);
+    if (!current) throw new Error(`Plan not found: ${planId}`);
+    const plan = structuredClone(current);
     fn(plan);
     plan.updatedAt = Date.now();
     writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
+    invalidatePlanCache(planId);
     // Index update is best-effort: the plan file is already durably written,
     // so a failing index update must not invalidate the write. The index will
     // be reconciled on the next rebuildIndex() pass.

@@ -149,12 +149,13 @@ router.get('/plans/:planId/exams', (req, res) => {
  * DELETE /api/learn/plans/:planId/exam/:examId
  * Delete a saved exam paper.
  */
-router.delete('/plans/:planId/exam/:examId', (req, res) => {
+router.delete('/plans/:planId/exam/:examId', async (req, res) => {
   try {
-    store.deleteExamPaper(req.params.planId, req.params.examId);
+    await store.deleteExamPaper(req.params.planId, req.params.examId);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const status = err.message === '计划不存在' ? 404 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -329,8 +330,12 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
   try {
     const provider = getProvider(req);
     const insights = await analyzeFeynmanSession(provider, session.transcript, topic.title);
-    topic.feynmanInsights = insights;
-    await store.updateTopic(req.params.planId, req.params.topicId, { feynmanInsights: insights });
+    const sessionId = session.masterySessionId || crypto.randomUUID();
+    await store.saveFeynmanAssessment(req.params.planId, req.params.topicId, {
+      sessionId,
+      occurredAt: Date.now(),
+      insights,
+    });
     res.json(insights);
     // Flywheel: Feynman analysis adds behavioral evidence
     refreshDataFlywheel('feynman-analyze');

@@ -2,20 +2,13 @@
  * Exercises, exam papers, and review management.
  *
  * Contains parsing of exercises from AI-generated detail, weak-point
- * extraction, exam paper CRUD, and quick-quiz history. Exam paper writes
- * go directly through writeAtomic (bypassing writePlan) to preserve the
- * exact exam-data shape, while topic-scoped mutations use writePlan.
+ * extraction, exam paper CRUD, and quick-quiz history. Every Plan mutation
+ * uses writePlan so concurrent exam/topic changes cannot overwrite each other.
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import {
-  writeAtomic,
-  updateIndex, planPath,
-  invalidatePlanCache,
-} from './storage.js';
 import { getPlan } from './crud-plans.js';
 import { writePlan } from './crud-content.js';
-import { writeFlag } from './crud-flags.js';
 
 // ─── Exercise parsing ───
 
@@ -178,27 +171,20 @@ export function getTopicsNeedingReview(plan) {
  * @returns {object} Updated plan
  */
 export async function addExamPaper(planId, examData) {
-  const plan = getPlan(planId);
-  if (!plan) throw new Error('计划不存在');
-
-  if (!plan.examPapers) plan.examPapers = [];
-  plan.examPapers.push({
-    id: examData.id,
-    title: examData.title,
-    createdAt: Date.now(),
-    config: examData.config,
-    paper: examData.paper,
-    questions: examData.questions,
-    results: null,
-    gradedAt: null,
+  if (!getPlan(planId)) throw new Error('计划不存在');
+  return writePlan(planId, (plan) => {
+    if (!plan.examPapers) plan.examPapers = [];
+    plan.examPapers.push({
+      id: examData.id,
+      title: examData.title,
+      createdAt: Date.now(),
+      config: examData.config,
+      paper: examData.paper,
+      questions: examData.questions,
+      results: null,
+      gradedAt: null,
+    });
   });
-  plan.updatedAt = Date.now();
-
-  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  invalidatePlanCache(planId);
-  await updateIndex(planId, { updatedAt: plan.updatedAt });
-  writeFlag(planId);
-  return plan;
 }
 
 /**
@@ -219,22 +205,14 @@ export function getExamPapers(planId) {
  * @param {Array} results - Grading results array
  */
 export async function updateExamResults(planId, examId, results) {
-  const plan = getPlan(planId);
-  if (!plan) throw new Error('计划不存在');
-  if (!plan.examPapers) throw new Error('该计划没有试卷');
-
-  const exam = plan.examPapers.find(e => e.id === examId);
-  if (!exam) throw new Error('试卷不存在');
-
-  exam.results = results;
-  exam.gradedAt = Date.now();
-  plan.updatedAt = Date.now();
-
-  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  invalidatePlanCache(planId);
-  await updateIndex(planId, { updatedAt: plan.updatedAt });
-  writeFlag(planId);
-  return plan;
+  if (!getPlan(planId)) throw new Error('计划不存在');
+  return writePlan(planId, (plan) => {
+    if (!plan.examPapers) throw new Error('该计划没有试卷');
+    const exam = plan.examPapers.find(e => e.id === examId);
+    if (!exam) throw new Error('试卷不存在');
+    exam.results = results;
+    exam.gradedAt = Date.now();
+  });
 }
 
 /**
@@ -243,16 +221,11 @@ export async function updateExamResults(planId, examId, results) {
  * @param {string} examId
  */
 export async function deleteExamPaper(planId, examId) {
-  const plan = getPlan(planId);
-  if (!plan) throw new Error('计划不存在');
-  if (!plan.examPapers) return;
-
-  plan.examPapers = plan.examPapers.filter(e => e.id !== examId);
-  plan.updatedAt = Date.now();
-
-  writeAtomic(planPath(planId), JSON.stringify(plan, null, 2), { backup: true });
-  invalidatePlanCache(planId);
-  await updateIndex(planId, { updatedAt: plan.updatedAt });
+  if (!getPlan(planId)) throw new Error('计划不存在');
+  return writePlan(planId, (plan) => {
+    if (!plan.examPapers) return;
+    plan.examPapers = plan.examPapers.filter(e => e.id !== examId);
+  });
 }
 
 // ─── Teaching errors & quick quiz ───

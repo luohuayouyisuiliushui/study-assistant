@@ -5,6 +5,7 @@
 import { createProviderFromConfig } from '../engine/learn-engine.js';
 import AgentDispatcher from '../engine/agent-dispatcher.js';
 import { getKeyPool } from '../engine/key-pool.js';
+import { isValidPlanId } from '../engine/learn-store.js';
 
 function resolveApiKey(rawKey) {
   const pool = getKeyPool(rawKey);
@@ -38,4 +39,16 @@ function wantsAgentDispatch(req) {
   );
 }
 
-export { getProvider, getModel, getDispatcher, wantsAgentDispatch };
+function registerPlanIdParams(router, parameters = ['planId']) {
+  for (const parameter of parameters) {
+    router.param(parameter, (req, res, next, value) => {
+      if (!isValidPlanId(value)) {
+        return res.status(400).json({ error: '无效的计划 ID' });
+      }
+      next();
+    });
+  }
+  return router;
+}
+
+export { getProvider, getModel, getDispatcher, wantsAgentDispatch, registerPlanIdParams };

@@ -18,6 +18,7 @@ import contentRouter from './routes/content.js';
 import userProfileRouter from './routes/user-profile.js';
 import settingsRouter from './routes/settings.js';
 import { createApiAuthorization, getListenHost } from './security.js';
+import masteryRouter from './routes/mastery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env.local') });
@@ -51,6 +52,7 @@ app.use('/api', createApiAuthorization());
 app.use('/api/learn', exportRouter);
 app.use('/api/learn', assessmentRouter);
 app.use('/api/learn', contentRouter);
+app.use('/api/learn', masteryRouter);
 app.use('/api/learn', learnRouter);
 app.use('/api/user-profile', userProfileRouter);
 app.use('/api/settings', settingsRouter);

@@ -5,6 +5,8 @@
  * CRUD operations are grouped by domain in store/crud-*.js.
  */
 
+export { isValidPlanId } from './store/storage.js';
+
 export {
   listPlans, scanStoredPlans, pruneMissingPlanIndexEntries,
   getPlan, createPlan,
@@ -38,3 +40,23 @@ export {
 } from './store/crud-exercises.js';
 
 export { writeFlag, readFlags, clearFlag } from './store/crud-flags.js';
+
+export {
+  MASTERY_BACKUP_SCHEMA_VERSION,
+  getMasteryState,
+  appendTopicMasteryEvidence,
+  saveExerciseAssessment,
+  saveExamAssessment,
+  saveQuickQuizAssessment,
+  saveFeynmanAssessment,
+  createOrResumeReviewSession,
+  createOrResumeMistakeRepairSession,
+  submitTopicReviewSession,
+  deferTopicReview,
+  dismissTopicMistake,
+  getTodayReview,
+  getMasteryMetrics,
+  createMasteryBackup,
+  previewMasteryRestore,
+  restoreMasteryBackup,
+} from './store/crud-mastery.js';

@@ -107,23 +107,31 @@ function writeAtomic(filePath, data, { backup } = {}) {
 
 // ─── Backup cleanup helper ───
 
-function removePlanBackups(planId) {
+function removePlanBackups(planId, { strict = false } = {}) {
+  const errors = [];
   try {
     const bakPath = planPath(planId) + '.bak';
     if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
-  } catch {}
+  } catch (error) {
+    errors.push(error);
+  }
   try {
     const v2Backup = path.join(BACKUP_DIR, planId + '.json');
     if (fs.existsSync(v2Backup)) fs.unlinkSync(v2Backup);
-  } catch {}
+  } catch (error) {
+    errors.push(error);
+  }
+  if (strict && errors.length > 0) {
+    throw new Error(`Failed to remove Plan backups: ${errors.map(error => error.message).join('; ')}`);
+  }
 }
 
 // ─── Per-plan write queue (serializes concurrent writes to same plan) ───
 
 const writeQueues = new Map();
 
-function enqueueWrite(planId, fn) {
-  if (!fs.existsSync(planPath(planId))) {
+function enqueueWrite(planId, fn, { allowMissing = false } = {}) {
+  if (!allowMissing && !fs.existsSync(planPath(planId))) {
     return Promise.reject(new Error(`Plan not found: ${planId}`));
   }
   if (!writeQueues.has(planId)) {
@@ -143,6 +151,29 @@ function enqueueWrite(planId, fn) {
     () => { if (writeQueues.get(planId) === next) writeQueues.delete(planId); },
   );
   return next;
+}
+
+async function withPlanWriteLocks(planIds, fn) {
+  const ids = [...new Set(planIds)].sort();
+  let releaseLocks;
+  const releasePromise = new Promise(resolve => { releaseLocks = resolve; });
+  const ready = ids.map(() => {
+    let resolveReady;
+    const promise = new Promise(resolve => { resolveReady = resolve; });
+    return { promise, resolve: resolveReady };
+  });
+  const locks = ids.map((planId, index) => enqueueWrite(planId, async () => {
+    ready[index].resolve();
+    await releasePromise;
+  }, { allowMissing: true }));
+
+  await Promise.all(ready.map(item => item.promise));
+  try {
+    return await fn();
+  } finally {
+    releaseLocks();
+    await Promise.allSettled(locks);
+  }
 }
 
 // ─── Index write mutex (prevents TOCTOU race on plans.json) ───
@@ -298,6 +329,12 @@ function updateIndex(planId, updates) {
 
 // ─── Paths ───
 
+const PLAN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+function isValidPlanId(id) {
+  return typeof id === 'string' && PLAN_ID_RE.test(id);
+}
+
 function planPath(id) {
   return path.join(DATA, 'plans', `${id}.json`);
 }
@@ -341,6 +378,7 @@ export {
   writeAtomic,
   removePlanBackups,
   enqueueWrite,
+  withPlanWriteLocks,
   drainWriteQueue,
   readJSON,
   readIndex,
@@ -350,6 +388,7 @@ export {
   appendIndexEntry,
   removeIndexEntries,
   updateIndex,
+  isValidPlanId,
   planPath,
   getCachedPlan,
   invalidatePlanCache,

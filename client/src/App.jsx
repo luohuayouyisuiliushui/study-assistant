@@ -7,6 +7,8 @@ import TopicDetail from './components/TopicDetail'
 import UserProfile from './pages/UserProfile'
 import SettingsModal from './components/SettingsModal'
 import ThemeSwitcher from './components/ThemeSwitcher'
+import TodayReviewSummary from './components/TodayReviewSummary'
+import TodayReviewPage from './pages/TodayReview'
 import api from './api'
 import { PlanProvider, usePlan } from '#/lib/plan-context.jsx'
 import { loadSettings } from '#/lib/settings-storage'
@@ -91,7 +93,7 @@ function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [hasApiKey, setHasApiKey] = useState(!!loadApiSettings().apiKey)
 
-  const showBackToList = location.pathname.startsWith('/plan/')
+  const showBackToList = location.pathname.startsWith('/plan/') || location.pathname === '/review'
   const showProfileInHeader = location.pathname !== '/profile'
 
   const goToList = useCallback(() => {
@@ -162,12 +164,21 @@ function AppContent() {
       <main className='flex-1 overflow-auto flex justify-center'>
         <Routes>
           <Route path="/" element={
-            <PlanList
-              plans={plans}
-              onCreate={handleCreatePlan}
-              onImport={handleImportPlan}
-              onSelect={(id) => navigate(`/plan/${id}`)}
-              onDelete={handleDeletePlan}
+            <div className="w-full">
+              <TodayReviewSummary onStart={() => navigate('/review', { state: { autoStart: true } })} />
+              <PlanList
+                plans={plans}
+                onCreate={handleCreatePlan}
+                onImport={handleImportPlan}
+                onSelect={(id) => navigate(`/plan/${id}`)}
+                onDelete={handleDeletePlan}
+              />
+            </div>
+          } />
+          <Route path="/review" element={
+            <TodayReviewPage
+              autoStart={location.state?.autoStart === true}
+              onOpenTopic={(item) => navigate(`/plan/${item.planId}/topic/${item.topicId}`)}
             />
           } />
           <Route path="/plan/:planId" element={
