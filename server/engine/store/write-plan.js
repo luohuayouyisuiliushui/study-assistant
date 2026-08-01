@@ -84,6 +84,29 @@ export function createPlanRecord(id, initial, { indexEntry } = {}) {
 }
 
 /**
+ * Re-register an existing plan file into the active index through the seam.
+ * Used by trash-restore flows: the file is already back on disk, and the
+ * domain change is "this plan is active again". Index uses append semantics
+ * because a restored plan was removed from the index while trashed.
+ */
+export function restorePlanRecord(planId, { indexEntry } = {}) {
+  return writePlan(planId, () => {}, {
+    updateIndexFn: async (id, meta) => {
+      const entry = indexEntry
+        ? indexEntry(meta)
+        : {
+            id,
+            name: '',
+            createdAt: Date.now(),
+            updatedAt: meta.updatedAt,
+            topicCount: meta.topicCount,
+          };
+      await appendIndexEntry(entry);
+    },
+  });
+}
+
+/**
  * Atomically replace several plan files, then invalidate their caches.
  * Used by bulk-restore flows; callers keep their own rollback policy.
  *

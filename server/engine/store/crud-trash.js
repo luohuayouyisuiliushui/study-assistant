@@ -12,11 +12,11 @@ import path from 'path';
 import {
   TRASH_DIR, TRASH_TTL_DAYS, TRASH_INDEX,
   writeAtomic, removePlanBackups, drainWriteQueue,
-  readJSON, appendIndexEntry, removeIndexEntries, planPath,
+  readJSON, removeIndexEntries, planPath,
   invalidatePlanCache,
 } from './storage.js';
 import { getPlan } from './crud-plans.js';
-import { writeFlag } from './crud-flags.js';
+import { restorePlanRecord } from './write-plan.js';
 
 const TRANSIENT_RENAME_ERRORS = new Set(['EBUSY', 'EPERM']);
 
@@ -161,26 +161,24 @@ export async function restorePlan(planId) {
     }
   }
 
-  // Re-add to active index — read plan to get current topicCount
-  const plan = getPlan(planId);
-  if (plan) {
-    await appendIndexEntry({
-      id: plan.id,
-      name: plan.name,
-      createdAt: plan.createdAt,
-      updatedAt: Date.now(),
-      topicCount: plan.topics?.length || 0,
-    });
-
-    // Restore notification flag
-    writeFlag(planId);
-  }
+  // Re-add to active index through the plan-mutation seam (append semantics,
+  // serialized write, atomic save, backup, notification flag, cache invalidation)
+  await restorePlanRecord(planId, {
+    indexEntry: (meta) => {
+      const plan = getPlan(planId);
+      return {
+        id: planId,
+        name: plan?.name || entry.name || '未知计划',
+        createdAt: plan?.createdAt || entry.deletedAt,
+        updatedAt: meta.updatedAt,
+        topicCount: plan?.topics?.length || 0,
+      };
+    },
+  });
 
   // Remove from trash index
   const updated = trashIndex.filter(e => e.id !== planId);
   writeTrashIndex(updated);
-
-  invalidatePlanCache(planId);
 }
 
 /**
