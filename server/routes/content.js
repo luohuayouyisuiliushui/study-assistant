@@ -2,8 +2,9 @@ import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
 import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage,
   startInteractiveDetail, continueInteractiveDetail,
-  revealEmbeddedErrors, decomposeTopic, textToSpeech, recommendResources,
+  revealEmbeddedErrors, decomposeTopic, recommendResources,
   streamInteractiveStart, streamInteractiveContinue, answerFollowUp } from '../engine/learn-engine.js';
+import { textToSpeech } from '../engine/ai-runtime.js';
 import { getAIInvocation, registerPlanIdParams } from './middleware.js';
 import { refreshDataFlywheel } from './flywheel.js';
 

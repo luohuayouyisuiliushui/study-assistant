@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { getEngineCacheDiagnostics,
+import {
   generateExamStream, generateExam, gradeExam, generateExamPractice,
   analyzeFeynmanSession, factCheckDetail, autoFixUncertainClaims,
   applyFixesToContent, buildFactCheckReport } from '../engine/learn-engine.js';
+import { getEngineCacheDiagnostics } from '../engine/ai-runtime.js';
 import { AdaptivePromptInjector, analyzePlanAdaptive, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
 import { getUserProfile } from '../engine/user-profile.js';
 import { getAIInvocation, registerPlanIdParams } from './middleware.js';

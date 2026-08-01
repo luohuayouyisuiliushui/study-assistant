@@ -2,7 +2,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, streamInteractiveStart, streamInteractiveContinue, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, downloadGeneratedImage, generateImageWithFallback, generateImageWithKeyFallback, getImageFallbackModels } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, streamInteractiveStart, streamInteractiveContinue, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, generateTopicImage } from '../engine/learn-engine.js';
+import { createProviderFromConfig, downloadGeneratedImage, extractGeneratedImage, generateImageWithFallback, generateImageWithKeyFallback, getEngineCacheDiagnostics, getImageFallbackModels } from '../engine/ai-runtime.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
