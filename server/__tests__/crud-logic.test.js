@@ -1,5 +1,5 @@
 /**
- * Tests for server/engine/store/crud.js — core data logic.
+ * Tests for the production domain stores exposed through learn-store.js.
  * Focus: pure transformation functions that don't require network or file I/O.
  */
 import { describe, it } from 'node:test';

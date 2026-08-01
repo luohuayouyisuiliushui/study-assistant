@@ -24,8 +24,8 @@ export {
 
 export {
   addTopics, updateTopic, updateTopicTime, appendWeakPoint, reorderTopics, removeTopic,
+  markRelationsInferred,
   createPlanWithPhases,
-  writePlan,
   addHistory, getTopicHistory,
   buildLearningProfile,
   saveCoreAnalysis,

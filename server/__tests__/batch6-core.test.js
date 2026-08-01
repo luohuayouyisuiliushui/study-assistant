@@ -5,7 +5,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as store from '../engine/learn-store.js';
-import { appendGenerationFeedback } from '../engine/store/crud.js';
+import { appendGenerationFeedback } from '../engine/learn-store.js';
 import { aggregatePlans, profileUpdater, getProfileSummary, hasBehaviorEvidence, hasAIProfile, mergeGeneratedProfile } from '../engine/user-profile.js';
 import { AdaptivePromptInjector, MIN_BEHAVIOR_SAMPLES } from '../engine/adaptive-engine.js';
 
@@ -251,9 +251,15 @@ describe('AdaptivePromptInjector', () => {
 //  getProfileSummary
 // ═══════════════════════════════════════════════════════════
 describe('getProfileSummary', () => {
-  it('quickQuizStats present', () => {
-    const r = getProfileSummary();
-    assert.ok('quickQuizStats' in r);
+  it('includes quickQuizStats when learning-plan data exists', async () => {
+    const plan = await store.createPlan('profile-summary-fixture', { testOnly: false });
+    try {
+      const r = getProfileSummary();
+      assert.equal(r.hasData, true);
+      assert.ok('quickQuizStats' in r);
+    } finally {
+      await store.permanentlyDeletePlan(plan.id);
+    }
   });
 });
 

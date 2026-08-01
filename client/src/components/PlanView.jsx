@@ -356,7 +356,7 @@ export default function PlanView({ plan, onAddTopics, onRemoveTopic, onSelectTop
             <div className='ui-eyebrow'><Sparkles className='h-3.5 w-3.5' />学习计划</div>
             <h2>{plan.name}</h2>
             <p className='plan-overview__summary'>
-              {hasPhases ? `${phases.length} 个学习阶段` : '自由学习路径'} · {plan.topics.length} 个知识点 · {doneTopics.length} 个已掌握
+              {hasPhases ? `${phases.length} 个学习阶段` : '自由学习路径'} · {plan.topics.length} 个知识点 · {doneTopics.length} 个已学习
             </p>
           </div>
           <div className='plan-overview__actions'>

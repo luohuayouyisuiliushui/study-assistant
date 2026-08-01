@@ -15,9 +15,9 @@ try {
     Write-Host "[OK] npm.cmd $(& (Get-NpmCommand) --version)"
 
     if (-not $SkipPorts) {
-        $listeners = @(Get-PortListeners -Ports @(3001, 5173))
+        $listeners = @(Get-PortListeners -Ports @(3001, 5270))
         if ($listeners.Count -eq 0) {
-            Write-Host '[OK] Ports 3001 and 5173 are available.'
+            Write-Host '[OK] Ports 3001 and 5270 are available.'
         }
         else {
             foreach ($listener in $listeners) {

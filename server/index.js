@@ -17,8 +17,9 @@ import assessmentRouter from './routes/assessment.js';
 import contentRouter from './routes/content.js';
 import userProfileRouter from './routes/user-profile.js';
 import settingsRouter from './routes/settings.js';
-import { createApiAuthorization, getListenHost } from './security.js';
+import studyTraceRouter from './routes/study-trace.js';
 import masteryRouter from './routes/mastery.js';
+import { createApiAuthorization, getListenHost, isAllowedBrowserOrigin } from './security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env.local') });
@@ -42,7 +43,9 @@ app.use((req, res, next) => {
   next();
 });
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin(origin, callback) {
+    callback(isAllowedBrowserOrigin(origin) ? null : new Error('CORS origin denied'), true);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -56,6 +59,7 @@ app.use('/api/learn', masteryRouter);
 app.use('/api/learn', learnRouter);
 app.use('/api/user-profile', userProfileRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/study-trace', studyTraceRouter);
 
 // Serve generated images
 app.use('/images', express.static(IMAGES_DIR));
@@ -66,7 +70,7 @@ app.use(express.static(clientDist, { maxAge: 0, etag: false }));
 app.get('/{*splat}', (req, res) => {
   // Only serve index.html for non-API routes
   if (!req.path.startsWith('/api')) {
-    res.sendFile(path.join(clientDist, 'index.html'));
+    res.sendFile('index.html', { root: clientDist });
   }
 });
 

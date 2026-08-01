@@ -9,7 +9,7 @@ import {
   getUserProfileForDisplay,
   getProfileSummary,
 } from '../engine/user-profile.js';
-import { getProvider, getModel } from './middleware.js';
+import { getAIInvocation } from './middleware.js';
 
 const router = Router();
 
@@ -41,8 +41,7 @@ router.post('/analyze', async (req, res) => {
     if (!process.env.OPENAI_API_KEY && !req.headers['x-api-key'] && !req.body?.apiKey) {
       return res.status(400).json({ error: '请提供 API Key' });
     }
-    const provider = getProvider(req);
-    const model = getModel(req);
+    const { provider, model } = getAIInvocation(req);
     const profile = await generateUserProfile(provider, model);
     res.json({ profile });
   } catch (err) {

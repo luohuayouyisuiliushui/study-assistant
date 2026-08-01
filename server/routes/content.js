@@ -1,17 +1,31 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
 import { generateDetail, generateDetailWithImage, generateDetailStream, generateTopicImage,
-  createProviderFromConfig, startInteractiveDetail, continueInteractiveDetail,
+  startInteractiveDetail, continueInteractiveDetail,
   revealEmbeddedErrors, decomposeTopic, textToSpeech, recommendResources,
   streamInteractiveStart, streamInteractiveContinue, answerFollowUp } from '../engine/learn-engine.js';
-import { AdaptivePromptInjector } from '../engine/adaptive-engine.js';
-import { getUserProfile } from '../engine/user-profile.js';
-import AgentDispatcher from '../engine/agent-dispatcher.js';
-import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
+import { getAIInvocation, registerPlanIdParams } from './middleware.js';
 import { refreshDataFlywheel } from './flywheel.js';
 
 const router = Router();
+registerPlanIdParams(router);
 const RESOURCE_RECOMMENDATION_TIMEOUT_MS = 60_000;
+
+export function createInteractiveSseCallbacks(writeEvent, signal) {
+  return {
+    signal,
+    onChunk: delta => writeEvent({ type: 'chunk', content: delta }),
+    onReset: () => writeEvent({ type: 'reset' }),
+    onToolCall: toolCalls => writeEvent({ type: 'pause', tool_calls: toolCalls }),
+    onDone: result => writeEvent({
+      type: 'done',
+      content: result.content || '',
+      session: result.session,
+      finished: result.finished,
+    }),
+    onError: err => writeEvent({ type: 'error', data: err.message }),
+  };
+}
 
 
 router.post('/plans/:planId/generate/:topicId', async (req, res) => {
@@ -24,19 +38,20 @@ router.post('/plans/:planId/generate/:topicId', async (req, res) => {
   res.json({ status: 'generating', topicId: req.params.topicId });
 
   try {
-    const model = getModel(req);
+    const ai = getAIInvocation(req);
     const explainStyle = req.body?.explainStyle || plan.explainStyle || '';
 
-    // ── Agent dispatch (opt-in): use AgentDispatcher if requested ──
-    if (wantsAgentDispatch(req)) {
-      const dispatcher = getDispatcher(req);
-      const { result: dispatchedResult } = await dispatcher.dispatch('explain',
-        (provider) => generateDetail(provider, plan, req.params.topicId, model, explainStyle)
+    if (ai.dispatched) {
+      await ai.run(
+        'explain',
+        (provider, selectedModel) => generateDetail(
+          provider, plan, req.params.topicId, selectedModel, explainStyle,
+        ),
       );
       return; // generateDetail already writes to plan via store
     }
 
-    const provider = getProvider(req);
+    const { provider } = ai;
     const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
     const imageModel = req.body?.imageModel || '';
     const imageBaseUrl = req.body?.imageBaseUrl || '';
@@ -97,16 +112,25 @@ router.post('/plans/:planId/generate-sse/:topicId', async (req, res) => {
       try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
     };
 
-    const model = getModel(req);
+    const ai = getAIInvocation(req);
+    const { model } = ai;
     const explainStyle = req.body?.explainStyle || plan.explainStyle || '';
 
-    if (wantsAgentDispatch(req)) {
-      const dispatcher = getDispatcher(req);
-      await dispatcher.dispatch('explain',
-        (provider) => generateDetailStream(provider, plan, req.params.topicId, writeEvent, model, explainStyle, abortController.signal)
+    if (ai.dispatched) {
+      await ai.run(
+        'explain',
+        (provider, selectedModel) => generateDetailStream(
+          provider,
+          plan,
+          req.params.topicId,
+          writeEvent,
+          selectedModel,
+          explainStyle,
+          abortController.signal,
+        ),
       );
     } else {
-      const provider = getProvider(req);
+      const { provider } = ai;
       const imageApiKey = req.body?.imageApiKey || req.headers['x-image-api-key'] || '';
       const imageModel = req.body?.imageModel || '';
       const imageBaseUrl = req.body?.imageBaseUrl || '';
@@ -185,7 +209,7 @@ router.post('/plans/:planId/interactive-start/:topicId', async (req, res) => {
   }
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const result = await startInteractiveDetail(provider, plan, req.params.topicId, mode, provider.model);
     res.json(result);
     // Flywheel + mode counting: interactive session started
@@ -214,7 +238,7 @@ router.post('/plans/:planId/interactive-continue/:topicId', async (req, res) => 
   }
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const result = await continueInteractiveDetail(provider, plan, req.params.topicId, mode, feedback.trim(), provider.model);
     res.json(result);
   } catch (err) {
@@ -260,20 +284,20 @@ router.post('/plans/:planId/interactive-start-sse/:topicId', async (req, res) =>
     const abortController = new AbortController();
     res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); abortController.abort(); });
 
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const writeEvent = (event) => {
       if (aborted) return;
       try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
     };
     resetIdleTimer();
 
-    await streamInteractiveStart(provider, plan, req.params.topicId, mode, {
-      signal: abortController.signal,
-      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
-      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
-      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
-      onError: (err) => writeEvent({ type: 'error', data: err.message }),
-    });
+    await streamInteractiveStart(
+      provider,
+      plan,
+      req.params.topicId,
+      mode,
+      createInteractiveSseCallbacks(writeEvent, abortController.signal),
+    );
 
     if (idleTimer) clearTimeout(idleTimer);
     if (!aborted) res.end();
@@ -323,20 +347,21 @@ router.post('/plans/:planId/interactive-continue-sse/:topicId', async (req, res)
     const abortController = new AbortController();
     res.on('close', () => { aborted = true; if (idleTimer) clearTimeout(idleTimer); abortController.abort(); });
 
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const writeEvent = (event) => {
       if (aborted) return;
       try { res.write('data: ' + JSON.stringify(event) + '\n\n'); resetIdleTimer(); } catch { aborted = true; }
     };
     resetIdleTimer();
 
-    await streamInteractiveContinue(provider, plan, req.params.topicId, mode, feedback.trim(), {
-      signal: abortController.signal,
-      onChunk: (delta) => writeEvent({ type: 'chunk', content: delta }),
-      onToolCall: (tcs) => writeEvent({ type: 'pause', tool_calls: tcs }),
-      onDone: (result) => writeEvent({ type: 'done', content: result.content || '', session: result.session, finished: result.finished }),
-      onError: (err) => writeEvent({ type: 'error', data: err.message }),
-    });
+    await streamInteractiveContinue(
+      provider,
+      plan,
+      req.params.topicId,
+      mode,
+      feedback.trim(),
+      createInteractiveSseCallbacks(writeEvent, abortController.signal),
+    );
 
     if (idleTimer) clearTimeout(idleTimer);
     if (!aborted) res.end();
@@ -360,7 +385,7 @@ router.post('/plans/:planId/reveal-errors/:topicId', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const recognizedErrors = Array.isArray(req.body && req.body.recognizedErrors) ? req.body.recognizedErrors : [];
     const result = await revealEmbeddedErrors(provider, plan, req.params.topicId, provider.model, recognizedErrors);
     res.json(result);
@@ -386,8 +411,8 @@ router.post('/plans/:planId/decompose/:topicId', async (req, res) => {
   if (!topic) return res.status(404).json({ error: '知识点不存在' });
 
   try {
-    const provider = getProvider(req);
-    const subtopics = await decomposeTopic(provider, plan, req.params.topicId, getModel(req));
+    const { provider, model } = getAIInvocation(req);
+    const subtopics = await decomposeTopic(provider, plan, req.params.topicId, model);
     res.json({ subtopics });
   } catch (err) {
     console.error('[decompose]', err);
@@ -437,12 +462,12 @@ router.post('/plans/:planId/resources/:topicId', async (req, res) => {
   res.once('close', abortOnClose);
 
   try {
-    const provider = getProvider(req);
+    const { provider, model } = getAIInvocation(req);
     const result = await recommendResources(
       provider,
       plan,
       req.params.topicId,
-      getModel(req),
+      model,
       { signal: abortController.signal }
     );
     await store.updateTopic(req.params.planId, req.params.topicId, { resources: result.resources });
@@ -511,7 +536,7 @@ router.post('/plans/:planId/ask/:topicId', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const answer = await answerFollowUp(provider, plan, req.params.topicId, question.trim(), provider.model);
     res.json({ answer });
     // Flywheel: Q&A adds to learning history

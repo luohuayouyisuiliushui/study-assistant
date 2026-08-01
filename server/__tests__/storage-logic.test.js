@@ -4,6 +4,7 @@
 import { describe, it, before, afterEach } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -23,7 +24,7 @@ import {
   DATA,
   PLANS_INDEX,
 } from '../engine/store/storage.js';
-import { writePlan } from '../engine/store/crud.js';
+import { writePlan } from '../engine/store/crud-content.js';
 
 // ── Test helpers ──
 
@@ -316,5 +317,48 @@ describe('writePlan index-update fault tolerance (M-5)', () => {
     const saved = JSON.parse(raw);
     assert.strictEqual(saved.name, 'UpdatedName', 'plan file reflects the mutation even if index update failed');
     assert.deepStrictEqual(saved.topics, [], 'the persisted plan should remain structurally valid');
+  });
+});
+
+describe('planPath', () => {
+  it('rejects plan ids that can escape the plans directory', () => {
+    for (const id of ['../secret', '..\\secret', 'C:/secret', '/secret', 'a/b']) {
+      assert.throws(() => planPath(id), /plan id/i);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Regression: test data isolation (DATA must be a temp dir
+// when running under node --test without STUDY_ASSISTANT_DATA_DIR)
+// ═══════════════════════════════════════════════════════════
+
+describe('test data isolation', () => {
+  it('uses a temporary directory when running under node --test', () => {
+    // When no STUDY_ASSISTANT_DATA_DIR is set and the Node.js test runner
+    // is active (process.execArgv includes --test), storage.js must pick a
+    // per-process temp directory instead of the production data/learn path.
+    const sep = path.sep;
+    assert.ok(
+      DATA.includes(os.tmpdir()) || DATA.includes('study-assistant-test-'),
+      `DATA should be a temp dir, got: ${DATA}`,
+    );
+  });
+
+  it('does NOT resolve to the production server/data/learn directory', () => {
+    const prodSuffix = ['server', 'data', 'learn'].join(path.sep);
+    assert.ok(
+      !DATA.endsWith(prodSuffix),
+      `DATA must not point to the production learn/ dir, got: ${DATA}`,
+    );
+  });
+
+  it('creates its own plans/ subdirectory inside the temp dir', () => {
+    const plansDir = path.join(DATA, 'plans');
+    // ensureDir() runs at import time, so the directory must already exist
+    assert.ok(
+      fs.existsSync(plansDir),
+      `expected plans/ dir inside temp DATA, but not found: ${plansDir}`,
+    );
   });
 });

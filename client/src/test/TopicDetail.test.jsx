@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import TopicDetail from '../components/TopicDetail';
 
 vi.mock('../api', () => ({
@@ -114,6 +116,116 @@ describe('TopicDetail', () => {
     it('does not show review button when topic is not done', () => {
       renderTD({ topic: { ...sampleTopic, done: false } });
       expect(screen.queryByTitle('复习模式')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps explanation and assessment primary in study_trace practice mode', () => {
+    const practiceTopic = {
+      ...sampleTopic,
+      detail: [
+        '闭包讲解正文。',
+        '',
+        '## 练习题',
+        '> **练习题 1**（选择题）哪个说法正确？',
+        '> - A. 保留词法作用域',
+        '> - B. 删除所有变量',
+        '> > 正确答案：A',
+      ].join('\n'),
+    };
+
+    renderTD({ topic: practiceTopic, practiceMode: true });
+
+    expect(screen.getByRole('status')).toHaveTextContent('study_trace');
+    expect(screen.getByText('闭包讲解正文。')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '练习题' })).toBeInTheDocument();
+    expect(screen.getByText('哪个说法正确？')).toBeInTheDocument();
+    expect(screen.queryAllByTitle('标记为已学完并返回列表')).toHaveLength(0);
+    expect(screen.queryByText('暂无关联知识点')).not.toBeInTheDocument();
+    expect(screen.queryByText('推荐学习资源')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/你在讲解中发现了哪些错误/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('更多操作'));
+    expect(screen.getByText('Markdown (.md)')).toBeInTheDocument();
+    expect(screen.getByText('推荐学习资源')).toBeInTheDocument();
+  });
+
+  it('threads the practice query through the existing topic route wrapper', () => {
+    const appPath = path.resolve(process.cwd(), 'src/App.jsx');
+    const source = readFileSync(appPath, 'utf8');
+    expect(source).toContain('useSearchParams');
+    expect(source).toContain("searchParams.get('practice') === '1'");
+    expect(source).toContain('practiceMode={practiceMode}');
+  });
+
+  it('delegates session timing and generation orchestration to the workspace hook', () => {
+    const componentPath = path.resolve(process.cwd(), 'src/components/TopicDetail.jsx');
+    const source = readFileSync(componentPath, 'utf8');
+    expect(source).toContain('useTopicLearningWorkspace');
+    expect(source).not.toContain('api.recordTime');
+    expect(source).not.toContain('setInterval(async () =>');
+    for (const method of [
+      'generateDetail',
+      'generateReview',
+      'submitExercises',
+      'startInteractiveSSE',
+      'continueInteractiveSSE',
+      'clearInteractiveSession',
+      'analyzeFeynmanSession',
+      'revealErrors',
+      'updateTopic',
+      'askQuestion',
+      'factCheck',
+      'autoFixFacts',
+      'adaptiveAnalysis',
+      'recommendResources',
+      'generateTopicImage',
+      'inferRelations',
+    ]) {
+      expect(source).not.toContain(`api.${method}`);
+    }
+  });
+
+  describe('interactive stream retries', () => {
+    it('discards partial content when a new start attempt resets the stream', async () => {
+      const apiModule = await import('../api');
+      apiModule.default.startInteractiveSSE.mockImplementation(async (_planId, _topicId, _mode, onEvent) => {
+        onEvent({ type: 'chunk', content: 'discarded partial' });
+        onEvent({ type: 'reset' });
+        onEvent({ type: 'chunk', content: 'replacement' });
+        onEvent({ type: 'done', session: { mode: 'stepwise' }, finished: false });
+      });
+
+      renderTD();
+      fireEvent.click(screen.getByTitle('更多操作'));
+      fireEvent.click(screen.getByText('分段讲解'));
+
+      expect(await screen.findByText('replacement')).toBeInTheDocument();
+      expect(screen.queryByText(/discarded partial/)).not.toBeInTheDocument();
+    });
+
+    it('discards partial content when a continuation attempt resets the stream', async () => {
+      const apiModule = await import('../api');
+      apiModule.default.continueInteractiveSSE.mockImplementation(async (_planId, _topicId, _mode, _feedback, onEvent) => {
+        onEvent({ type: 'chunk', content: 'discarded continuation' });
+        onEvent({ type: 'reset' });
+        onEvent({ type: 'chunk', content: 'replacement continuation' });
+        onEvent({ type: 'done', session: { mode: 'stepwise' }, finished: false });
+      });
+      const topic = {
+        ...sampleTopic,
+        interactiveSession: {
+          mode: 'stepwise', finished: false,
+          transcript: [{ role: 'assistant', content: 'first section' }],
+        },
+      };
+
+      renderTD({ topic });
+      fireEvent.click(screen.getByTitle('更多操作'));
+      fireEvent.click(screen.getByText('分段讲解'));
+      fireEvent.click(await screen.findByRole('button', { name: '继续' }));
+
+      expect(await screen.findByText('replacement continuation')).toBeInTheDocument();
+      expect(screen.queryByText(/discarded continuation/)).not.toBeInTheDocument();
     });
   });
 

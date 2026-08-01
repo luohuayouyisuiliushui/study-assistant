@@ -1,8 +1,8 @@
-# Study Assistant v3.1.0
+# Study Assistant v4.0.0
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
-当前工作区版本：`v3.1.0`。下载源码归档或查看已发布版本，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
+当前工作区版本：`v4.0.0`。下载源码归档或查看已发布版本，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
 
 ## 它能做什么
 
@@ -49,7 +49,11 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`，在设置里填入 API Key（支持 OpenAI / DeepSeek / SiliconFlow / 任意兼容 OpenAI 的 API）即可使用。
+浏览器打开 `http://localhost:5270`，在设置里填入 API Key（支持 OpenAI / DeepSeek / SiliconFlow / 任意兼容 OpenAI 的 API）即可使用。
+
+### 与 study_trace 集成
+
+`GET /api/study-trace/plans` 和 `GET /api/study-trace/plans/:id` 只读输出 `study-trace-theory-v1` 理论 DTO。study-assistant 负责讲解、题目、理论计时和薄弱点，但不决定实践完成、检查点顺序或阶段推进；这些事实由 `study_trace` 确认。带 `?practice=1` 的主题页会保留讲解与题目，并把导出、资源和互动工具收进“更多操作”。
 
 服务端默认只监听 `127.0.0.1:3001`。如确需允许远程访问，显式设置
 `STUDY_ASSISTANT_HOST`，并同时设置 `STUDY_ASSISTANT_API_TOKEN`；远程 API 请求必须携带
@@ -63,7 +67,7 @@ npm run dev
 
 1. `windows-doctor.cmd`：检查 Node.js、npm、端口和依赖状态
 2. `windows-setup.cmd`：安装根目录、服务端和客户端依赖
-3. `windows-dev.cmd`：启动开发环境，然后访问 `http://localhost:5173`
+3. `windows-dev.cmd`：启动开发环境，然后访问 `http://localhost:5270`
 
 清理测试数据：双击 `windows-clean-testdata.cmd`，一键清除测试计划、备份和缓存文件。
 
@@ -82,7 +86,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 常见问题：
 
-- 提示端口 3001 或 5173 被占用：先运行 `windows-stop.cmd`；若不是本项目进程，可用 `Get-NetTCPConnection -State Listen -LocalPort 3001,5173` 找到 PID。
+- 提示端口 3001 或 5270 被占用：先运行 `windows-stop.cmd`；若不是本项目进程，可用 `Get-NetTCPConnection -State Listen -LocalPort 3001,5270` 找到 PID。
 - 缺少 API Key：可直接在应用设置中填写；也可将 `server/.env.example` 复制为 `server/.env` 后填写，切勿提交真实 Key。
 - `npm.ps1` 被执行策略阻止：Windows 脚本固定调用 `npm.cmd`，请使用上述 `.cmd` 或 `.ps1` 入口。
 - 数据位置：学习数据保存在 `server/data/`，缓存位于 `server/cache/`；升级或重装前请备份 `server/data/`。
@@ -170,6 +174,8 @@ study-assistant/
 ├── client/                      # React 前端
 │   ├── src/
 │   │   ├── api.js               # API 客户端封装
+│   │   ├── hooks/
+│   │   │   └── useTopicLearningWorkspace.js # 六组学习流程状态与 API 编排
 │   │   ├── components/          # 业务组件
 │   │   │   ├── ui/              # shadcn/ui 手写组件
 │   │   │   ├── PlanView.jsx     # 计划详情
@@ -188,6 +194,7 @@ study-assistant/
 │   └── dist/                    # 生产构建产物
 ├── server/                      # Express 后端
 │   ├── engine/
+│   │   ├── ai-runtime.js        # 请求配置、Key 池、Provider/Dispatcher 与执行边界
 │   │   ├── learn-engine.js      # 核心引擎（讲解/追问）
 │   │   ├── learn-store.js       # barrel 导出
 │   │   ├── learning-analyzer.js # 学习分析（练习批改/薄弱点）
@@ -197,7 +204,10 @@ study-assistant/
 │   │   ├── user-profile.js      # 跨计划学习画像
 │   │   ├── store/
 │   │   │   ├── storage.js       # 持久化基础设施
-│   │   │   └── crud.js          # CRUD 操作
+│   │   │   ├── crud-content.js  # 串行 Plan/Topic 写事务
+│   │   │   ├── crud-exercises.js # 练习与试卷事务
+│   │   │   ├── crud-plans.js    # Plan 生命周期
+│   │   │   └── crud-trash.js    # 回收站
 │   │   └── ...
 │   ├── routes/
 │   │   ├── learn.js             # 计划/知识点 CRUD + 分析
@@ -206,8 +216,9 @@ study-assistant/
 │   │   ├── export.js            # 导出（Anki/OPML/Notion/MD）
 │   │   ├── user-profile.js      # 学习画像 API
 │   │   ├── settings.js          # 服务端持久化设置（.env.local）
+│   │   ├── study-trace.js       # 跨项目只读理论事实 DTO
 │   │   ├── flywheel.js          # 数据飞轮
-│   │   └── middleware.js        # 共享中间件
+│   │   └── middleware.js        # AI invocation 适配与 Plan ID 校验
 │   ├── data/                    # 学习数据（JSON 文件）
 │   ├── cache/                   # AI 缓存
 │   └── __tests__/               # 后端测试
@@ -249,13 +260,15 @@ study-assistant/
 | `/api/user-profile/analyze` | AI 画像生成 |
 | `/api/user-profile` | 画像数据 |
 | `/api/settings/env-key` | 服务端 Key 持久化（读写 .env.local） |
+| `/api/study-trace/plans` | study_trace 专用只读理论事实（不暴露原始 Plan JSON） |
 
 ### 运行测试
 
 ```bash
-npm run pretest          # 清理测试数据（务必先跑）
-npm test                 # Server 测试 + Client lint
+npm run pretest          # 确认后端测试使用隔离数据目录
+npm test                 # Server node:test + Client Vitest
 npm test --prefix client # Client Vitest
+npm run lint             # Server + Client lint
 npx oxlint               # Client lint
 cd server && npx oxlint  # Server lint
 npm run build            # Client 生产构建
@@ -265,7 +278,7 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 
 **重要：** AI 相关测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则会挂起超时。
 
-`v3.1.0` 的验证入口统一为根目录 `npm test`、`npm run lint` 和 `npm run build`。测试数量随功能变化，不在文档中维护可漂移的固定计数。
+`v4.0.0` 的验证入口统一为根目录 `npm test`、`npm run lint` 和 `npm run build`。测试数量随功能变化，不在文档中维护可漂移的固定计数。
 
 ### 代码规范
 

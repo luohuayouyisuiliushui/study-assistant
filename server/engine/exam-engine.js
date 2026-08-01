@@ -10,7 +10,7 @@ import {
   STABLE_EXAM_BLUEPRINT_PROMPT, STABLE_EXAM_SINGLE_QUESTION_PROMPT,
   STABLE_EXAM_SELF_CORRECT_PROMPT, STABLE_EXAM_QUALITY_EVAL_PROMPT,
 } from './learn-prompts.js';
-import { resolveProvider } from './learn-engine.js';
+import { resolveProvider } from './ai-runtime.js';
 
 const _resolveProvider = resolveProvider;
 

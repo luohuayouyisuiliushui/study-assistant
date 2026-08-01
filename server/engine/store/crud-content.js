@@ -238,6 +238,12 @@ export function updateTopic(planId, topicId, updates) {
   });
 }
 
+export function markRelationsInferred(planId, inferredAt = Date.now()) {
+  return writePlan(planId, (plan) => {
+    plan.relationsInferredAt = inferredAt;
+  });
+}
+
 /**
  * Accumulate time spent on a topic (in seconds).
  * Also records a daily time log entry for time distribution tracking.

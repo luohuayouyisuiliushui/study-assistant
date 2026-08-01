@@ -2,8 +2,11 @@ import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import MermaidDiagram from './MermaidDiagram';
 import MediaViewer from './MediaViewer.jsx';
+
+const markdownRehypePlugins = [rehypeRaw, rehypeSanitize];
 
 const markdownComponents = {
   p({ children }) {
@@ -49,7 +52,7 @@ const markdownComponents = {
 };
 
 const ContentArea = memo(function ContentArea({ content }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{content}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{content}</ReactMarkdown>;
 });
 
 const QaMessages = memo(function QaMessages({ qaList }) {
@@ -67,7 +70,7 @@ const QaMessages = memo(function QaMessages({ qaList }) {
             {qa.answer === '...' ? (
               <span className='text-muted-foreground animate-pulse'>思考中...</span>
             ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={markdownComponents}>{qa.answer}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{qa.answer}</ReactMarkdown>
             )}
           </div>
         </div>
@@ -76,4 +79,4 @@ const QaMessages = memo(function QaMessages({ qaList }) {
   );
 });
 
-export { markdownComponents, ContentArea, QaMessages };
+export { markdownComponents, markdownRehypePlugins, ContentArea, QaMessages };

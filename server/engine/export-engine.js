@@ -16,7 +16,7 @@
  * All exports are pure computation — no AI calls, instant response.
  */
 
-import { parseExercisesFromDetail, getTopicHistory } from './store/crud.js';
+import { parseExercisesFromDetail, getTopicHistory } from './learn-store.js';
 
 // ═══════════════════════════════════════════════════════
 //  DATA EXTRACTION HELPERS

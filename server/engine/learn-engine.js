@@ -14,9 +14,9 @@
  * will produce IDENTICAL first-2-messages = HIGH cache hit rate.
  */
 
-import { Provider, isRelayBlockedError, isUnsupportedParameterError } from './provider.js';
+import { isRelayBlockedError, isUnsupportedParameterError } from './provider.js';
 import { KeyPool } from './key-pool.js';
-import { CacheMonitor } from './cache-diagnostics.js';
+import { createProviderFromConfig, engineCacheMonitor, resolveProvider } from './ai-runtime.js';
 import { factCheckQuickScan, buildFactCheckSummary, factCheckDetail, autoFixUncertainClaims, applyFixesToContent, buildFactCheckReport } from './fact-checker.js';
 import { AdaptivePromptInjector } from './adaptive-engine.js';
 import { getUserProfile } from './user-profile.js';
@@ -35,62 +35,13 @@ import { answerFollowUp, analyzeLearning, answerAnalysisFollowUp,
   generateQuickQuiz, analyzeFeynmanSession } from './learning-analyzer.js';
 import OpenAI from 'openai';
 import fs from 'fs';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { Readable } from 'node:stream';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-/**
- * Global cache monitor for this process.
- * Exposed so routes can report diagnostics to users.
- */
-export const engineCacheMonitor = new CacheMonitor();
-
-/**
- * Get or create a Provider. Uses composite key to ensure different
- * API keys, base URLs, or models get separate provider instances.
- */
-const _providerCache = new Map();
-
-/**
- * Resolve a Provider from either a Provider instance or config-like object.
- * When a Provider is passed directly, returns it as-is.
- * When an OpenAI-like object (with apiKey, baseURL) is passed, creates/returns cached Provider.
- */
-export function resolveProvider(providerOrConfig, model) {
-  // Already a Provider instance — use directly
-  if (providerOrConfig instanceof Provider) {
-    return providerOrConfig;
-  }
-  // Legacy: OpenAI-like object with apiKey/baseURL
-  const key = (providerOrConfig.apiKey || '') + '::' + (providerOrConfig.baseURL || '') + '::' + (model || '');
-  if (!_providerCache.has(key)) {
-    const provider = new Provider({
-      apiKey: providerOrConfig.apiKey,
-      baseURL: providerOrConfig.baseURL,
-      model,
-      debugCache: process.env.DEBUG_CACHE === 'true',
-    });
-    _providerCache.set(key, provider);
-  }
-  return _providerCache.get(key);
-}
-
-/**
- * Create a Provider from individual config values.
- * Shared between engine and routes layer for consistency.
- */
-export function createProviderFromConfig(apiKey, baseURL, model) {
-  const key = (apiKey || '') + '::' + (baseURL || '') + '::' + (model || '');
-  if (!_providerCache.has(key)) {
-    const provider = new Provider({
-      apiKey,
-      baseURL,
-      model,
-      debugCache: process.env.DEBUG_CACHE === 'true',
-    });
-    _providerCache.set(key, provider);
-  }
-  return _providerCache.get(key);
-}
 
 // ─── Public API ───
 
@@ -814,21 +765,196 @@ async function generateImageRequest(client, request) {
   }
 }
 
-function decodeBase64Image(value) {
-  const base64 = value.replace(/^data:image\/[^;,]+;base64,/i, '').trim();
+const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function decodeBase64Image(value, maxBytes = DEFAULT_MAX_IMAGE_BYTES) {
+  const raw = String(value || '').trim();
+  let encoded = raw;
+  if (/^data:/i.test(raw)) {
+    const match = raw.match(/^data:image\/[a-z0-9.+-]+;base64,([\s\S]*)$/i);
+    if (!match) throw new Error('图片数据 URL 必须使用 image/*;base64 格式');
+    encoded = match[1];
+  }
+
+  const compact = encoded.replace(/\s+/g, '');
+  const unpadded = compact.replace(/=+$/, '');
+  if (
+    !unpadded
+    || !/^[a-z0-9+/]+$/i.test(unpadded)
+    || /=/.test(unpadded)
+    || compact.length - unpadded.length > 2
+    || unpadded.length % 4 === 1
+  ) {
+    throw new Error('图片 API 返回的 Base64 数据无效');
+  }
+
+  const base64 = unpadded.padEnd(Math.ceil(unpadded.length / 4) * 4, '=');
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  const decodedLength = (base64.length / 4) * 3 - padding;
+  if (decodedLength > maxBytes) {
+    throw new Error(`图片过大，最大允许 ${maxBytes} 字节`);
+  }
+
   const bytes = Buffer.from(base64, 'base64');
   if (bytes.length === 0) throw new Error('图片 API 返回的 Base64 数据为空');
   return bytes;
 }
 
-async function downloadGeneratedImage(rawUrl, baseUrl) {
-  const imageUrl = new URL(rawUrl, baseUrl);
-  if (!['https:', 'http:', 'data:'].includes(imageUrl.protocol)) {
+const UNSAFE_IMAGE_ADDRESSES = new net.BlockList();
+for (const [network, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24],
+  ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+]) {
+  UNSAFE_IMAGE_ADDRESSES.addSubnet(network, prefix, 'ipv4');
+}
+for (const [network, prefix] of [
+  ['::', 128], ['::1', 128], ['100::', 64],
+  ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
+]) {
+  UNSAFE_IMAGE_ADDRESSES.addSubnet(network, prefix, 'ipv6');
+}
+
+function normalizeImageAddress(address) {
+  const value = String(address).trim();
+  const unwrapped = value.startsWith('[') && value.endsWith(']')
+    ? value.slice(1, -1)
+    : value;
+  return unwrapped.split('%')[0];
+}
+
+function isUnsafeImageAddress(address, family) {
+  const normalized = normalizeImageAddress(address);
+  if (normalized.toLowerCase().startsWith('::ffff:')) return true;
+  const type = family === 6 || net.isIP(normalized) === 6 ? 'ipv6' : 'ipv4';
+  return net.isIP(normalized) === 0 || UNSAFE_IMAGE_ADDRESSES.check(normalized, type);
+}
+
+async function assertSafeImageUrl(imageUrl, lookup) {
+  if (!['https:', 'http:'].includes(imageUrl.protocol)) {
     throw new Error(`图片 URL 使用了不支持的协议: ${imageUrl.protocol}`);
   }
-  const response = await fetch(imageUrl);
-  if (!response.ok) throw new Error(`图片下载失败 (${response.status})`);
-  return Buffer.from(await response.arrayBuffer());
+  if (imageUrl.username || imageUrl.password) {
+    throw new Error('Unsafe image URL: 不允许 URL 凭据');
+  }
+  if (imageUrl.hostname.toLowerCase() === 'localhost') {
+    throw new Error('Unsafe private image URL: localhost');
+  }
+
+  const literalAddress = normalizeImageAddress(imageUrl.hostname);
+  const literalFamily = net.isIP(literalAddress);
+  if (literalFamily) {
+    if (isUnsafeImageAddress(literalAddress, literalFamily)) {
+      throw new Error(`Unsafe private image URL: ${literalAddress}`);
+    }
+    return { address: literalAddress, family: literalFamily };
+  }
+
+  const resolved = await lookup(imageUrl.hostname, { all: true, verbatim: true });
+  const addresses = Array.isArray(resolved) ? resolved : [resolved];
+  if (addresses.length === 0 || addresses.some(item => isUnsafeImageAddress(item.address, item.family))) {
+    throw new Error(`Unsafe private image URL: ${imageUrl.hostname}`);
+  }
+  const selected = addresses[0];
+  const address = String(selected.address).split('%')[0];
+  return {
+    address,
+    family: selected.family === 6 || net.isIP(address) === 6 ? 6 : 4,
+  };
+}
+
+function requestPinnedImage(imageUrl, target, signal) {
+  const transport = imageUrl.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request(imageUrl, {
+      signal,
+      family: target.family,
+      autoSelectFamily: false,
+      lookup(_hostname, options, callback) {
+        if (options?.all) callback(null, [target]);
+        else callback(null, target.address, target.family);
+      },
+    }, response => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (Array.isArray(value)) value.forEach(item => headers.append(name, item));
+        else if (value !== undefined) headers.set(name, String(value));
+      }
+      const status = response.statusCode || 500;
+      const body = [101, 204, 205, 304].includes(status)
+        ? null
+        : Readable.toWeb(response);
+      resolve(new Response(body, { status, headers }));
+    });
+    request.once('error', reject);
+    request.end();
+  });
+}
+
+async function readImageBody(response, maxBytes) {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`图片过大，最大允许 ${maxBytes} 字节`);
+  }
+  if (!response.body) throw new Error('图片下载响应为空');
+
+  const chunks = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`图片过大，最大允许 ${maxBytes} 字节`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  if (total === 0) throw new Error('图片下载响应为空');
+  return Buffer.concat(chunks, total);
+}
+
+export async function downloadGeneratedImage(rawUrl, baseUrl, {
+  lookup = dnsLookup,
+  requestImpl = requestPinnedImage,
+  maxBytes = DEFAULT_MAX_IMAGE_BYTES,
+  timeoutMs = 15_000,
+  maxRedirects = 3,
+} = {}) {
+  if (/^data:/i.test(String(rawUrl).trim())) {
+    return decodeBase64Image(rawUrl, maxBytes);
+  }
+
+  let imageUrl = new URL(rawUrl, baseUrl);
+  for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
+    const target = await assertSafeImageUrl(imageUrl, lookup);
+    const response = await requestImpl(
+      imageUrl,
+      target,
+      AbortSignal.timeout(timeoutMs),
+    );
+
+    if (response.status >= 300 && response.status < 400) {
+      if (response.body) await response.body.cancel();
+      const location = response.headers.get('location');
+      if (!location || redirects === maxRedirects) {
+        throw new Error('图片下载重定向过多或缺少 Location');
+      }
+      imageUrl = new URL(location, imageUrl);
+      continue;
+    }
+    if (!response.ok) throw new Error(`图片下载失败 (${response.status})`);
+
+    const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+    if (!contentType?.startsWith('image/')) {
+      throw new Error(`图片 Content-Type 无效: ${contentType || 'missing'}`);
+    }
+    return readImageBody(response, maxBytes);
+  }
+  throw new Error('图片下载重定向过多');
 }
 
 /**
@@ -1093,6 +1219,12 @@ export default {
   buildFactCheckReport,
   buildFactCheckSummary,
 };
+
+export {
+  createProviderFromConfig,
+  engineCacheMonitor,
+  resolveProvider,
+} from './ai-runtime.js';
 
 export {
   applyFixesToContent,

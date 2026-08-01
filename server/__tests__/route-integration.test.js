@@ -5,6 +5,7 @@ import fs from 'fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { STUDY_TRACE_THEORY_CONTRACT_VERSION } from '../engine/topic-learning-state.js';
 
 let serverProcess;
 let baseUrl;
@@ -90,10 +91,63 @@ describe('Route Integration', () => {
     fs.rmSync(tempDataDir, { recursive: true, force: true });
   });
 
-  it('GET /api/learn/plans returns an isolated plans array', async () => {
-    const res = await request('GET', '/api/learn/plans');
+  it('GET /api/study-trace/plans returns a versioned isolated plans array', async () => {
+    const res = await request('GET', '/api/study-trace/plans');
     assert.equal(res.status, 200);
+    assert.equal(res.body.contractVersion, STUDY_TRACE_THEORY_CONTRACT_VERSION);
     assert.deepEqual(res.body.plans, []);
+  });
+
+  it('rejects encoded traversal when reading a plan', async () => {
+    const outsidePlan = path.join(tempDataDir, 'secret.json');
+    fs.writeFileSync(outsidePlan, JSON.stringify({ id: 'secret', name: 'private', topics: [] }));
+
+    const res = await request('GET', '/api/learn/plans/%2E%2E%2Fsecret');
+
+    assert.equal(res.status, 400);
+    assert.equal(fs.existsSync(outsidePlan), true);
+  });
+
+  it('rejects invalid plan ids consistently across mounted plan routers', async () => {
+    const invalidId = 'invalid%24id';
+    const routes = [
+      ['GET', `/api/learn/plans/${invalidId}/export/notion`],
+      ['POST', `/api/learn/plans/${invalidId}/exam/generate`, { topicIds: ['topic'] }],
+      ['POST', `/api/learn/plans/${invalidId}/generate/topic`],
+      ['GET', `/api/study-trace/plans/${invalidId}`],
+    ];
+
+    for (const [method, route, body] of routes) {
+      const res = await request(method, route, body);
+      assert.equal(res.status, 400, `${method} ${route}`);
+      assert.equal(res.body.error, '无效的计划 ID');
+    }
+  });
+
+  it('rejects traversal ids before batch deletion', async () => {
+    const outsidePlan = path.join(tempDataDir, 'secret.json');
+    fs.writeFileSync(outsidePlan, JSON.stringify({ id: 'secret', name: 'private', topics: [] }));
+
+    const res = await request('POST', '/api/learn/plans/batch-delete', { ids: ['../secret'] });
+
+    assert.equal(res.status, 400);
+    assert.equal(fs.existsSync(outsidePlan), true);
+  });
+
+  it('exposes a normalized read-only contract for study_trace', async () => {
+    const created = await request('POST', '/api/learn/plans', { name: '理论适配测试' });
+    const planId = created.body.plan.id;
+    const added = await request('POST', `/api/learn/plans/${planId}/topics`, { titles: ['TCP 状态机'] });
+    const topicId = added.body.plan.topics[0].id;
+    await request('PUT', `/api/learn/plans/${planId}/topics/${topicId}`, { done: true });
+
+    const res = await request('GET', `/api/study-trace/plans/${planId}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.contractVersion, STUDY_TRACE_THEORY_CONTRACT_VERSION);
+    assert.equal(res.body.plan.topics[0].studied, true);
+    assert.equal(res.body.plan.topics[0].mastery.status, 'unassessed');
+    assert.equal(Object.hasOwn(res.body.plan.topics[0], 'done'), false);
+    assert.equal(Object.hasOwn(res.body.plan, 'history'), false);
   });
 
   it('rejects an invalid create request', async () => {
@@ -149,5 +203,12 @@ describe('Route Integration', () => {
       const plan = await request('GET', `/api/learn/plans/${id}`);
       assert.equal(plan.status, 404);
     }
+  });
+
+  it('waits for exam deletion and reports a missing plan', async () => {
+    const res = await request('DELETE', '/api/learn/plans/missing-plan/exam/exam-1');
+
+    assert.equal(res.status, 404);
+    assert.match(res.body.error, /计划不存在/);
   });
 });

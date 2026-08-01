@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
 import { generateAnkiCSV, generateOPML, generateNotionCSV, generateTopicJSON, generateStudyNotes, exportPlanBundle } from '../engine/export-engine.js';
+import { registerPlanIdParams } from './middleware.js';
 
 const router = Router();
+registerPlanIdParams(router);
 
 router.get('/plans/:planId/export/anki/:topicId', (req, res) => {
   const plan = store.getPlan(req.params.planId);

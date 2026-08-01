@@ -36,7 +36,7 @@ function savePlan(plan) {
   writeFileSync(path, JSON.stringify(plan, null, 2), 'utf8');
 }
 
-// ── 从 crud.js 导入 extractRelationsFromDetail ──
+// ── 从公开数据层导入 extractRelationsFromDetail ──
 async function main() {
   const args = process.argv.slice(2);
   const planId = args[0];
@@ -56,7 +56,7 @@ async function main() {
   console.log(`   模式: ${dryRun ? '🔍 预览 (--dry-run)' : '✏️  执行'}`);
 
   // ── 动态导入 ──
-  const { extractRelationsFromDetail } = await import('../engine/store/crud.js');
+  const { extractRelationsFromDetail } = await import('../engine/learn-store.js');
 
   // ── 第一步：文本提取（--ai-only 模式跳过） ──
   const textExtracted = [];

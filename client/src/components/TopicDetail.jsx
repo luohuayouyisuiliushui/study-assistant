@@ -14,6 +14,7 @@ import ActionMenu from './ActionMenu.jsx';
 import MediaViewer from './MediaViewer.jsx';
 import { loadSettings } from '#/lib/settings-storage';
 import { normalizeMermaidSource } from '../lib/mermaid-source.js';
+import { useTopicLearningWorkspace } from '../hooks/useTopicLearningWorkspace.js';
 
 const STICKY_NAV_REVEAL_EDGE_PX = 96;
 const STICKY_NAV_HIDE_DELAY_MS = 400;
@@ -29,89 +30,97 @@ function stripExerciseSection(detail) {
   return lines.slice(0, startIdx).join('\n').trimEnd();
 }
 
-function parseExercisesFromMarkdown(detail) {
-  if (!detail) return [];
-  const exercises = [];
-  const lines = detail.split('\n');
-  let current = null;
-  let inSection = false;
-  for (const line of lines) {
-    const t = line.trim();
-    if (t.includes('📝 练习题') || /^#{1,3}\s*练习题/.test(t)) { inSection = true; continue; }
-    if (!inSection) continue;
-    const m = t.match(/^>\s*\*\*练习题\s*(\d+)\*\*\s*[（(]([^)）]+)[)）]/);
-    if (m) {
-      if (current) exercises.push(current);
-      current = { index: parseInt(m[1]), type: m[2] === '选择题' ? 'choice' : 'open', question: '', options: [], answer: '', explanation: '', conceptTag: '', userAnswer: null, correct: null };
-      const parenEnd = t.search(/[)）]/);
-      if (parenEnd >= 0 && parenEnd + 1 < t.length) current.question = t.slice(parenEnd + 1).replace(/^[）)]\s*/, '').trim();
-      continue;
-    }
-    if (!current) continue;
-    const opt = t.match(/^>\s*-\s*([A-D])[.．、]\s*(.+)/);
-    if (opt) { current.options.push(opt[1] + '. ' + opt[2]); continue; }
-    const ans = t.match(/^>\s*>\s*(?:正确答案|参考答案)[：:]\s*(.+)/);
-    if (ans) { current.answer = ans[1].trim(); continue; }
-    const exp = t.match(/^>\s*>\s*解析[：:]\s*(.+)/);
-    if (exp) { current.explanation = exp[1].trim(); continue; }
-    const conc = t.match(/^>\s*>\s*关联概念[：:]\s*(.+)/);
-    if (conc) { current.conceptTag = conc[1].trim(); continue; }
-    if (t.startsWith('> ') && !t.startsWith('> -') && !t.startsWith('> >') && !t.startsWith('> **练习题')) {
-      const txt = t.slice(2).trim();
-      if (txt && !current.answer) current.question += (current.question ? ' ' : '') + txt;
-    }
-  }
-  if (current) exercises.push(current);
-  return exercises;
-}
-
-export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic }) {
+export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTopic, practiceMode = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlMode = searchParams.get('mode');
   const urlReview = searchParams.get('review') === '1';
-  const [qaList, setQaList] = useState([]);
-  const [qaLoading, setQaLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState(null);
-  const [localDetail, setLocalDetail] = useState(topic?.detail || '');
+  const workspace = useTopicLearningWorkspace({
+    plan,
+    topic,
+    onRefresh,
+    onBack,
+    urlMode,
+    urlReview,
+    setSearchParams,
+    practiceMode,
+  });
+  const {
+    detail: localDetail,
+    generating,
+    error,
+    retry: retryGeneration,
+    regenerate,
+  } = workspace.content;
+  const {
+    active: reviewMode,
+    content: reviewContent,
+    loading: reviewLoading,
+    toggle: handleToggleReview,
+  } = workspace.review;
+  const {
+    exercises,
+    answers: exerciseAnswers,
+    results: exerciseResults,
+    loading: exerciseLoading,
+    submitted: submittedExercises,
+    answer: handleExerciseAnswer,
+    submit: submitExercises,
+  } = workspace.assessment;
+  const {
+    mode: interactiveMode,
+    sections: interactiveSections,
+    streamingContent,
+    loading: interactiveLoading,
+    finished: interactiveFinished,
+    input: interactiveInput,
+    setInput: setInteractiveInput,
+    stateMachine: interactiveStateMachine,
+    qaList,
+    qaLoading,
+    ask: handleAsk,
+    start: handleStartInteractive,
+    send: handleSendInteractiveFeedback,
+    quickAction: handleQuickAction,
+    exit: handleExitInteractive,
+  } = workspace.interaction;
+  const {
+    factCheck: factCheckData,
+    factCheckLoading,
+    factCheckFixing,
+    runFactCheck,
+    fixFactCheck,
+    dismissFactCheck,
+    adaptive: adaptiveData,
+    adaptiveLoading,
+    analyzeAdaptive,
+    dismissAdaptive,
+    resources,
+    resourcesLoading,
+    recommendResources,
+    feynman: feynmanInsights,
+    feynmanAnalyzing,
+    imageGenerating,
+    imageError,
+    generateImage: handleGenerateImage,
+  } = workspace.insights;
+  const {
+    difficulty,
+    difficultySaving,
+    saveDifficulty,
+    revealLoading,
+    foundErrors: foundErrorsInput,
+    setFoundErrors: setFoundErrorsInput,
+    complete,
+  } = workspace.completion;
   const chatPanelRef = useRef(null);
-  const genTriggered = useRef(false);
-  const startTimeRef = useRef(Date.now());
-  const hiddenDurationRef = useRef(0);
-  const hiddenStartRef = useRef(null);
-  const [difficulty, setDifficulty] = useState(topic?.difficulty || null);
   const headerSentinelRef = useRef(null);
   const stickyNavRef = useRef(null);
   const stickyNavHideTimerRef = useRef(null);
   const [headerStuck, setHeaderStuck] = useState(false);
   const [headerStuckVisible, setHeaderStuckVisible] = useState(false);
-  const relationsInferredRef = useRef(false);
-  const [difficultySaving, setDifficultySaving] = useState(false);
   const [hoveredRound, setHoveredRound] = useState(null);
-  const [revealLoading, setRevealLoading] = useState(false);
-  const [foundErrorsInput, setFoundErrorsInput] = useState('');
-  const lastReportedRef = useRef(0);
   const settings = loadSettings();
-
-  const [exercises, setExercises] = useState([]);
-  const [exerciseAnswers, setExerciseAnswers] = useState({});
-  const [exerciseResults, setExerciseResults] = useState(null);
-  const [exerciseLoading, setExerciseLoading] = useState(false);
-  const [submittedExercises, setSubmittedExercises] = useState(false);
-
-  const [reviewMode, setReviewMode] = useState(false);
-  const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
-  const [reviewLoading, setReviewLoading] = useState(false);
   const [regenerateDialogOpen, setRegenerateDialogOpen] = useState(false);
-
-  const [interactiveMode, setInteractiveMode] = useState(null);
-  const [interactiveSections, setInteractiveSections] = useState([]);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [interactiveLoading, setInteractiveLoading] = useState(false);
-  const [interactiveFinished, setInteractiveFinished] = useState(false);
-  const [interactiveInput, setInteractiveInput] = useState('');
-  const [interactiveStateMachine, setInteractiveStateMachine] = useState(null);
-  const interactiveBusyRef = useRef(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
@@ -127,26 +136,11 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const [factCheckData, setFactCheckData] = useState(topic?.factCheck || null);
-  const [factCheckLoading, setFactCheckLoading] = useState(false);
-  const [factCheckFixing, setFactCheckFixing] = useState(false);
-
-  const [adaptiveData, setAdaptiveData] = useState(null);
-  const [adaptiveLoading, setAdaptiveLoading] = useState(false);
-
-  const [resources, setResources] = useState(topic?.resources || null);
-  const [resourcesLoading, setResourcesLoading] = useState(false);
-  const [feynmanInsights, setFeynmanInsights] = useState(topic?.feynmanInsights || null);
   const [feynmanInsightsOpen, setFeynmanInsightsOpen] = useState(true);
-  const [feynmanAnalyzing, setFeynmanAnalyzing] = useState(false);
   const [feynmanHistoryOpen, setFeynmanHistoryOpen] = useState(false);
-
-  const [imageGenerating, setImageGenerating] = useState(false);
-  const [imageError, setImageError] = useState(null);
 
   // Memoize expensive computed values
   const strippedDetailMemo = useMemo(() => stripExerciseSection(localDetail), [localDetail]);
-  const parsedExercisesMemo = useMemo(() => parseExercisesFromMarkdown(localDetail), [localDetail]);
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -158,39 +152,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       if (recognitionRef.current) { try { recognitionRef.current.abort(); } catch {} }
     };
   }, []);
-
-  // Sync URL params with interactive mode and review mode
-  useEffect(() => {
-    if (urlMode && !interactiveMode) {
-      // URL has mode but state doesn't — restore from URL (e.g., page refresh)
-      setInteractiveMode(urlMode);
-      setInteractiveFinished(false);
-    } else if (!urlMode && interactiveMode) {
-      // State has mode but URL doesn't — user pressed back, exit mode
-      setInteractiveMode(null);
-      setInteractiveSections([]);
-      setInteractiveFinished(false);
-      setInteractiveInput('');
-      setInteractiveStateMachine(null);
-    }
-  }, [urlMode]);
-
-  // NOTE: URL-driven effect — only re-run when urlReview changes; other state is intentionally captured
-  useEffect(() => {
-    if (urlReview && !reviewMode) {
-      setReviewMode(true);
-      // If no review content yet, generate it
-      if (!reviewContent && !reviewLoading) {
-        setReviewLoading(true);
-        api.generateReview(plan.id, topic.id).then(d => {
-          setReviewContent(d.review);
-          api.getPlan(plan.id).then(fresh => onRefresh(fresh.plan));
-        }).catch(() => {}).finally(() => setReviewLoading(false));
-      }
-    } else if (!urlReview && reviewMode) {
-      setReviewMode(false);
-    }
-  }, [urlReview]);
 
   const clearStickyNavHideTimer = useCallback(() => {
     if (stickyNavHideTimerRef.current) {
@@ -249,151 +210,6 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     };
   }, [headerStuck, clearStickyNavHideTimer, hideStickyNavSoon]);
 
-  // Auto-infer topic relationships when viewing a topic with no relationship data
-  // NOTE: only re-run when plan/topic changes; reading plan.topics/plan.relationsInferredAt inside is intentional
-  useEffect(() => {
-    if (!plan || !topic || relationsInferredRef.current) return;
-    if (plan.relationsInferredAt) { relationsInferredRef.current = true; return; }
-
-    // Skip if any topic already has relationship data (e.g. from AI import)
-    const hasAnyRelations = plan.topics.some(t =>
-      (t.prerequisites && t.prerequisites.length > 0) ||
-      (t.relatedTopics && t.relatedTopics.length > 0) ||
-      t.parentId
-    );
-    if (hasAnyRelations) { relationsInferredRef.current = true; return; }
-
-    // Fire inference — don't await, don't block UI
-    relationsInferredRef.current = true;
-    api.inferRelations(plan.id).then(() => {
-      // Refresh plan data after inference completes
-      api.getPlan(plan.id).then(fresh => {
-        if (fresh.plan) onRefresh(fresh.plan);
-      }).catch(() => {});
-    }).catch(() => {
-      // Silent failure — allow retry on next mount
-      relationsInferredRef.current = false;
-    });
-  }, [plan?.id, topic?.id]);
-
-  // NOTE: time-tracking effect — only re-run when topic changes; plan.id read inside is intentional
-  useEffect(() => {
-    const pid = plan?.id;
-    const tid = topic?.id;
-    startTimeRef.current = Date.now();
-    lastReportedRef.current = 0;
-    hiddenDurationRef.current = 0;
-    hiddenStartRef.current = null;
-
-    let activeStart = Date.now();
-    let isActive = true;
-    let inactivityTimeout = null;
-    const INACTIVITY_THRESHOLD = 30000;
-
-    const markActive = () => {
-      if (!isActive) {
-        hiddenDurationRef.current += Date.now() - activeStart;
-        isActive = true;
-        activeStart = Date.now();
-      }
-      clearTimeout(inactivityTimeout);
-      inactivityTimeout = setTimeout(() => {
-        if (isActive) { isActive = false; activeStart = Date.now(); }
-      }, INACTIVITY_THRESHOLD);
-    };
-
-    const activityEvents = ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'];
-    activityEvents.forEach(e => document.addEventListener(e, markActive, { passive: true }));
-
-    inactivityTimeout = setTimeout(() => {
-      if (isActive) { isActive = false; activeStart = Date.now(); }
-    }, INACTIVITY_THRESHOLD);
-
-    const onVisibility = () => {
-      if (document.hidden) {
-        if (isActive) { isActive = false; activeStart = Date.now(); }
-        hiddenStartRef.current = Date.now();
-      } else if (hiddenStartRef.current) {
-        hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
-        hiddenStartRef.current = null;
-        markActive();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-
-    // Detect window blur (user switches to another window on any screen)
-    const onBlur = () => { if (isActive) { isActive = false; activeStart = Date.now(); } };
-    const onFocus = () => { if (!document.hidden) markActive(); };
-    window.addEventListener('blur', onBlur);
-    window.addEventListener('focus', onFocus);
-
-    const effectiveElapsed = () => {
-      const totalMs = Date.now() - startTimeRef.current;
-      let hiddenExtra = hiddenDurationRef.current;
-      if (hiddenStartRef.current) hiddenExtra += Date.now() - hiddenStartRef.current;
-      if (!isActive) hiddenExtra += Date.now() - activeStart;
-      return Math.round((totalMs - hiddenExtra) / 1000);
-    };
-
-    const heartbeat = setInterval(async () => {
-      const total = effectiveElapsed();
-      const unreported = total - lastReportedRef.current;
-      if (unreported >= 5 && pid && tid) {
-        try { await api.recordTime(pid, tid, unreported); lastReportedRef.current = total; } catch {}
-      }
-    }, 30000);
-
-    return () => {
-      clearInterval(heartbeat);
-      clearTimeout(inactivityTimeout);
-      activityEvents.forEach(e => document.removeEventListener(e, markActive));
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('blur', onBlur);
-      window.removeEventListener('focus', onFocus);
-      if (hiddenStartRef.current) hiddenDurationRef.current += Date.now() - hiddenStartRef.current;
-      const elapsed = effectiveElapsed();
-      const unreported = elapsed - lastReportedRef.current;
-      if (unreported >= 5 && pid && tid) { api.recordTime(pid, tid, unreported).catch(() => {}); }
-    };
-  }, [topic?.id]);
-
-  // NOTE: sync local state from topic on topic switch only; reading topic.detail/topic.lastError/plan.history inside is intentional
-  useEffect(() => {
-    setLocalDetail(topic?.detail || '');
-    setError(topic?.lastError || null);
-    const history = plan.history?.filter(h => h.topicId === topic?.id) || [];
-    const pairs = [];
-    for (let i = 0; i < history.length; i++) {
-      if (history[i].role === 'user' && i + 1 < history.length && history[i + 1].role === 'ai') {
-        pairs.push({ question: history[i].content, answer: history[i + 1].content });
-        i++;
-      }
-    }
-    setQaList(prev => {
-      const hasPending = prev.some(q => q.answer === '...');
-      if (hasPending) return prev;
-      return pairs;
-    });
-  }, [topic?.id]);
-
-  // NOTE: exercises sync — parsedExercisesMemo is derived from localDetail, listing it would cause double-trigger
-  useEffect(() => {
-    if (!localDetail || generating) return;
-    if (topic?.exercises && topic.exercises.length > 0) {
-      setExercises(topic.exercises);
-      if (topic.exercises.every(e => e.correct !== null)) {
-        setSubmittedExercises(true);
-        setExerciseResults(topic.exercises.map((e, idx) => ({
-          exerciseIndex: idx, correct: e.correct, userAnswer: e.userAnswer,
-          correctAnswer: e.answer, explanation: e.explanation,
-        })));
-      }
-      return;
-    }
-    const parsed = parsedExercisesMemo;
-    if (parsed.length > 0) setExercises(parsed);
-  }, [localDetail, generating, topic?.exercises]);
-
   useEffect(() => {
     if (chatPanelRef.current) chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
   }, [qaList.length]);
@@ -405,73 +221,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // NOTE: auto-generate on topic switch only; genTriggered guards against re-entry, reading topic.detail/topic.done/topic.lastError inside is intentional
-  useEffect(() => {
-    if (!topic || genTriggered.current) return;
-    if (topic.detail && topic.done) { setGenerating(false); return; }
-    if (topic.lastError) { setError(topic.lastError); return; }
-    if (!topic.detail && !topic.done && !topic.lastError) {
-      genTriggered.current = true;
-      setGenerating(true);
-      api.generateDetail(plan.id, topic.id).catch(err => {
-        console.error('[TopicDetail] generateDetail failed:', err);
-        setGenerating(false);
-        setError(err.message || '加载失败');
-      });
-    }
-  }, [topic?.id]);
-
-  const handleGenerateImage = async (topicId) => {
-    setImageGenerating(true);
-    setImageError(null);
-    try {
-      await api.generateTopicImage(plan.id, topicId);
-      const fresh = await api.getPlan(plan.id);
-      if (fresh.plan) {
-        onRefresh(fresh.plan);
-        const t = fresh.plan.topics.find(t => t.id === topicId);
-        if (t?.imageUrl) setLocalDetail(t.detail || localDetail);
-      }
-    } catch (err) {
-      setImageError(err.message || '生成配图失败');
-    } finally {
-      setImageGenerating(false);
-    }
-  };
-
-  // NOTE: polling effect keyed on generating/plan/topic; reading localDetail/plan/onRefresh inside is intentional (would cause re-subscribe loops if listed)
-  useEffect(() => {
-    if (!generating || !plan) return;
-    const timer = setInterval(async () => {
-      try {
-        const d = await api.getPlan(plan.id);
-        const t = d.plan.topics.find(t => t.id === topic?.id);
-        if (!t) { clearInterval(timer); return; }
-        if (t.detail && t.detail !== localDetail) { setLocalDetail(t.detail); onRefresh(d.plan); }
-        if (t.lastError) { setError(t.lastError); setGenerating(false); clearInterval(timer); }
-        if (t.done && !t.lastError) { setLocalDetail(t.detail || localDetail); setGenerating(false); clearInterval(timer); }
-      } catch { clearInterval(timer); }
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [generating, plan?.id, topic?.id]);
-
   if (!topic) return null;
-
-  const handleAsk = async (question) => {
-    if (!question || qaLoading) return;
-    setQaLoading(true);
-    setQaList(prev => [...prev, { question, answer: '...' }]);
-    try {
-      const d = await api.askQuestion(plan.id, topic.id, question);
-      setQaList(prev => { const list = [...prev]; list[list.length - 1] = { question, answer: d.answer }; return list; });
-      requestAnimationFrame(() => { if (chatPanelRef.current) chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight; });
-      const fresh = await api.getPlan(plan.id);
-      onRefresh(fresh.plan);
-      setTimeout(() => 0, 100);
-    } catch (err) {
-      setQaList(prev => { const list = [...prev]; list[list.length - 1] = { question, answer: `❌ 请求失败: ${err.message}` }; return list; });
-    } finally { setQaLoading(false); }
-  };
 
   const handleExport = () => {
     if (!localDetail) return;
@@ -550,65 +300,19 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   const handleRetry = () => {
-    setError(null); setLocalDetail(''); genTriggered.current = false; setGenerating(true);
-    api.generateDetail(plan.id, topic.id).catch(() => {});
+    retryGeneration().catch(() => {});
   };
 
   const handleRegenerate = async (reason) => {
     setRegenerateDialogOpen(false);
-    const currentMode = interactiveMode || 'detail';
-    await api.submitFeedback(plan.id, topic.id, reason, currentMode).catch(() => {});
-    if (interactiveMode) {
-      handleRestartInteractive();
-    } else {
-      handleRetry();
-    }
+    await regenerate(reason).catch(() => {});
   };
 
-  const handleDifficulty = async (level) => {
-    if (difficultySaving) return;
-    setDifficulty(level); setDifficultySaving(true);
-    try { await api.updateTopic(plan.id, topic.id, { difficulty: level }); const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan); } catch {}
-    setDifficultySaving(false);
-  };
-
-  const handleComplete = async () => {
-    setRevealLoading(true);
-    try {
-      const recognized = foundErrorsInput.split(/[\n;；,，]+/).map(s => s.trim()).filter(Boolean);
-      const result = await api.revealErrors(plan.id, topic.id, recognized);
-      if (result.hasErrors && result.errors?.length > 0) { setRevealLoading(false); return; }
-    } catch {}
-    setRevealLoading(false);
-    await doComplete();
-  };
-
-  const doComplete = async () => {
-    try { await api.updateTopic(plan.id, topic.id, { done: true }); const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan); onBack(); } catch { onBack(); }
-  };
-
-  const handleExerciseAnswer = (exerciseIndex, answer) => { setExerciseAnswers(prev => ({ ...prev, [exerciseIndex]: answer })); };
-
-  const handleSubmitExercises = async () => {
-    if (exerciseLoading || exercises.length === 0) return;
-    setExerciseLoading(true);
-    try {
-      const answers = Object.entries(exerciseAnswers).map(([idx, answer]) => ({ exerciseIndex: parseInt(idx), userAnswer: answer }));
-      const d = await api.submitExercises(plan.id, topic.id, answers);
-      setExerciseResults(d.results); setSubmittedExercises(true);
-      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch (err) { alert('提交失败: ' + err.message); } finally { setExerciseLoading(false); }
-  };
-
-  const handleToggleReview = async () => {
-    if (reviewContent) { const next = !reviewMode; setReviewMode(next); if (next) { setSearchParams({ review: '1' }, { replace: false }); } else { setSearchParams({}, { replace: false }); } return; }
-    setReviewLoading(true); setReviewMode(true); setSearchParams({ review: '1' }, { replace: false });
-    try {
-      const d = await api.generateReview(plan.id, topic.id);
-      setReviewContent(d.review);
-      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch { setReviewMode(false); } finally { setReviewLoading(false); }
-  };
+  const handleDifficulty = level => saveDifficulty(level).catch(() => {});
+  const handleComplete = () => complete().catch(() => {});
+  const handleSubmitExercises = () => submitExercises().catch(error => {
+    alert(`提交失败: ${error.message}`);
+  });
 
   const prerequisites = topic?.prerequisites?.length ? topic.prerequisites.map(id => plan.topics.find(t => t.id === id)).filter(Boolean) : [];
   const childrenTopics = plan.topics.filter(t => t.parentId === topic?.id).sort((a, b) => a.order - b.order);
@@ -617,140 +321,33 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
 
   const handleNavigateToTopic = (targetTopicId) => { if (onSelectTopic) onSelectTopic(targetTopicId); };
 
-  const handleFactCheck = async () => {
-    if (factCheckLoading || !localDetail) return;
-    setFactCheckLoading(true);
-    try {
-      const d = await api.factCheck(plan.id, topic.id);
-      setFactCheckData(d.factCheck || d);
-      const fresh = await api.getPlan(plan.id);
-      const freshTopic = fresh.plan.topics.find(t => t.id === topic.id);
-      if (freshTopic?.factCheck) setFactCheckData(freshTopic.factCheck);
-      onRefresh(fresh.plan);
-    } catch (err) { alert('事实核查失败: ' + err.message); } finally { setFactCheckLoading(false); }
-  };
+  const handleFactCheck = () => runFactCheck().catch(error => {
+    alert(`事实核查失败: ${error.message}`);
+  });
 
   const handleFactCheckFix = async () => {
-    if (factCheckFixing || !factCheckData?.findings) return;
-    const uncertainFindings = factCheckData.findings.filter(f => f.verdict === 'uncertain' || f.verdict === 'likely_wrong' || f.verdict === 'hallucination');
-    if (uncertainFindings.length === 0) { alert('没有需要修正的存疑陈述'); return; }
-    setFactCheckFixing(true);
     try {
-      const d = await api.autoFixFacts(plan.id, topic.id, uncertainFindings);
-      if (d.corrected) { setLocalDetail(d.detail); alert(`已修正 ${d.fixedCount} 处内容`); } else { alert('无需修正: ' + (d.message || '修正未能匹配到原文')); }
-      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch (err) { alert('自动修正失败: ' + err.message); } finally { setFactCheckFixing(false); }
+      const result = await fixFactCheck();
+      if (!result) return;
+      if (result.corrected) alert(`已修正 ${result.fixedCount} 处内容`);
+      else alert(`无需修正: ${result.message || '修正未能匹配到原文'}`);
+    } catch (error) {
+      alert(`自动修正失败: ${error.message}`);
+    }
   };
 
-  const handleAdaptiveAnalysis = async () => {
-    if (adaptiveLoading) return;
-    setAdaptiveLoading(true);
-    try { const d = await api.adaptiveAnalysis(plan.id); setAdaptiveData(d); } catch (err) { alert('自适应分析失败: ' + err.message); } finally { setAdaptiveLoading(false); }
-  };
+  const handleAdaptiveAnalysis = () => analyzeAdaptive().catch(error => {
+    alert(`自适应分析失败: ${error.message}`);
+  });
 
-  const handleRecommendResources = async () => {
-    if (resourcesLoading || !localDetail) return;
-    setResourcesLoading(true);
-    try {
-      const d = await api.recommendResources(plan.id, topic.id);
-      setResources(d.resources || []);
-      const fresh = await api.getPlan(plan.id); onRefresh(fresh.plan);
-    } catch (err) { alert('资源推荐失败: ' + err.message); } finally { setResourcesLoading(false); }
-  };
+  const handleRecommendResources = () => recommendResources().catch(error => {
+    alert(`资源推荐失败: ${error.message}`);
+  });
 
   const handleExportFormat = (format) => {
-    if (!localDetail) return; setShowExportMenu(false);
+    if (!localDetail) return;
     const urls = { anki: api.exportAnkiCSV(plan.id, topic.id), opml: api.exportOPML(plan.id, topic.id), notas: api.exportNotionCSV(plan.id), json: api.exportJSON(plan.id, topic.id), notes: api.exportStudyNotes(plan.id, topic.id), bundle: api.exportBundle(plan.id) };
     const url = urls[format]; if (!url) return; window.open(url, '_blank');
-  };
-
-  const handleStartInteractive = async (mode) => {
-    if (interactiveBusyRef.current) return;
-    setSearchParams({ mode }, { replace: false });
-
-    // Check if there's an existing session to resume
-    const existingSession = topic?.interactiveSession;
-    if (existingSession && existingSession.mode === mode && existingSession.transcript && existingSession.transcript.length > 0 && !existingSession.finished) {
-      // Resume existing session
-      interactiveBusyRef.current = true;
-      setInteractiveMode(mode); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(false);
-      const sections = existingSession.transcript.map(entry => ({ content: entry.content || '' }));
-      setInteractiveSections(sections);
-      if (existingSession.stateMachine) setInteractiveStateMachine(existingSession.stateMachine);
-      interactiveBusyRef.current = false;
-      return;
-    }
-
-    // Start new session
-    interactiveBusyRef.current = true;
-    setInteractiveMode(mode); setInteractiveSections([]); setStreamingContent(''); setInteractiveFinished(false); setInteractiveLoading(true);
-    try {
-      let fullContent = ''; let sessionData = null;
-      await api.startInteractiveSSE(plan.id, topic.id, mode, (event) => {
-        if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
-        else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; }
-        else if (event.type === 'done') { if (fullContent && !sessionData) setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); sessionData = event.session; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); if (event.finished) setInteractiveFinished(true); }
-        else if (event.type === 'error') { setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]); }
-      });
-    } catch (err) { setInteractiveSections([{ content: '❌ 启动失败: ' + err.message }]); } finally { setInteractiveLoading(false); interactiveBusyRef.current = false; }
-  };
-
-  const handleSendInteractiveFeedback = async () => {
-    const feedback = interactiveInput.trim();
-    if (!feedback || interactiveBusyRef.current) return;
-    await handleContinueInteractive(feedback);
-  };
-
-  const handleQuickAction = async (action) => {
-    if (interactiveBusyRef.current) return;
-    await handleContinueInteractive(action);
-  };
-
-  const handleContinueInteractive = async (feedback) => {
-    if (!interactiveMode || interactiveBusyRef.current) return;
-    interactiveBusyRef.current = true; setInteractiveLoading(true); setInteractiveInput(''); setStreamingContent('');
-    try {
-      let fullContent = '';
-      await api.continueInteractiveSSE(plan.id, topic.id, interactiveMode, feedback, (event) => {
-        if (event.type === 'chunk') { fullContent += event.content; setStreamingContent(fullContent); }
-        else if (event.type === 'pause') { setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); fullContent = ''; if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); }
-        else if (event.type === 'done') { if (fullContent) setInteractiveSections(prev => [...prev, { content: fullContent }]); setStreamingContent(''); if (event.session?.stateMachine) setInteractiveStateMachine(event.session.stateMachine); if (event.finished) setInteractiveFinished(true); }
-        else if (event.type === 'error') { setInteractiveSections(prev => [...prev, { content: '❌ ' + event.data }]); }
-      });
-    } catch (err) { setInteractiveSections([{ content: '❌ 响应失败: ' + err.message }]); } finally { setInteractiveLoading(false); interactiveBusyRef.current = false; }
-  };
-
-  const handleExitInteractive = () => {
-    const wasFeynman = interactiveMode === 'feynman';
-    const currentPlanId = plan?.id; const currentTopicId = topic?.id;
-    // Check if user actually explained something (more than just the AI's initial greeting)
-    const hasUserContent = interactiveSections.length > 1 || (interactiveSections.length === 1 && interactiveSections[0]?.content?.length > 200);
-    setInteractiveMode(null); setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
-    setSearchParams({}, { replace: false });
-    if (wasFeynman && currentPlanId && currentTopicId && hasUserContent) {
-      setFeynmanAnalyzing(true);
-      api.analyzeFeynmanSession(currentPlanId, currentTopicId).then(insights => {
-        // Only update if the new analysis has real content (not an empty "no content" result)
-        if (insights && insights.summary && insights.strengths?.length > 0) {
-          setFeynmanInsights(insights);
-          setTimeout(() => {
-            const el = document.getElementById('feynman-insights-section');
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 100);
-        }
-      }).catch(() => {}).finally(() => setFeynmanAnalyzing(false));
-    }
-  };
-
-  const handleRestartInteractive = async () => {
-    const currentPlanId = plan?.id; const currentTopicId = topic?.id;
-    const mode = interactiveMode;
-    if (!currentPlanId || !currentTopicId || !mode) return;
-    try { await api.clearInteractiveSession(currentPlanId, currentTopicId); } catch {}
-    // Clear old feynman insights if restarting feynman mode
-    if (mode === 'feynman') setFeynmanInsights(null);
-    setInteractiveSections([]); setInteractiveFinished(false); setInteractiveInput(''); setInteractiveStateMachine(null);
-    handleStartInteractive(mode);
   };
 
   const handleVoiceInput = () => {
@@ -774,7 +371,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
   };
 
   return (
-    <div className='w-full max-w-4xl px-10 py-8 space-y-6'>
+    <div className='w-full max-w-4xl px-4 py-6 sm:px-8 lg:px-10 lg:py-8 space-y-6'>
       <Helmet><title>study-assistant - {topic.title}</title></Helmet>
 
       {/* Sentinel: original header position for IntersectionObserver */}
@@ -784,13 +381,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
         <h2 className='text-lg font-semibold flex-1 min-w-0 truncate'>{topic.title}</h2>
         {generating && <span className='inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full'><RotateCcw className='h-3 w-3 animate-spin' />生成中...</span>}
         {error && <span className='inline-flex items-center gap-1 text-xs text-destructive bg-destructive/10 px-2 py-0.5 rounded-full'><AlertCircle className='h-3 w-3' />生成失败</span>}
-        {localDetail && !error && !generating && topic.done === false && (
+        {!practiceMode && localDetail && !error && !generating && topic.done === false && (
           <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
             {revealLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <CheckCheck className='h-3.5 w-3.5 mr-1' />}
             {revealLoading ? '检查中...' : '学完了'}
           </Button>
         )}
-        {localDetail && !error && !generating && topic.done && (
+        {!practiceMode && localDetail && !error && !generating && topic.done && (
           <Button size='sm' className='bg-indigo-500 hover:opacity-90 text-white' onClick={handleToggleReview} title='复习模式'>
             {reviewLoading ? <RotateCcw className='h-3.5 w-3.5 mr-1 animate-spin' /> : <RotateCcw className='h-3.5 w-3.5 mr-1' />}
             {reviewMode ? '返回讲解' : '复习'}
@@ -827,8 +424,15 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       </div>
       </div>
 
+      {practiceMode && (
+        <div role='status' className='flex items-center gap-2 border-y border-border/70 py-2 text-sm text-muted-foreground'>
+          <CheckCircle className='h-4 w-4 shrink-0 text-green-600' />
+          <span>实践进度与最终确认由 <strong className='font-medium text-foreground'>study_trace</strong> 负责</span>
+        </div>
+      )}
+
       {/* Topic navigation bar */}
-      <div className='flex flex-wrap gap-3 text-sm py-3 px-4 rounded-lg bg-blue-200 dark:bg-blue-800/50 border-2 border-blue-400 dark:border-blue-600 shadow-sm font-medium'>
+      {!practiceMode && <div className='flex flex-wrap gap-3 text-sm py-3 px-4 rounded-lg bg-blue-200 dark:bg-blue-800/50 border-2 border-blue-400 dark:border-blue-600 shadow-sm font-medium'>
           {prerequisites.length === 0 && childrenTopics.length === 0 && nextTopics.length === 0 && relatedTopics.length === 0 && (
             <span className='text-muted-foreground italic'>暂无关联知识点</span>
           )}
@@ -864,7 +468,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               ))}
             </div>
           )}
-      </div>
+      </div>}
 
       {error && !interactiveMode && (
         <div role='alert' className='flex flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
@@ -898,13 +502,13 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               <Button variant='ghost' size='sm' onClick={onBack}><ArrowLeft className='h-4 w-4 mr-1' />返回列表</Button>
               <span className='font-semibold text-foreground truncate text-sm flex-1 min-w-0'>{topic.title}</span>
               <AIStatusIndicator />
-              {localDetail && !error && !generating && topic.done === false && (
+              {!practiceMode && localDetail && !error && !generating && topic.done === false && (
                 <Button size='sm' className='bg-green-600 hover:bg-green-700 text-white h-7 text-xs' onClick={handleComplete} disabled={revealLoading} title='标记为已学完并返回列表'>
                   {revealLoading ? <RotateCcw className='h-3 w-3 mr-1 animate-spin' /> : <CheckCheck className='h-3 w-3 mr-1' />}
                   {revealLoading ? '检查中...' : '学完了'}
                 </Button>
               )}
-              {localDetail && !error && !generating && topic.done && (
+              {!practiceMode && localDetail && !error && !generating && topic.done && (
                 <Button size='sm' className='bg-indigo-500 hover:opacity-90 text-white h-7 text-xs' onClick={handleToggleReview} title='复习模式'>
                   {reviewLoading ? <RotateCcw className='h-3 w-3 mr-1 animate-spin' /> : <RotateCcw className='h-3 w-3 mr-1' />}
                   {reviewMode ? '返回讲解' : '复习'}
@@ -938,7 +542,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </div>
             </div>
             {/* Relation navigation row */}
-            <div className='flex flex-wrap gap-3 text-xs'>
+            {!practiceMode && <div className='flex flex-wrap gap-3 text-xs'>
               {prerequisites.length === 0 && childrenTopics.length === 0 && nextTopics.length === 0 && relatedTopics.length === 0 && (
                 <span className='text-muted-foreground italic'>暂无关联知识点</span>
               )}
@@ -974,7 +578,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                   ))}
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         </nav>
       )}
@@ -1000,14 +604,14 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
       )}
 
         {localDetail && !error && !interactiveMode && !reviewMode && (
-          <div className='flex flex-col' style={{ gap: '144px' }}>
+          <div className='flex flex-col' style={{ gap: practiceMode ? '32px' : '144px' }}>
             {/* Image generation error */}
-            {imageError && (
+            {!practiceMode && imageError && (
               <div className='rounded-md bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-3 text-sm text-red-700 dark:text-red-300'>
                 {imageError}
               </div>
             )}
-            {topic.imageUrl ? (
+            {!practiceMode && (topic.imageUrl ? (
             <div className='rounded-lg bg-muted/20 overflow-hidden'>
               <div className='flex items-center justify-between px-4 py-2 bg-muted/50 text-xs text-muted-foreground'>
                   <span>知识点配图</span>
@@ -1032,14 +636,14 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                 </Button>
                 <span className='text-xs text-muted-foreground'>使用硅基流动 AI 为知识点生成插图</span>
               </div>
-            )}
+            ))}
 
             <div className='rounded-lg bg-muted/20 px-8 py-6'>
               <div className='reading-content text-sm leading-7'>
                 <ContentArea content={strippedDetailMemo} />
               </div>
             </div>
-            {!generating && localDetail && (
+            {!practiceMode && !generating && localDetail && (
               <div className='flex justify-end'>
                 <Button variant='ghost' size='sm' className='text-xs text-muted-foreground hover:text-foreground' onClick={() => setRegenerateDialogOpen(true)}>
                   <RotateCcw className='h-3 w-3 mr-1' />重新生成
@@ -1048,14 +652,14 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
             )}
             {generating && <div className='flex items-center gap-1.5 text-xs text-muted-foreground'><RotateCcw className='h-3 w-3 animate-spin' />继续生成中...</div>}
 
-            <QAPanel
+            {!practiceMode && <QAPanel
               qaList={qaList}
               onAsk={handleAsk}
               loading={qaLoading}
               scrollToRound={scrollToRound}
               setHoveredRound={setHoveredRound}
               hoveredRound={hoveredRound}
-            />
+            />}
 
             
             <ExercisePanel
@@ -1084,6 +688,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               </div>
             )}
 
+            {!practiceMode && <>
             {feynmanAnalyzing && (!feynmanInsights || !feynmanInsights.summary) && (
               <div id='feynman-insights-section' className='pt-4 flex items-center gap-2 text-sm text-muted-foreground'>
                 <div className='animate-spin rounded-full h-4 w-4 border-2 border-purple-500 border-t-transparent' />
@@ -1205,7 +810,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               <div className='pt-4 space-y-3'>
                 <div className='flex items-center justify-between'>
                   <h3 className='text-sm font-medium'>事实核查结果</h3>
-                  <Button variant='ghost' size='sm' onClick={() => setFactCheckData(null)}><X className='h-3.5 w-3.5' /></Button>
+                  <Button variant='ghost' size='sm' onClick={dismissFactCheck}><X className='h-3.5 w-3.5' /></Button>
                 </div>
                 {factCheckData.overallScore !== undefined && (
                   <p className='text-sm'>可信度评分：<strong>{Math.round(factCheckData.overallScore * 100)}%</strong> · <span className={`font-semibold ${factCheckData.verdict === 'trusted' ? 'text-green-600' : factCheckData.verdict === 'caution' ? 'text-amber-500' : 'text-red-600'}`}>{factCheckData.verdict === 'trusted' ? '可信' : factCheckData.verdict === 'caution' ? '需注意' : factCheckData.verdict === 'unreliable' ? '不可靠' : '有误'}</span></p>
@@ -1236,7 +841,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
               <div className='pt-4 space-y-3'>
                 <div className='flex items-center justify-between'>
                   <h3 className='text-sm font-medium'>自适应学习分析</h3>
-                  <Button variant='ghost' size='sm' onClick={() => setAdaptiveData(null)}><X className='h-3.5 w-3.5' /></Button>
+                  <Button variant='ghost' size='sm' onClick={dismissAdaptive}><X className='h-3.5 w-3.5' /></Button>
                 </div>
                 {adaptiveData.summary && (
                   <div className='bg-muted/50 rounded-md p-3 space-y-1'>
@@ -1305,6 +910,7 @@ export default function TopicDetail({ plan, topic, onBack, onRefresh, onSelectTo
                 {revealLoading ? '检查错误中...' : '学完了，返回列表'}
               </Button>
             </div>
+            </>}
           </div>
         )}
 

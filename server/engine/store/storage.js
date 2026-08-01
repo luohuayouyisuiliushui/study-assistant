@@ -2,19 +2,37 @@
  * Shared storage layer: atomic writes, JSON read/write, index management.
  *
  * All file persistence for the learning assistant goes through this module.
- * crud.js imports these primitives to build the CRUD operations.
+ * Domain store modules import these primitives to build CRUD operations.
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ── Test-run detection (before any I/O) ──
+// When STUDY_ASSISTANT_DATA_DIR is not set, check whether the Node.js test
+// runner is active so we can isolate test data from production data.
+function _isTestRun() {
+  // 1. Explicit env override (Vite / vitest)
+  if (process.env.VITEST || process.env.NODE_ENV === 'test') return true;
+  // 2. Node.js native test runner: --test / --test-only / --test-name-pattern etc.
+  if (process.execArgv.some(a => a === '--test' || a.startsWith('--test-'))) return true;
+  // 3. Guard against false positives in child processes spawned by the test
+  //    runner — they inherit execArgv but run user scripts.  Rely on the
+  //    caller setting STUDY_ASSISTANT_DATA_DIR when isolation is desired.
+  return false;
+}
+
 // storage.js lives in store/ subdirectory, need two levels up to reach server/
 const configuredDataDir = process.env.STUDY_ASSISTANT_DATA_DIR?.trim();
 const DATA = configuredDataDir
   ? path.resolve(configuredDataDir)
-  : path.join(__dirname, '..', '..', 'data', 'learn');
+  : _isTestRun()
+    ? fs.mkdtempSync(path.join(os.tmpdir(), 'study-assistant-test-'))
+    : path.join(__dirname, '..', '..', 'data', 'learn');
 const PLANS_INDEX = path.join(DATA, 'plans.json');
 const TRASH_DIR = path.join(DATA, 'trash');
 const TRASH_INDEX = path.join(TRASH_DIR, 'index.json');
@@ -336,6 +354,9 @@ function isValidPlanId(id) {
 }
 
 function planPath(id) {
+  if (!isValidPlanId(id)) {
+    throw new Error(`Invalid plan id: ${String(id)}`);
+  }
   return path.join(DATA, 'plans', `${id}.json`);
 }
 

@@ -4,6 +4,7 @@ import {
   DEFAULT_LISTEN_HOST,
   createApiAuthorization,
   getListenHost,
+  isAllowedBrowserOrigin,
   isLoopbackAddress,
 } from '../security.js';
 
@@ -33,6 +34,14 @@ describe('server network boundary', () => {
     assert.equal(isLoopbackAddress('::1'), true);
     assert.equal(isLoopbackAddress('::ffff:127.0.0.1'), true);
     assert.equal(isLoopbackAddress('192.168.1.20'), false);
+  });
+
+  it('allows any local HTTP development port and rejects remote origins', () => {
+    assert.equal(isAllowedBrowserOrigin('http://localhost:5270'), true);
+    assert.equal(isAllowedBrowserOrigin('http://127.0.0.1:5173'), true);
+    assert.equal(isAllowedBrowserOrigin(undefined), true);
+    assert.equal(isAllowedBrowserOrigin('https://example.com'), false);
+    assert.equal(isAllowedBrowserOrigin('not a URL'), false);
   });
 
   it('allows loopback and rejects remote API requests without a token', () => {

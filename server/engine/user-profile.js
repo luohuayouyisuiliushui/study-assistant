@@ -3,11 +3,10 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { hasTestPlanMarker } from './store/test-plan-marker.js';
+import { DATA } from './store/storage.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..', 'data', 'learn');
+const DATA_DIR = DATA;
 const PROFILE_FILE = path.join(DATA_DIR, 'user-profile.json');
 
 const ALLOWED_MODES = new Set(['stepwise','challenge','scaffold','realtime','debate','socratic','analogy']);
@@ -400,7 +399,14 @@ export async function generateUserProfile(provider, model = 'gpt-4o-mini', { pla
 }
 
 export function buildProfileSummary(aggregated, stored) {
-  if (!aggregated) return { hasData: false, message: '还没有学习计划数据' };
+  if (!aggregated) {
+    return {
+      hasData: false,
+      hasAIAnalysis: hasAIProfile(stored),
+      hasBehaviorProfile: hasBehaviorEvidence(stored),
+      message: '还没有学习计划数据',
+    };
+  }
   return { hasData: true, hasAIAnalysis: hasAIProfile(stored), hasBehaviorProfile: hasBehaviorEvidence(stored), lastAnalyzedAt: stored?.lastAnalyzedAt || null, stats: aggregated.stats, exerciseStats: aggregated.exerciseStats, examStats: aggregated.examStats, quickQuizStats: aggregated.quickQuizStats, todayStats: aggregated.todayStats, weekStats: aggregated.weekStats, weakPointsSummary: aggregated.weakPointsSummary, feynmanStats: aggregated.feynmanData, planSummaries: aggregated.planSummaries, modeCounts: aggregated.modeCounts, timeDistribution: aggregated.timeDistribution, learnerPersona: stored?.learnerPersona || null, strengths: stored?.strengths || null, weaknesses: stored?.weaknesses || null, recommendations: stored?.recommendations || null };
 }
 

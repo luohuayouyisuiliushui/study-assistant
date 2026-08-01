@@ -1,14 +1,14 @@
 {
   "name": "study-assistant-server",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
     "test": "node --test --test-concurrency=1 --test-force-exit \"__tests__/*.test.js\"",
-    "pretest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
-    "posttest": "node scripts/clean-test-plans.js && node scripts/clean-backups.js",
+    "pretest": "node -e \"console.log('[pretest] test data isolation is handled by storage.js (STUDY_ASSISTANT_DATA_DIR fallback)')\"",
+    "posttest": "node -e \"console.log('[posttest] test data isolation is handled by storage.js — no cleanup needed')\"",
     "clean:testdata": "node scripts/clean-test-plans.js",
     "clean:testdata:legacy": "node scripts/clean-test-plans.js --legacy-names",
     "clean:testdata:legacy:confirm": "node scripts/clean-test-plans.js --legacy-names --confirm",

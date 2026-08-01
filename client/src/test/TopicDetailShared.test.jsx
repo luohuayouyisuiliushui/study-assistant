@@ -2,8 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import { markdownComponents } from '../components/TopicDetailShared';
+import { markdownComponents, markdownRehypePlugins, ContentArea, QaMessages } from '../components/TopicDetailShared';
 
 // Mock MermaidDiagram to make assertions easier
 vi.mock('../components/MermaidDiagram', () => ({
@@ -14,7 +13,7 @@ function renderMd(content) {
   return render(
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw]}
+      rehypePlugins={markdownRehypePlugins}
       components={markdownComponents}
     >
       {content}
@@ -110,5 +109,22 @@ describe('markdownComponents', () => {
 
     const trigger = screen.getByRole('button', { name: '全屏查看：线程结构图' });
     expect(trigger).toContainElement(screen.getByRole('img', { name: '线程结构图' }));
+  });
+
+  it('removes active HTML from generated detail content', () => {
+    render(<ContentArea content={'<iframe srcdoc="<script>window.pwned=1</script>"></iframe>\n\n**安全文本**'} />);
+
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByText('安全文本')).toBeInTheDocument();
+  });
+
+  it('removes active HTML from generated follow-up answers', () => {
+    render(<QaMessages qaList={[{
+      question: '解释一下',
+      answer: '<object data="javascript:alert(1)"></object>\n\n保留回答',
+    }]} />);
+
+    expect(document.querySelector('object')).toBeNull();
+    expect(screen.getByText('保留回答')).toBeInTheDocument();
   });
 });

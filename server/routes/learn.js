@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import * as store from '../engine/learn-store.js';
-import { answerFollowUp, answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics, inferTopicRelations } from '../engine/learn-engine.js';
+import { answerAnalysisFollowUp, analyzeLearning, generateReview, gradeExercises, analyzeWeakPoints, generateQuickQuiz, analyzeCoreTopics, inferTopicRelations } from '../engine/learn-engine.js';
 import { IMPORT_PLAN_PROMPT } from '../engine/learn-prompts.js';
-import { AdaptivePromptInjector, dataFlywheelUpdate } from '../engine/adaptive-engine.js';
-import { getUserProfile } from '../engine/user-profile.js';
-import { getProvider, getModel, getDispatcher, wantsAgentDispatch } from './middleware.js';
+import { dataFlywheelUpdate } from '../engine/adaptive-engine.js';
+import { getAIInvocation, registerPlanIdParams } from './middleware.js';
 import { refreshDataFlywheel } from './flywheel.js';
 
 const router = Router();
+registerPlanIdParams(router, ['id', 'planId']);
 
 // ─── Test Connection ───
 
@@ -20,7 +20,7 @@ router.post('/test-connection', async (req, res) => {
   if (!apiKey || !apiKey.trim()) {
     return res.status(400).json({ ok: false, error: '请提供 API Key（可通过请求头 x-api-key、请求体 apiKey 或环境变量 OPENAI_API_KEY 设置）' });
   }
-  const provider = getProvider(req);
+  const { provider } = getAIInvocation(req);
   const result = await provider.testConnection();
   res.json(result);
 });
@@ -60,6 +60,9 @@ router.post('/plans/batch-delete', async (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: '请提供要删除的计划 ID 数组' });
+  }
+  if (ids.some(id => !store.isValidPlanId(id))) {
+    return res.status(400).json({ error: '计划 ID 数组包含无效值' });
   }
   try {
     await store.deletePlansByIds(ids);
@@ -243,7 +246,7 @@ router.post('/plans/import', async (req, res) => {
   }
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
 
     // ── First attempt: deep analysis with IMPORT_PLAN_PROMPT ──
     let parsed;
@@ -425,7 +428,7 @@ router.post('/plans/:planId/infer-relations', async (req, res) => {
   );
   if (hasAnyRelations) {
     // Mark as inferred to avoid re-checking
-    await store.writePlan(plan.id, (p) => { p.relationsInferredAt = Date.now(); });
+    await store.markRelationsInferred(plan.id);
     return res.json({ status: 'already_populated' });
   }
 
@@ -433,11 +436,11 @@ router.post('/plans/:planId/infer-relations', async (req, res) => {
   res.json({ status: 'inferring' });
 
   try {
-    const provider = getProvider(req);
-    await inferTopicRelations(provider, plan, getModel(req));
+    const { provider, model } = getAIInvocation(req);
+    await inferTopicRelations(provider, plan, model);
 
     // Mark plan as inferred
-    await store.writePlan(plan.id, (p) => { p.relationsInferredAt = Date.now(); });
+    await store.markRelationsInferred(plan.id);
     console.log(`[infer-relations] Completed for plan ${plan.id} (${plan.name})`);
   } catch (err) {
     console.error(`[infer-relations] Failed for plan ${plan.id}:`, err.message);
@@ -501,7 +504,7 @@ router.post('/plans/:id/analysis', async (req, res) => {
     const plan = store.getPlan(req.params.id);
     if (!plan) return res.status(404).json({ error: '计划不存在' });
 
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const analysis = await analyzeLearning(provider, plan, provider.model, req.body?.analysisChat);
     res.json({ analysis });
   } catch (err) {
@@ -524,7 +527,7 @@ router.post('/plans/:id/analysis/ask', async (req, res) => {
       return res.status(400).json({ error: '缺少 question 或 analysis 参数' });
     }
 
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const result = await answerAnalysisFollowUp(provider, plan, analysis, question.trim(), provider.model);
     res.json({ answer: result.content });
   } catch (err) {
@@ -547,9 +550,9 @@ router.post('/plans/:planId/core-topics', async (req, res) => {
     const plan = store.getPlan(req.params.planId);
     if (!plan) return res.status(404).json({ error: '计划不存在' });
 
-    const provider = getProvider(req);
+    const { provider, model } = getAIInvocation(req);
     const force = req.body?.force === true;
-    const result = await analyzeCoreTopics(provider, plan, getModel(req), { force });
+    const result = await analyzeCoreTopics(provider, plan, model, { force });
     res.json(result);
   } catch (err) {
     console.error('[core-topics]', err);
@@ -578,8 +581,8 @@ router.post('/plans/:planId/review/:topicId', async (req, res) => {
   if (!topic.done) return res.status(400).json({ error: '该知识点尚未完成学习，无需复习' });
 
   try {
-    const provider = getProvider(req);
-    const review = await generateReview(provider, plan, req.params.topicId, getModel(req));
+    const { provider, model } = getAIInvocation(req);
+    const review = await generateReview(provider, plan, req.params.topicId, model);
     const exercises = store.parseExercisesFromDetail(review);
     res.json({ review, exercises });
   } catch (err) {
@@ -602,7 +605,7 @@ router.post('/plans/:planId/exercises/:topicId/submit', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const provider = getProvider(req);
+    const { provider } = getAIInvocation(req);
     const results = await gradeExercises(provider, plan, req.params.topicId, answers);
 
     // ── Data flywheel: update user profile with latest exercise results ──
@@ -628,8 +631,8 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const provider = getProvider(req);
-    const results = await analyzeWeakPoints(provider, plan, getModel(req));
+    const { provider, model } = getAIInvocation(req);
+    const results = await analyzeWeakPoints(provider, plan, model);
 
     // ── Data flywheel: update user profile with weak point analysis results ──
     try {
@@ -655,8 +658,8 @@ router.post('/plans/:planId/quick-quiz', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const provider = getProvider(req);
-    const result = await generateQuickQuiz(provider, plan, getModel(req));
+    const { provider, model } = getAIInvocation(req);
+    const result = await generateQuickQuiz(provider, plan, model);
     res.json(result);
   } catch (err) {
     console.error('[quick-quiz]', err);

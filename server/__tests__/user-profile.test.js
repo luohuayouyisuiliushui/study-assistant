@@ -4,11 +4,11 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { aggregatePlans, profileUpdater, getProfileSummary, getUserProfile, generateUserProfile, mergeGeneratedProfile } from '../engine/user-profile.js';
+import { DATA } from '../engine/store/storage.js';
 
-const PROFILE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'learn', 'user-profile.json');
+const PROFILE_FILE = path.join(DATA, 'user-profile.json');
 let originalProfileBuffer = null, profileExisted = false;
 
 function snapshotProfileFile() {

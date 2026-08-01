@@ -1,6 +1,6 @@
 # 模块清单与评估
 
-> 本文件最初由审查边界（提示词第一部分）生成，并于 2026-07-27 按 `v1.14.0` 重新核对。当前证据来自源码树、Server 540 项测试、Client 112 项测试、前后端 Oxlint、数据完整性检查、生产构建、`docs/compose/reports/security-audit.md` 与 `docs/data-flywheel-audit.md`。
+> 本文件最初由审查边界（提示词第一部分）生成，并于 2026-08-01 按工作区 `v4.0.0` 更新深模块边界。历史测试计数和行数仍是各次审查快照，不是接口契约。
 >
 > 各模块行数是 `v1.14.0` 快照，不是接口契约；历史审查基线与完整执行证据保留在 `FINAL_REPORT.md`。
 
@@ -9,11 +9,11 @@
 | 字段 | 值 |
 |---|---|
 | 仓库根 | `c:\.a\study-assistant` |
-| 当前发布 | [`v1.14.0`](https://github.com/luohuayouyisuiliushui/study-assistant/releases/tag/v1.14.0) |
-| 根 `package.json` 版本 | 1.14.0 |
-| `server/package.json` 版本 | 1.14.0 |
-| `client/package.json` 版本 | 1.14.0 |
-| `README.md` 标注版本 | 1.14.0 |
+| 当前工作区 | `v4.0.0`（未在本文中假定已发布） |
+| 根 `package.json` 版本 | 4.0.0 |
+| `server/package.json` 版本 | 4.0.0 |
+| `client/package.json` 版本 | 4.0.0 |
+| `README.md` 标注版本 | 4.0.0 |
 | 测试框架 | Server: `node --test --test-concurrency=1`；Client: `vitest + jsdom` |
 | Lint | `oxlint`（前后端各自配置） |
 | 持久化 | JSON 文件 + 原子写入 + 双层备份（无数据库） |
@@ -40,7 +40,7 @@
 
 ### M1. 持久化基础设施（server/engine/store/）
 
-- **路径**：`server/engine/store/storage.js`（328 行）、`server/engine/store/crud.js`（1670 行）、`server/engine/store/test-plan-marker.js`、`server/engine/learn-store.js`（barrel 重导出）
+- **路径**：`server/engine/store/storage.js`、`crud-plans.js`、`crud-content.js`、`crud-exercises.js`、`crud-graph.js`、`crud-trash.js`、`crud-flags.js`、`test-plan-marker.js`、`server/engine/learn-store.js`（barrel 重导出）
 - **职责**：原子写入、JSON 读写、索引管理、回收站、计划 CRUD、测试计划标记
 - **入口方式**：`import { ... } from './engine/learn-store.js'`
 - **内部依赖**：`uuid`、Node `fs/path`
@@ -49,7 +49,7 @@
 
 #### 评估
 
-① 结构：`storage.js` 抽取底座、`crud.js` 承载业务 CRUD、`test-plan-marker.js` 隔离测试计划，分层清晰。`crud.js` 1670 行偏大，CRUD/回收站/索引维护仍集中在一个模块。
+① 结构：`storage.js` 提供持久化底座，领域 CRUD 已按 Plan、内容、练习/试卷、图、回收站和标记拆分；上层只从 `learn-store.js` 导入。
 
 ② 逻辑与协议：原子写入（tmp + rename + copy 降级）+ 双层备份（`.bak` + `.backups-v2/`）+ 写入队列（per-plan mutex）+ 索引 mutex。回收站 30 天 TTL。队列最后一个 Promise settled 后按身份检查删除 Map 条目；`writePlan` 在数据落盘后等待索引更新，并将索引失败作为可重建的非致命错误记录。
 
@@ -57,29 +57,29 @@
 
 ④ 依赖与副作用：仅 `uuid@14`。无网络副作用。文件 I/O 通过 tmp+rename 保证原子性。
 
-⑤ 异味与可维护性：`crud.js` 单文件 1670 行、20+ 导出函数，职责密度高。`writePlan` 是关键路径但实现保持集中。
+⑤ 异味与可维护性：旧 `crud.js` 已删除。`writePlan` 是唯一 Plan 串行写事务，试卷和 Topic 并发修改有回归覆盖。
 
 ⑥ 风险与改进点：
 - **已关闭** P0-3：`writeQueues` settled 后自动回收，单次与连续排队测试均断言 `size === 0`
 - **已关闭** P1-3：数据写入失败不推进索引；数据写入成功但索引更新失败时不回滚有效 plan，可通过 `rebuildIndex()` 对账
-- **低** `crud.js` 文件过大，可按职责拆分为 `crud-plans.js` / `crud-trash.js` / `crud-index.js`（重构项，非缺陷）
+- **已关闭** 旧 `crud.js` 重复实现和直接导入；生产模块、脚本、测试均使用公开数据层
 
 状态：`[已评估]`
 
 ---
 
-### M2. AI Provider（server/engine/provider.js）
+### M2. AI Runtime 与 Provider（server/engine/ai-runtime.js, provider.js）
 
-- **路径**：`server/engine/provider.js`（1147 行）
-- **职责**：封装 OpenAI 兼容 API 调用，三层缓存（API 前缀缓存 + 内存响应缓存 + 磁盘前缀缓存），重试逻辑，错误格式化
+- **路径**：`server/engine/ai-runtime.js`、`server/engine/provider.js`（1147 行）
+- **职责**：从请求一次性解析 key/base URL/model，统一 Key 池、Provider/Dispatcher 生命周期和执行选择，并提供 cache diagnostics
 - **入口方式**：`import { Provider, ... } from './engine/provider.js'`
 - **内部依赖**：`openai` SDK、Node `fs/path/crypto`
 - **外部依赖**：OpenAI 兼容 API（DeepSeek / SiliconFlow / OpenAI）
-- **已知测试路径**：`server/__tests__/provider.test.js`、`server/__tests__/key-pool.test.js`
+- **已知测试路径**：`server/__tests__/ai-runtime.test.js`、`architecture-boundaries.test.js`、`provider.test.js`、`key-pool.test.js`
 
 #### 评估
 
-① 结构：单文件 1147 行，包含 `Provider` 类、`DiskPrefixCache` 类、`KeyPool` 类、`formatConnectionError`、`encodeForRelay`、缓存键计算等。三层缓存架构清晰但耦合在一个文件。
+① 结构：`ai-runtime.js` 通过 `createAIInvocationFromRequest()` 返回 `{ model, provider, dispatched, run }`；路由只经 `getAIInvocation()` 穿过该边界，不再组合四个浅 helper。各学习引擎仍通过 `resolveProvider()` 保持兼容。
 
 ② 逻辑与协议：`computePrefixHash`/`computeTailHash`/`computeRequestHash` 三层哈希。重试机制覆盖 429/500/503。`encodeForRelay` 在 API 调用边界对用户消息做全角化（防 SQLi/XSS 模式检测）。
 
@@ -251,7 +251,7 @@
 
 #### 评估
 
-① 结构：按功能拆分路由模块，共享中间件在 `middleware.js`。`learn.js` 716 行偏大。
+① 结构：按功能拆分路由模块。`middleware.js` 只负责 AI invocation 请求适配和 Plan ID 校验；Provider 配置、Key 池和 Agent Dispatcher 选择由 `ai-runtime.js` 统一负责。
 
 ② 逻辑与协议：CORS 仅允许 localhost。API Key 优先级：`x-api-key` > `req.body.apiKey` > 环境变量。`test-connection` 已修复空字符串校验。SSE 路由在连接关闭时 abort 上游请求；资源推荐另设 Server 60 秒截止时间。
 
@@ -352,20 +352,20 @@
 
 ---
 
-### M12. 客户端组件（client/src/components/）
+### M12. 客户端组件与 Topic Workspace（client/src/components/, client/src/hooks/）
 
 - **路径**：`PlanView.jsx`（718 行）、`TopicDetail.jsx`（1316 行）、`KnowledgeGraphModal.jsx`（767 行）、`MindMapModal.jsx`（230 行）、`UserProfile.jsx`（546 行）、`MediaViewer.jsx`（426 行）、`MermaidDiagram.jsx`（175 行）等业务组件
-- **职责**：业务 UI 组件
+- **职责**：业务 UI 组件；`useTopicLearningWorkspace` 统一知识点学习状态与异步编排
 - **入口方式**：`App.jsx` 引用
-- **内部依赖**：`ui/` 原子组件、`api.js`、`lib/` 工具
+- **内部依赖**：`ui/` 原子组件、`hooks/useTopicLearningWorkspace.js`、`api.js`、`lib/` 工具
 - **外部依赖**：`react`、`recharts`、`mermaid`、`markmap-lib/view`、`lucide-react`
 - **已知测试路径**：`client/src/test/*.test.{js,jsx}`（16 个测试文件）
 
 #### 评估
 
-① 结构：业务组件 + `ui/` 手写 shadcn 组件。`MediaViewer` 统一承载位图/Mermaid 全屏工具；知识图谱布局和思维导图导出逻辑已下沉到 `lib/`；`TopicDetail.jsx` 1316 行偏大。
+① 结构：`useTopicLearningWorkspace` 对外只暴露 `content/review/assessment/interaction/insights/completion` 六组接口；`TopicDetail` 保留 JSX、sticky nav、菜单/对话框、语音识别与导出导航。`MediaViewer` 统一承载位图/Mermaid 全屏工具。
 
-② 逻辑与协议：使用 React 19 + Hooks。`TopicDetail` 包含生成/配图/TTS/互动/练习/考试、资源推荐和顶部感应导航。`MermaidDiagram` 首次懒渲染，后续源码变化等待显式重绘。大型知识图谱自动聚合根主题并允许切换完整视图；思维导图提供 Markdown/SVG/PNG/JSON/OPML 导出；画像时长只以小时/分钟呈现。
+② 逻辑与协议：使用 React 19 + Hooks。Detail 生成/轮询、复习 URL、练习刷新、互动流 reset/exit、洞察请求和学完闭环由 workspace 管理；组件只消费分组状态与动作。
 
 ③ 测试：16 个测试文件、112 项测试通过。新增覆盖知识图谱聚合、Mermaid 节点 ID 映射、视图切换、思维导图结构化导出，以及画像时间和提问风格展示。
 

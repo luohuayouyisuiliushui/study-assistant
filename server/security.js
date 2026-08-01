@@ -12,6 +12,18 @@ export function isLoopbackAddress(address) {
   return normalized === '127.0.0.1' || normalized === '::1';
 }
 
+export function isAllowedBrowserOrigin(origin) {
+  if (origin === undefined) return true;
+  if (typeof origin !== 'string') return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'http:'
+      && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+  } catch {
+    return false;
+  }
+}
+
 function tokensMatch(expected, actual) {
   if (!expected || !actual) return false;
   const expectedBuffer = Buffer.from(expected, 'utf8');

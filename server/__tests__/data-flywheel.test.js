@@ -5,12 +5,13 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { profileUpdater } from '../engine/user-profile.js';
 import { AdaptivePromptInjector, dataFlywheelUpdate, getCurrentInjector } from '../engine/adaptive-engine.js';
 
-const PROFILE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'learn', 'user-profile.json');
+import { DATA } from '../engine/store/storage.js';
+
+const PROFILE_FILE = path.join(DATA, 'user-profile.json');
 let originalProfileBuffer = null;
 let profileExisted = false;
 

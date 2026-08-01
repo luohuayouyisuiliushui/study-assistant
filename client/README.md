@@ -1,6 +1,6 @@
-# Study Assistant Client v3.1.0
+# Study Assistant Client v4.0.0
 
-Study Assistant 的 React 前端。开发服务器运行在 `http://localhost:5173`，并通过 Vite proxy 将 `/api` 请求转发到 `http://localhost:3001`。
+Study Assistant 的 React 前端。开发服务器运行在 `http://localhost:5270`，并通过 Vite proxy 将 `/api` 请求转发到 `http://localhost:3001`。
 
 ## 技术栈
 
@@ -38,7 +38,7 @@ npm run build --prefix client  # 生产构建到 client/dist
 npm run preview --prefix client
 ```
 
-`v3.1.0` 的验证入口为 `npm test`、`npm run lint` 和 `npm run build`；不在文档中维护会随功能变化的固定测试计数。
+`v4.0.0` 的验证入口为 `npm test`、`npm run lint` 和 `npm run build`；不在文档中维护会随功能变化的固定测试计数。
 
 ## 目录
 
@@ -46,8 +46,10 @@ npm run preview --prefix client
 src/
 ├── api.js                     # API 请求、Provider 配置注入与超时控制
 ├── App.jsx                    # HashRouter 页面入口
+├── hooks/
+│   └── useTopicLearningWorkspace.js # 六组学习流程状态与 API 编排
 ├── components/
-│   ├── TopicDetail.jsx        # 知识点详情与学习操作
+│   ├── TopicDetail.jsx        # 知识点详情渲染、导航、语音与导出
 │   ├── MediaViewer.jsx        # 图片/图表全屏、变换、编辑与下载
 │   ├── MermaidDiagram.jsx     # Mermaid 懒加载与手动重绘
 │   ├── KnowledgeGraphModal.jsx # 主题骨架/完整图谱、缩放与导出

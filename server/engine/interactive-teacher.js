@@ -1,7 +1,7 @@
 /**
  * Interactive teaching engine — stepwise, realtime, scaffold, challenge, feynman, stepwise-challenge, realtime-challenge, and error detection.
  *
- * Uses shared Provider infrastructure from learn-engine.js (resolveProvider).
+ * Uses shared Provider infrastructure from ai-runtime.js.
  */
 
 import { Provider } from './provider.js';
@@ -19,8 +19,7 @@ import {
 } from './learn-prompts.js';
 import { getUserProfile } from './user-profile.js';
 import { recordTeachingErrors, updateTopic, getTopicHistory } from './learn-store.js';
-import { resolveProvider } from './learn-engine.js';
-import { engineCacheMonitor } from './learn-engine.js';
+import { engineCacheMonitor, resolveProvider } from './ai-runtime.js';
 
 
 // ═══════════════════════════════════════════════════════
@@ -418,7 +417,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
     : baseContext;
   const stateMachine = (mode === 'stepwise' || mode === 'stepwise-challenge') ? _initDynamicStateMachine() : null;
 
-  const { onChunk, onToolCall, onDone, onError, signal } = callbacks;
+  const { onChunk, onReset, onToolCall, onDone, onError, signal } = callbacks;
 
   if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     const stateSnapshot = _buildStateMachineSnapshot({ stateMachine });
@@ -437,6 +436,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
         tool_choice: 'auto',
         signal,
         onChunk: (delta) => { if (onChunk) onChunk(delta); },
+        onReset: () => { if (onReset) onReset(); },
         onToolCall: (tcs) => { if (onToolCall) onToolCall(tcs); },
       });
 
@@ -484,6 +484,7 @@ export async function streamInteractiveStart(providerOrConfig, plan, topicId, mo
       maxTokens: 4096,
       signal,
       onChunk: (delta) => { if (onChunk) onChunk(delta); },
+      onReset: () => { if (onReset) onReset(); },
     });
 
     if (!fullContent) throw new Error('AI 返回内容为空');
@@ -537,7 +538,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
   const systemPrompt = _getInteractivePrompt(mode);
   const promptName = mode === 'realtime' ? '实时互动讲解' : mode === 'realtime-challenge' ? '实时考验模式' : mode === 'challenge' ? '考验模式' : mode === 'stepwise-challenge' ? '分段考验模式' : mode === 'scaffold' ? '脚手架引导' : mode === 'feynman' ? '费曼学习法' : '半实时分段讲解';
 
-  const { onChunk, onToolCall, onDone, onError, signal } = callbacks;
+  const { onChunk, onReset, onToolCall, onDone, onError, signal } = callbacks;
 
   if (mode === 'stepwise' || mode === 'stepwise-challenge') {
     session.status = 'ai_thinking';
@@ -569,6 +570,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
           maxTokens: 4096,
           signal,
           onChunk: (delta) => { if (onChunk) onChunk(delta); },
+          onReset: () => { if (onReset) onReset(); },
         });
         if (!fullContent) throw new Error('AI 返回内容为空');
         session.transcript.push({ role: 'ai', content: fullContent });
@@ -604,6 +606,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
         tool_choice: 'auto',
         signal,
         onChunk: (delta) => { if (onChunk) onChunk(delta); },
+        onReset: () => { if (onReset) onReset(); },
         onToolCall: (tcs) => { if (onToolCall) onToolCall(tcs); },
       });
 
@@ -676,6 +679,7 @@ export async function streamInteractiveContinue(providerOrConfig, plan, topicId,
       maxTokens: 4096,
       signal,
       onChunk: (delta) => { if (onChunk) onChunk(delta); },
+      onReset: () => { if (onReset) onReset(); },
     });
 
     if (!fullContent) throw new Error('AI 返回内容为空');

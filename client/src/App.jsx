@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom'
+import { Routes, Route, useNavigate, useLocation, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { BookOpen, User, Settings, ArrowLeft } from 'lucide-react'
 import PlanList from './components/PlanList'
 import PlanView from './components/PlanView'
@@ -54,8 +54,10 @@ function PlanViewWrapper({ onGenerate }) {
 
 function TopicDetailWrapper({ onSelectTopic }) {
   const { planId, topicId } = useParams()
+  const [searchParams] = useSearchParams()
   const { currentPlan, setCurrentPlan, refreshPlan } = usePlan()
   const navigate = useNavigate()
+  const practiceMode = searchParams.get('practice') === '1'
 
   useEffect(() => {
     if (planId) refreshPlan(planId)
@@ -82,6 +84,7 @@ function TopicDetailWrapper({ onSelectTopic }) {
       onBack={handleBack}
       onRefresh={handleRefresh}
       onSelectTopic={onSelectTopic}
+      practiceMode={practiceMode}
     />
   )
 }
@@ -94,7 +97,8 @@ function AppContent() {
   const [hasApiKey, setHasApiKey] = useState(!!loadApiSettings().apiKey)
 
   const showBackToList = location.pathname.startsWith('/plan/') || location.pathname === '/review'
-  const showProfileInHeader = location.pathname !== '/profile'
+  const practiceMode = new URLSearchParams(location.search).get('practice') === '1'
+  const showProfileInHeader = location.pathname !== '/profile' && !practiceMode
 
   const goToList = useCallback(() => {
     setCurrentPlan(null)

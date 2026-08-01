@@ -14,7 +14,7 @@ import {
   buildFollowUpMessages, buildDeterministicContext,
 } from './learn-prompts.js';
 import { getUserProfile } from './user-profile.js';
-import { resolveProvider, engineCacheMonitor } from './learn-engine.js';
+import { engineCacheMonitor, resolveProvider } from './ai-runtime.js';
 
 export async function answerFollowUp(providerOrConfig, plan, topicId, question, model = 'gpt-4o-mini') {
   if (!question || !question.trim()) throw new Error('问题不能为空');

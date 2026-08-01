@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { Provider } from '../engine/provider.js';
 import { CacheMonitor } from '../engine/cache-diagnostics.js';
-import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, generateImageWithFallback, generateImageWithKeyFallback, getImageFallbackModels } from '../engine/learn-engine.js';
+import { generateReview, gradeExercises, analyzeWeakPoints, analyzeCoreTopics, generateQuickQuiz, startInteractiveDetail, continueInteractiveDetail, streamInteractiveStart, streamInteractiveContinue, revealEmbeddedErrors, decomposeTopic, generateDetail, answerFollowUp, analyzeLearning, answerAnalysisFollowUp, getEngineCacheDiagnostics, createProviderFromConfig, generateTopicImage, extractGeneratedImage, downloadGeneratedImage, generateImageWithFallback, generateImageWithKeyFallback, getImageFallbackModels } from '../engine/learn-engine.js';
 import * as store from '../engine/learn-store.js';
 
 // ─── Helpers ───
@@ -1184,6 +1184,227 @@ describe('extractGeneratedImage', () => {
     assert.deepStrictEqual(
       extractGeneratedImage({ data: [{ image_url: { url: 'https://images.example/custom.webp' } }] }),
       { kind: 'url', value: 'https://images.example/custom.webp' },
+    );
+  });
+});
+
+describe('downloadGeneratedImage', () => {
+  const publicLookup = async () => [{ address: '203.0.114.10', family: 4 }];
+
+  it('pins the download connection to the validated DNS answer', async () => {
+    let pinnedTarget;
+    const image = await downloadGeneratedImage(
+      'https://images.example/file.png',
+      'https://api.example/v1',
+      {
+        lookup: publicLookup,
+        requestImpl: async (_url, target) => {
+          pinnedTarget = target;
+          return new Response(Buffer.from('image'), {
+            headers: { 'content-type': 'image/png' },
+          });
+        },
+      },
+    );
+
+    assert.equal(image.toString(), 'image');
+    assert.deepStrictEqual(pinnedTarget, { address: '203.0.114.10', family: 4 });
+  });
+
+  it('rejects loopback image URLs before fetching them', async () => {
+    let requested = false;
+    await assert.rejects(
+      downloadGeneratedImage('http://127.0.0.1/private.png', 'https://api.example/v1', {
+        requestImpl: async () => {
+          requested = true;
+          return new Response(Buffer.from('image'), { headers: { 'content-type': 'image/png' } });
+        },
+      }),
+      /private|unsafe|不安全/i,
+    );
+    assert.equal(requested, false);
+  });
+
+  for (const address of ['64:ff9b::7f00:1', '64:ff9b:1::7f00:1', '2002:7f00:1::']) {
+    it(`rejects IPv6 transition address ${address} before fetching it`, async () => {
+      let requested = false;
+      await assert.rejects(
+        downloadGeneratedImage(`http://[${address}]/private.png`, 'https://api.example/v1', {
+          requestImpl: async () => {
+            requested = true;
+            return new Response(Buffer.from('image'), { headers: { 'content-type': 'image/png' } });
+          },
+        }),
+        /private|unsafe|不安全/i,
+      );
+      assert.equal(requested, false);
+    });
+  }
+
+  it('decodes a validated data image URL without making a request', async () => {
+    let requested = false;
+    const image = await downloadGeneratedImage(
+      'data:image/png;base64,aW1hZ2U=',
+      'https://api.example/v1',
+      { requestImpl: async () => { requested = true; } },
+    );
+
+    assert.equal(image.toString(), 'image');
+    assert.equal(requested, false);
+  });
+
+  it('rejects malformed and oversized data image URLs', async () => {
+    await assert.rejects(
+      downloadGeneratedImage(
+        'data:image/png;base64,not-valid-***',
+        'https://api.example/v1',
+      ),
+      /base64|图片数据/i,
+    );
+    await assert.rejects(
+      downloadGeneratedImage(
+        `data:image/png;base64,${Buffer.alloc(8).toString('base64')}`,
+        'https://api.example/v1',
+        { maxBytes: 4 },
+      ),
+      /too large|过大/i,
+    );
+  });
+
+  function createResettingProvider(method) {
+    const provider = new Provider({ apiKey: 'test-key', baseURL: 'https://test.api/v1', model: 'mock-model' });
+    provider._autoWarm = false;
+    provider[method] = async (_messages, options) => {
+      options.onChunk('discarded partial');
+      options.onReset();
+      options.onChunk('replacement');
+      throw new Error('stop after callback verification');
+    };
+    return provider;
+  }
+
+  async function expectResetReplacesPartial(run) {
+    let observed = '';
+    await assert.rejects(
+      () => run({
+        onChunk: chunk => { observed += chunk; },
+        onReset: () => { observed = ''; },
+      }),
+      /stop after callback verification/,
+    );
+    assert.equal(observed, 'replacement');
+  }
+
+  it('forwards stream reset callbacks through every interactive provider path', async () => {
+    const basePlan = { id: 'reset-plan', topics: [{ id: 'reset-topic', title: '重试测试' }] };
+
+    await expectResetReplacesPartial(callbacks => streamInteractiveStart(
+      createResettingProvider('streamWithTools'), structuredClone(basePlan), 'reset-topic', 'stepwise', callbacks,
+    ));
+    await expectResetReplacesPartial(callbacks => streamInteractiveStart(
+      createResettingProvider('stream'), structuredClone(basePlan), 'reset-topic', 'realtime', callbacks,
+    ));
+
+    const toolSession = {
+      mode: 'stepwise', status: 'waiting_user', finished: false, initialRequest: 'start',
+      transcript: [{ role: 'assistant', content: 'first', tool_calls: [{ id: 'call-reset', type: 'function', function: { name: 'ask_user_to_continue', arguments: '{}' } }] }],
+      stateMachine: { completedSteps: 1, currentStep: 1, totalSteps: 2 },
+    };
+    await expectResetReplacesPartial(callbacks => streamInteractiveContinue(
+      createResettingProvider('streamWithTools'),
+      { ...structuredClone(basePlan), topics: [{ ...basePlan.topics[0], interactiveSession: structuredClone(toolSession) }] },
+      'reset-topic', 'stepwise', '继续', callbacks,
+    ));
+
+    const fallbackSession = {
+      mode: 'stepwise', status: 'waiting_user', finished: false, initialRequest: 'start',
+      transcript: [{ role: 'assistant', content: 'first' }],
+      stateMachine: { completedSteps: 0, currentStep: 0, totalSteps: 0 },
+    };
+    await expectResetReplacesPartial(callbacks => streamInteractiveContinue(
+      createResettingProvider('stream'),
+      { ...structuredClone(basePlan), topics: [{ ...basePlan.topics[0], interactiveSession: structuredClone(fallbackSession) }] },
+      'reset-topic', 'stepwise', '继续', callbacks,
+    ));
+
+    const realtimeSession = {
+      mode: 'realtime', status: 'waiting_user', finished: false,
+      transcript: [{ role: 'ai', content: 'first' }], stateMachine: null,
+    };
+    await expectResetReplacesPartial(callbacks => streamInteractiveContinue(
+      createResettingProvider('stream'),
+      { ...structuredClone(basePlan), topics: [{ ...basePlan.topics[0], interactiveSession: structuredClone(realtimeSession) }] },
+      'reset-topic', 'realtime', '继续', callbacks,
+    ));
+  });
+
+  it('rejects redirects to private addresses', async () => {
+    await assert.rejects(
+      downloadGeneratedImage('https://images.example/start', 'https://api.example/v1', {
+        lookup: publicLookup,
+        requestImpl: async () => new Response(null, {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data' },
+        }),
+      }),
+      /private|unsafe|不安全/i,
+    );
+  });
+
+  it('cancels a redirect response body before following the next location', async () => {
+    let cancelled = false;
+    let requests = 0;
+    const image = await downloadGeneratedImage(
+      'https://images.example/start',
+      'https://api.example/v1',
+      {
+        lookup: publicLookup,
+        requestImpl: async () => {
+          requests += 1;
+          if (requests === 1) {
+            return new Response(new ReadableStream({
+              cancel() {
+                cancelled = true;
+              },
+            }), {
+              status: 302,
+              headers: { location: '/final.png' },
+            });
+          }
+          return new Response(Buffer.from('image'), {
+            headers: { 'content-type': 'image/png' },
+          });
+        },
+      },
+    );
+
+    assert.equal(cancelled, true);
+    assert.equal(requests, 2);
+    assert.equal(image.toString(), 'image');
+  });
+
+  it('rejects non-image response types', async () => {
+    await assert.rejects(
+      downloadGeneratedImage('https://images.example/file', 'https://api.example/v1', {
+        lookup: publicLookup,
+        requestImpl: async () => new Response('<html>not an image</html>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      }),
+      /content-type|图片类型/i,
+    );
+  });
+
+  it('stops reading when the image exceeds the configured limit', async () => {
+    await assert.rejects(
+      downloadGeneratedImage('https://images.example/file', 'https://api.example/v1', {
+        lookup: publicLookup,
+        maxBytes: 4,
+        requestImpl: async () => new Response(Buffer.alloc(8), {
+          headers: { 'content-type': 'image/png', 'content-length': '8' },
+        }),
+      }),
+      /too large|过大/i,
     );
   });
 });
