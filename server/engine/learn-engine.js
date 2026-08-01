@@ -789,6 +789,9 @@ function decodeBase64Image(value, maxBytes = DEFAULT_MAX_IMAGE_BYTES) {
   }
 
   const base64 = unpadded.padEnd(Math.ceil(unpadded.length / 4) * 4, '=');
+  if (compact.includes('=') && compact !== base64) {
+    throw new Error('图片 API 返回的 Base64 数据无效');
+  }
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
   const decodedLength = (base64.length / 4) * 3 - padding;
   if (decodedLength > maxBytes) {
@@ -796,6 +799,9 @@ function decodeBase64Image(value, maxBytes = DEFAULT_MAX_IMAGE_BYTES) {
   }
 
   const bytes = Buffer.from(base64, 'base64');
+  if (bytes.toString('base64') !== base64) {
+    throw new Error('图片 API 返回的 Base64 数据无效');
+  }
   if (bytes.length === 0) throw new Error('图片 API 返回的 Base64 数据为空');
   return bytes;
 }

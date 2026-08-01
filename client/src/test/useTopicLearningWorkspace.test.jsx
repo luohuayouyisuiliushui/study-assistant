@@ -41,6 +41,16 @@ function readyPlan(topicOverrides = {}) {
   };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('useTopicLearningWorkspace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,6 +159,41 @@ describe('useTopicLearningWorkspace', () => {
     expect(api.generateReview).toHaveBeenCalledTimes(2);
   });
 
+  it('allows a manual retry after a URL-triggered review fails', async () => {
+    const { plan, topic } = readyPlan({ reviewGenerated: null });
+    const freshPlan = {
+      ...plan,
+      topics: [{ ...topic, reviewGenerated: 'manual retry review' }],
+    };
+    api.generateReview
+      .mockRejectedValueOnce(new Error('review unavailable'))
+      .mockResolvedValueOnce({ review: 'manual retry review' });
+    api.getPlan.mockResolvedValue({ plan: freshPlan });
+
+    const { result } = renderHook(() => useTopicLearningWorkspace({
+      plan,
+      topic,
+      onRefresh: vi.fn(),
+      urlReview: true,
+      setSearchParams: vi.fn(),
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.review.active).toBe(false);
+
+    await act(async () => {
+      await result.current.review.toggle();
+    });
+
+    expect(api.generateReview).toHaveBeenCalledTimes(2);
+    expect(result.current.review.active).toBe(true);
+    expect(result.current.review.content).toBe('manual retry review');
+  });
+
   it('coalesces review requests fired before React commits the loading state', () => {
     const { plan, topic } = readyPlan({ reviewGenerated: null });
     api.generateReview.mockReturnValue(new Promise(() => {}));
@@ -166,6 +211,189 @@ describe('useTopicLearningWorkspace', () => {
     });
 
     expect(api.generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps in-flight review results scoped to the topic that requested them', async () => {
+    const topicA = {
+      id: 'topic-a',
+      title: 'TCP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const topicB = {
+      id: 'topic-b',
+      title: 'UDP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const plan = { id: 'plan-1', relationsInferredAt: 1, topics: [topicA, topicB] };
+    const reviewA = deferred();
+    const reviewB = deferred();
+    const onRefresh = vi.fn();
+    api.generateReview.mockImplementation((_planId, topicId) => (
+      topicId === 'topic-a' ? reviewA.promise : reviewB.promise
+    ));
+    api.getPlan.mockResolvedValue({
+      plan: {
+        ...plan,
+        topics: [{ ...topicA, reviewGenerated: 'review A' }, { ...topicB, reviewGenerated: 'review B' }],
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ topic }) => useTopicLearningWorkspace({
+        plan,
+        topic,
+        onRefresh,
+        urlReview: true,
+        setSearchParams: vi.fn(),
+      }),
+      { initialProps: { topic: topicA } },
+    );
+
+    expect(api.generateReview).toHaveBeenCalledWith('plan-1', 'topic-a');
+
+    rerender({ topic: topicB });
+
+    expect(api.generateReview).toHaveBeenCalledWith('plan-1', 'topic-b');
+    expect(api.generateReview).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      reviewB.resolve({ review: 'review B' });
+      await reviewB.promise;
+      await Promise.resolve();
+    });
+    expect(result.current.review.content).toBe('review B');
+
+    await act(async () => {
+      reviewA.resolve({ review: 'review A' });
+      await reviewA.promise;
+      await Promise.resolve();
+    });
+    expect(result.current.review.content).toBe('review B');
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses an in-flight review when returning to the same topic', async () => {
+    const topicA = {
+      id: 'topic-a',
+      title: 'TCP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const topicB = {
+      id: 'topic-b',
+      title: 'UDP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const plan = { id: 'plan-1', relationsInferredAt: 1, topics: [topicA, topicB] };
+    const reviewA = deferred();
+    const reviewB = deferred();
+    api.generateReview.mockImplementation((_planId, topicId) => (
+      topicId === 'topic-a' ? reviewA.promise : reviewB.promise
+    ));
+    api.getPlan.mockResolvedValue({
+      plan: {
+        ...plan,
+        topics: [{ ...topicA, reviewGenerated: 'review A' }, topicB],
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ topic }) => useTopicLearningWorkspace({
+        plan,
+        topic,
+        onRefresh: vi.fn(),
+        urlReview: true,
+        setSearchParams: vi.fn(),
+      }),
+      { initialProps: { topic: topicA } },
+    );
+
+    rerender({ topic: topicB });
+    rerender({ topic: topicA });
+
+    expect(api.generateReview).toHaveBeenCalledTimes(2);
+    expect(api.generateReview.mock.calls).toEqual([
+      ['plan-1', 'topic-a'],
+      ['plan-1', 'topic-b'],
+    ]);
+
+    await act(async () => {
+      reviewA.resolve({ review: 'review A' });
+      await reviewA.promise;
+      await Promise.resolve();
+    });
+
+    expect(result.current.review.content).toBe('review A');
+    expect(result.current.review.loading).toBe(false);
+
+    await act(async () => {
+      reviewB.resolve({ review: 'review B' });
+      await reviewB.promise;
+      await Promise.resolve();
+    });
+    expect(result.current.review.content).toBe('review A');
+  });
+
+  it('ignores a stale review failure after the user switches topics', async () => {
+    const topicA = {
+      id: 'topic-a',
+      title: 'TCP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const topicB = {
+      id: 'topic-b',
+      title: 'UDP',
+      detail: 'ready detail',
+      done: true,
+      reviewGenerated: null,
+    };
+    const plan = { id: 'plan-1', relationsInferredAt: 1, topics: [topicA, topicB] };
+    const reviewA = deferred();
+    const reviewB = deferred();
+    const setSearchParams = vi.fn();
+    api.generateReview.mockImplementation((_planId, topicId) => (
+      topicId === 'topic-a' ? reviewA.promise : reviewB.promise
+    ));
+    api.getPlan.mockResolvedValue({
+      plan: { ...plan, topics: [topicA, { ...topicB, reviewGenerated: 'review B' }] },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ topic }) => useTopicLearningWorkspace({
+        plan,
+        topic,
+        onRefresh: vi.fn(),
+        urlReview: true,
+        setSearchParams,
+      }),
+      { initialProps: { topic: topicA } },
+    );
+
+    rerender({ topic: topicB });
+    await act(async () => {
+      reviewB.resolve({ review: 'review B' });
+      await reviewB.promise;
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      reviewA.reject(new Error('stale failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.review.active).toBe(true);
+    expect(result.current.review.content).toBe('review B');
+    expect(setSearchParams).not.toHaveBeenCalled();
   });
 
   it('submits exercise answers and refreshes the authoritative plan', async () => {

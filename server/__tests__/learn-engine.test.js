@@ -1263,6 +1263,13 @@ describe('downloadGeneratedImage', () => {
     );
     await assert.rejects(
       downloadGeneratedImage(
+        'data:image/png;base64,aW1hZ2U==',
+        'https://api.example/v1',
+      ),
+      /base64|图片数据/i,
+    );
+    await assert.rejects(
+      downloadGeneratedImage(
         `data:image/png;base64,${Buffer.alloc(8).toString('base64')}`,
         'https://api.example/v1',
         { maxBytes: 4 },

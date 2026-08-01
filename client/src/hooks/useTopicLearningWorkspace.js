@@ -287,8 +287,11 @@ export function useTopicLearningWorkspace({
   const [reviewActive, setReviewActive] = useState(false);
   const [reviewContent, setReviewContent] = useState(topic?.reviewGenerated || null);
   const [reviewLoading, setReviewLoading] = useState(false);
-  const reviewBusyRef = useRef(false);
+  const reviewRequestsRef = useRef(new Map());
   const reviewUrlAttemptRef = useRef(null);
+  const reviewContextKey = planId && topicId ? `${planId}:${topicId}` : null;
+  const reviewContextRef = useRef(reviewContextKey);
+  reviewContextRef.current = reviewContextKey;
 
   useEffect(() => {
     setReviewActive(false);
@@ -299,20 +302,44 @@ export function useTopicLearningWorkspace({
     setReviewContent(topic?.reviewGenerated || null);
   }, [topicId, topic?.reviewGenerated]);
 
-  const generateReview = useCallback(async () => {
-    if (!planId || !topicId || reviewBusyRef.current) return null;
-    reviewBusyRef.current = true;
-    setReviewLoading(true);
-    try {
-      const result = await api.generateReview(planId, topicId);
-      setReviewContent(result.review);
-      await refreshPlan();
-      return result.review;
-    } finally {
-      reviewBusyRef.current = false;
-      setReviewLoading(false);
+  const generateReview = useCallback(() => {
+    const requestKey = planId && topicId ? `${planId}:${topicId}` : null;
+    if (!requestKey) return Promise.resolve(null);
+
+    const inFlight = reviewRequestsRef.current.get(requestKey);
+    if (inFlight) {
+      setReviewLoading(true);
+      return inFlight.promise;
     }
-  }, [planId, topicId, refreshPlan]);
+
+    const request = { key: requestKey, promise: null };
+    request.promise = (async () => {
+      const isCurrent = () => (
+        reviewContextRef.current === requestKey
+        && reviewRequestsRef.current.get(requestKey) === request
+      );
+      setReviewLoading(true);
+      try {
+        const result = await api.generateReview(planId, topicId);
+        if (!isCurrent()) return result.review;
+
+        setReviewContent(result.review);
+        const fresh = await api.getPlan(planId);
+        if (isCurrent() && fresh?.plan) onRefreshRef.current?.(fresh.plan);
+        return result.review;
+      } catch (reviewError) {
+        if (isCurrent()) throw reviewError;
+        return null;
+      } finally {
+        if (reviewRequestsRef.current.get(requestKey) === request) {
+          reviewRequestsRef.current.delete(requestKey);
+          if (reviewContextRef.current === requestKey) setReviewLoading(false);
+        }
+      }
+    })();
+    reviewRequestsRef.current.set(requestKey, request);
+    return request.promise;
+  }, [planId, topicId]);
 
   useEffect(() => {
     if (urlReview) {
@@ -326,15 +353,13 @@ export function useTopicLearningWorkspace({
 
       reviewUrlAttemptRef.current = attemptKey;
       setReviewActive(true);
-      if (!reviewLoading) {
-        generateReview().catch(() => {
-          setReviewActive(false);
-          setSearchParams?.(
-            practiceMode ? { practice: '1' } : {},
-            { replace: true },
-          );
-        });
-      }
+      generateReview().catch(() => {
+        setReviewActive(false);
+        setSearchParams?.(
+          practiceMode ? { practice: '1' } : {},
+          { replace: true },
+        );
+      });
       return;
     }
 
@@ -343,7 +368,6 @@ export function useTopicLearningWorkspace({
   }, [
     urlReview,
     reviewContent,
-    reviewLoading,
     generateReview,
     planId,
     topicId,
