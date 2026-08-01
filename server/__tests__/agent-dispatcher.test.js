@@ -7,22 +7,29 @@ import assert from 'node:assert';
 import AgentDispatcher from '../engine/agent-dispatcher.js';
 import { AGENT_PROFILES } from '../engine/learn-prompts.js';
 
+function createDispatcher(config = {}) {
+  return new AgentDispatcher({
+    ...config,
+    providerFactory: config.providerFactory || ((_apiKey, _baseURL, model) => ({ model })),
+  });
+}
+
 describe('agent-dispatcher', () => {
   describe('AgentDispatcher construction', () => {
     it('should create dispatcher with API key', () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test' });
+      const d = createDispatcher({ apiKey: 'sk-test' });
       assert.ok(d);
     });
 
     it('should default to gpt-4o-mini when no model specified', () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test' });
+      const d = createDispatcher({ apiKey: 'sk-test' });
       const p = d.provider('explain');
       assert.ok(p);
     });
   });
 
   describe('profile()', () => {
-    const d = new AgentDispatcher({ apiKey: 'sk-test' });
+    const d = createDispatcher({ apiKey: 'sk-test' });
 
     it('should return explain profile for known type', () => {
       const p = d.profile('explain');
@@ -71,7 +78,7 @@ describe('agent-dispatcher', () => {
   });
 
   describe('provider()', () => {
-    const d = new AgentDispatcher({ apiKey: 'sk-test', baseURL: 'https://x.com/v1' });
+    const d = createDispatcher({ apiKey: 'sk-test', baseURL: 'https://x.com/v1' });
 
     it('should create a Provider for explain task', () => {
       const p = d.provider('explain');
@@ -80,7 +87,7 @@ describe('agent-dispatcher', () => {
     });
 
     it('should respect user-configured model', () => {
-      const d2 = new AgentDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o' });
+      const d2 = createDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o' });
       const p = d2.provider('explain');
       assert.strictEqual(p.model, 'gpt-4o');
     });
@@ -90,16 +97,28 @@ describe('agent-dispatcher', () => {
       assert.strictEqual(p.model, 'deepseek-chat');
     });
 
-    it('should cache providers for same composite key', () => {
-      const p1 = d.provider('explain');
-      const p2 = d.provider('explain');
-      assert.strictEqual(p1, p2); // same instance
+    it('delegates provider identity to its injected acquisition seam', () => {
+      const provider = { model: 'gpt-4o-mini' };
+      const calls = [];
+      const dispatcher = createDispatcher({
+        apiKey: 'sk-test',
+        baseURL: 'https://api.openai.com/v1',
+        providerFactory: (...args) => {
+          calls.push(args);
+          return provider;
+        },
+      });
+
+      assert.strictEqual(dispatcher.provider('explain'), provider);
+      assert.strictEqual(dispatcher.provider('explain'), provider);
+      assert.equal(calls.length, 2);
+      assert.deepEqual(calls[0].slice(0, 3), ['sk-test', 'https://api.openai.com/v1', 'gpt-4o-mini']);
     });
   });
 
   describe('dispatch()', () => {
     it('should execute a task and return enriched result', async () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test' });
+      const d = createDispatcher({ apiKey: 'sk-test' });
 
       const { result, agentType, model } = await d.dispatch('explain', async (provider, m) => {
         return { ok: true, model: m };
@@ -111,7 +130,7 @@ describe('agent-dispatcher', () => {
     });
 
     it('should auto-mock Provider so no real API call needed', async () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test' });
+      const d = createDispatcher({ apiKey: 'sk-test' });
 
       // Pre-populate a provider so dispatch doesn't try real connection
       const { result } = await d.dispatch('audit', async (provider) => {
@@ -125,14 +144,14 @@ describe('agent-dispatcher', () => {
 
   describe('usageStats', () => {
     it('should return zero stats when nothing dispatched', () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test' });
+      const d = createDispatcher({ apiKey: 'sk-test' });
       const stats = d.usageStats;
       assert.strictEqual(stats.grandTotalTokens, 0);
     });
   });
 
   describe('budgetHint', () => {
-    const d = new AgentDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o' });
+    const d = createDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o' });
 
     it('should recommend cheap model for small tasks', () => {
       assert.strictEqual(d.budgetHint(500), 'gpt-4o-mini');
@@ -186,7 +205,7 @@ describe('agent-dispatcher', () => {
 
   describe('_uniqueModels (dedup)', () => {
     it('should deduplicate model names in fallback chain', async () => {
-      const d = new AgentDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o-mini' });
+      const d = createDispatcher({ apiKey: 'sk-test', defaultModel: 'gpt-4o-mini' });
       const p = d.profile('explain');
       // explain has chain: ['gpt-4o-mini', 'gpt-3.5-turbo']
       // with user defaultModel = gpt-4o-mini, unique models = ['gpt-4o-mini', 'gpt-3.5-turbo']

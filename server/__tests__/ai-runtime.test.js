@@ -80,6 +80,39 @@ test('AI invocation runs direct operations with its provider and model', async (
   assert.equal(result.model, 'direct-model');
 });
 
+test('AI invocation acquires only the adapter selected by run()', async () => {
+  const calls = { provider: 0, dispatcher: 0 };
+  const provider = { source: 'provider' };
+  const dispatcher = {
+    async dispatch(_kind, operation) {
+      return { result: await operation({ source: 'dispatcher-provider' }, 'dispatch-model') };
+    },
+  };
+  const options = {
+    providerFactory: () => {
+      calls.provider += 1;
+      return provider;
+    },
+    dispatcherFactory: () => {
+      calls.dispatcher += 1;
+      return dispatcher;
+    },
+  };
+
+  const direct = createAIInvocationFromRequest(request(), options);
+  assert.deepEqual(calls, { provider: 0, dispatcher: 0 });
+  await direct.run('analysis', async selected => selected);
+  assert.deepEqual(calls, { provider: 1, dispatcher: 0 });
+
+  const dispatched = createAIInvocationFromRequest(
+    request({ headers: { 'x-use-agent-dispatch': 'true' } }),
+    options,
+  );
+  assert.deepEqual(calls, { provider: 1, dispatcher: 0 });
+  await dispatched.run('analysis', async selected => selected);
+  assert.deepEqual(calls, { provider: 1, dispatcher: 1 });
+});
+
 test('AI invocation delegates opted-in operations and unwraps dispatcher results', async () => {
   const calls = [];
   const selectedProvider = { source: 'dispatcher' };

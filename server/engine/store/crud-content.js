@@ -168,10 +168,6 @@ export async function createPlanWithPhases(name, phases, relations, options = {}
   });
 }
 
-// ─── Serialized write wrapper (delegated to the plan-mutation seam) ───
-
-export { writePlan } from './write-plan.js';
-
 // ─── Topic operations ───
 
 export function addTopics(planId, titles, options = {}) {

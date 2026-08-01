@@ -23,6 +23,31 @@ test('AI runtime owns provider acquisition and preserves learn-engine compatibil
   assert.strictEqual(learnEngine.engineCacheMonitor, runtime.engineCacheMonitor);
 });
 
+test('only AI runtime creates or caches Providers', async () => {
+  const dispatcher = await readFile(path.join(engineDir, 'agent-dispatcher.js'), 'utf8');
+  const factChecker = await readFile(path.join(engineDir, 'fact-checker.js'), 'utf8');
+
+  for (const [file, source] of [
+    ['agent-dispatcher.js', dispatcher],
+    ['fact-checker.js', factChecker],
+  ]) {
+    assert.doesNotMatch(source, /new Provider\(/, `${file} creates a private Provider`);
+    assert.doesNotMatch(source, /providerCache|_providers/, `${file} owns a Provider cache`);
+  }
+});
+
+test('domain CRUD consumes the Plan mutation seam directly', async () => {
+  const storeDir = path.join(engineDir, 'store');
+  for (const file of ['crud-exercises.js', 'crud-mastery.js']) {
+    const source = await readFile(path.join(storeDir, file), 'utf8');
+    assert.match(source, /from ['"]\.\/write-plan\.js['"]/);
+    assert.doesNotMatch(source, /from ['"]\.\/crud-content\.js['"]/);
+  }
+
+  const content = await readFile(path.join(storeDir, 'crud-content.js'), 'utf8');
+  assert.doesNotMatch(content, /export \{ writePlan \}/);
+});
+
 test('learning engines depend on AI runtime instead of the catch-all engine', async () => {
   for (const file of ['exam-engine.js', 'interactive-teacher.js', 'learning-analyzer.js']) {
     const source = await readFile(path.join(engineDir, file), 'utf8');

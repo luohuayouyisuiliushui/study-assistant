@@ -23,7 +23,6 @@
  * is here now.
  */
 
-import { Provider } from './provider.js';
 import { AGENT_PROFILES } from './learn-prompts.js';
 
 // ─── Per-agent usage tracking ───
@@ -56,15 +55,14 @@ export class AgentDispatcher {
    * @param {string} config.apiKey    - API key
    * @param {string} [config.baseURL] - API base URL
    * @param {string} [config.defaultModel] - Default model (user-configured)
+   * @param {Function} config.providerFactory - Runtime-owned Provider acquisition seam
    */
   constructor(config = {}) {
     this._apiKey = config.apiKey || '';
     this._baseURL = config.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
     this._userModel = config.defaultModel || config.model || 'gpt-4o-mini';
     this._debug = config.debug || false;
-
-    // Provider cache: compositeKey → Provider instance
-    this._providers = new Map();
+    this._providerFactory = config.providerFactory;
   }
 
   // ─── Public API ───
@@ -78,28 +76,20 @@ export class AgentDispatcher {
   }
 
   /**
-   * Get or create a Provider for a specific agent task.
+   * Acquire a Provider for a specific agent task through the runtime seam.
    * Uses the user's model as default, but allows per-task overrides.
    *
    * @param {string} taskType - One of AGENT_PROFILES keys
    * @param {string} [overrideModel] - Override the profile's default model
-   * @returns {Provider}
+   * @returns {object}
    */
   provider(taskType, overrideModel) {
     const profile = this.profile(taskType);
     const model = overrideModel || this._userModel || profile.defaultModel;
-    const key = `${this._apiKey}::${this._baseURL}::${model}`;
-
-    if (!this._providers.has(key)) {
-      const provider = new Provider({
-        apiKey: this._apiKey,
-        baseURL: this._baseURL,
-        model,
-        debugCache: this._debug,
-      });
-      this._providers.set(key, provider);
+    if (typeof this._providerFactory !== 'function') {
+      throw new Error('AgentDispatcher requires the AI runtime providerFactory');
     }
-    return this._providers.get(key);
+    return this._providerFactory(this._apiKey, this._baseURL, model);
   }
 
   /**

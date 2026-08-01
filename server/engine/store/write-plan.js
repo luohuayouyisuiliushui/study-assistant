@@ -7,14 +7,19 @@
  * describe only the domain change inside the mutator.
  */
 
+import fs from 'node:fs';
+
 import { writeFlag } from './crud-flags.js';
 import {
   appendIndexEntry,
   enqueueWrite,
   getCachedPlan,
   invalidatePlanCache,
+  mutateIndex,
   planPath,
+  readIndex,
   readJSON,
+  removePlanBackups,
   updateIndex,
   withPlanWriteLocks,
   writeAtomic,
@@ -106,25 +111,85 @@ export function restorePlanRecord(planId, { indexEntry } = {}) {
   });
 }
 
-/**
- * Atomically replace several plan files, then invalidate their caches.
- * Used by bulk-restore flows; callers keep their own rollback policy.
- *
- * By default the per-plan write queues are acquired so the batch is isolated
- * from concurrent single-plan writes. Pass ``lock: false`` when the caller
- * already holds the same queues (e.g. inside an outer withPlanWriteLocks
- * callback) — re-acquiring them would deadlock on the caller's own slot.
- */
-export async function writePlansAtomic(plans, { lock = true } = {}) {
-  const entries = [...new Map(plans.map(plan => [plan.id, plan])).values()];
-  const write = async () => {
-    for (const plan of entries) {
-      writeAtomic(planPath(plan.id), JSON.stringify(plan, null, 2), { backup: true });
-      invalidatePlanCache(plan.id);
-    }
-    return entries;
+function planIndexEntry(plan) {
+  return {
+    id: plan.id,
+    name: plan.name,
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt,
+    topicCount: Array.isArray(plan.topics) ? plan.topics.length : 0,
   };
-  if (!lock) return write();
-  return withPlanWriteLocks(entries.map(plan => plan.id), write);
 }
 
+function uniquePlanRecords(plans) {
+  const records = [...new Map((plans || []).map(plan => [plan?.id, plan])).values()];
+  if (records.some(plan => !plan?.id)) throw new Error('Plan replacement requires stable plan ids');
+  return records;
+}
+
+async function writePlanRecords(records, { onWrite } = {}) {
+  for (const plan of records) {
+    writeAtomic(planPath(plan.id), JSON.stringify(plan, null, 2), { backup: true });
+    invalidatePlanCache(plan.id);
+    onWrite?.(plan);
+  }
+  return records;
+}
+
+/**
+ * Replace a group of Plan records as one recoverable mutation.
+ *
+ * This is the bulk counterpart to writePlan(): it owns locks, durable writes,
+ * index replacement, cache invalidation, backup cleanup, notification flags,
+ * and rollback. Domain modules only validate and supply complete Plan records.
+ */
+export async function replacePlanRecords(plans) {
+  const records = uniquePlanRecords(plans);
+  const planIds = records.map(plan => plan.id);
+  const replacedIds = new Set(planIds);
+
+  return withPlanWriteLocks(planIds, async () => {
+    const originals = new Map(planIds.map(id => [id, clone(readJSON(planPath(id)))]));
+    const originalEntries = readIndex().filter(entry => replacedIds.has(entry.id));
+    const applied = [];
+    try {
+      await writePlanRecords(records, { onWrite: plan => applied.push(plan.id) });
+      await mutateIndex(index => [
+        ...index.filter(entry => !replacedIds.has(entry.id)),
+        ...records.map(planIndexEntry),
+      ]);
+      for (const plan of records) writeFlag(plan.id);
+      return records;
+    } catch (error) {
+      const rollbackErrors = [];
+      try {
+        for (const planId of applied.slice().reverse()) {
+          const original = originals.get(planId);
+          if (original) {
+            await writePlanRecords([original]);
+          } else {
+            if (fs.existsSync(planPath(planId))) fs.unlinkSync(planPath(planId));
+            removePlanBackups(planId, { strict: true });
+            invalidatePlanCache(planId);
+          }
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError.message);
+      }
+      try {
+        await mutateIndex(index => [
+          ...index.filter(entry => !replacedIds.has(entry.id)),
+          ...originalEntries,
+        ]);
+      } catch (rollbackError) {
+        rollbackErrors.push(`index: ${rollbackError.message}`);
+      }
+      if (rollbackErrors.length > 0) {
+        throw new Error(
+          `Plan replacement failed (${error.message}); rollback also failed: ${rollbackErrors.join('; ')}`,
+        );
+      }
+      throw error;
+    }
+  });
+}

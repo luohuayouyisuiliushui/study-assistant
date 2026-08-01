@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { v4 as uuidv4 } from 'uuid';
 import {
   MASTERY_SCHEMA_VERSION,
@@ -23,19 +22,9 @@ import {
   recordMistake,
   submitReviewSession,
 } from '../mastery-engine.js';
-import {
-  invalidatePlanCache,
-  isValidPlanId,
-  mutateIndex,
-  planPath,
-  readIndex,
-  readJSON,
-  removePlanBackups,
-  withPlanWriteLocks,
-} from './storage.js';
+import { isValidPlanId } from './storage.js';
 import { getPlan, listPlans } from './crud-plans.js';
-import { writePlan } from './crud-content.js';
-import { writePlansAtomic } from './write-plan.js';
+import { replacePlanRecords, writePlan } from './write-plan.js';
 
 export const MASTERY_BACKUP_SCHEMA_VERSION = 'study-assistant-backup-v1';
 
@@ -719,72 +708,8 @@ export async function previewMasteryRestore(rawBackup) {
 export async function restoreMasteryBackup(rawBackup) {
   const backup = validateBackup(rawBackup);
   const preview = await previewMasteryRestore(backup);
-  const planIds = backup.plans.map(plan => plan.id);
-  return withPlanWriteLocks(planIds, async () => {
-    const originals = new Map(planIds.map(planId => [planId, clone(readJSON(planPath(planId)))]));
-    const originalIndex = readIndex();
-    const restoredIds = new Set(planIds);
-    const originalEntries = originalIndex.filter(entry => restoredIds.has(entry.id));
-    const applied = [];
-    try {
-      const snapshots = backup.plans.map(snapshot => clone(snapshot));
-      await writePlansAtomic(snapshots, { lock: false });
-      for (const plan of snapshots) applied.push(plan.id);
-
-      const restoredEntries = backup.plans.map(plan => ({
-        id: plan.id,
-        name: plan.name,
-        createdAt: plan.createdAt,
-        updatedAt: plan.updatedAt,
-        topicCount: plan.topics.length,
-      }));
-      await mutateIndex(index => [
-        ...index.filter(entry => !restoredIds.has(entry.id)),
-        ...restoredEntries,
-      ]);
-    } catch (error) {
-      const rollbackErrors = [];
-      const appliedIds = applied.slice().reverse();
-      const rollbackPlans = [];
-      for (const planId of appliedIds) {
-        const original = originals.get(planId);
-        if (original) rollbackPlans.push(original);
-      }
-      try {
-        if (rollbackPlans.length > 0) {
-          await writePlansAtomic(rollbackPlans, { lock: false });
-          for (const plan of rollbackPlans) invalidatePlanCache(plan.id);
-        }
-        for (const planId of appliedIds) {
-          // Value-based check: a null entry means the Plan file did not exist
-          // before the restore, so rollback must delete it again.
-          if (!originals.get(planId)) {
-            if (fs.existsSync(planPath(planId))) fs.unlinkSync(planPath(planId));
-            removePlanBackups(planId, { strict: true });
-            invalidatePlanCache(planId);
-          }
-        }
-      } catch (rollbackError) {
-        rollbackErrors.push(`${rollbackError.message}`);
-      }
-      try {
-        await mutateIndex(index => [
-          ...index.filter(entry => !restoredIds.has(entry.id)),
-          ...originalEntries,
-        ]);
-      } catch (rollbackError) {
-        rollbackErrors.push(`index: ${rollbackError.message}`);
-      }
-      if (rollbackErrors.length > 0) {
-        throw codedError(
-          'RESTORE_ROLLBACK_FAILED',
-          `Restore failed (${error.message}); rollback also failed: ${rollbackErrors.join('; ')}`,
-        );
-      }
-      throw error;
-    }
-    return { restored: backup.plans.length, preview };
-  });
+  await replacePlanRecords(backup.plans.map(snapshot => clone(snapshot)));
+  return { restored: backup.plans.length, preview };
 }
 
 

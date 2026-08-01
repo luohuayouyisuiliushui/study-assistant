@@ -24,7 +24,7 @@ import {
   DATA,
   PLANS_INDEX,
 } from '../engine/store/storage.js';
-import { writePlan } from '../engine/store/crud-content.js';
+import { writePlan } from '../engine/store/write-plan.js';
 
 // ── Test helpers ──
 

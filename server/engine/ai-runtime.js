@@ -36,7 +36,21 @@ export function createProviderFromConfig(apiKey, baseURL, model) {
   return providerCache.get(key);
 }
 
-function createDispatcherFromConfig(apiKey, baseURL, model) {
+function createDispatcherFromConfig(
+  apiKey,
+  baseURL,
+  model,
+  providerFactory = createProviderFromConfig,
+) {
+  if (providerFactory !== createProviderFromConfig) {
+    return new AgentDispatcher({
+      apiKey,
+      baseURL,
+      defaultModel: model,
+      debug: process.env.DEBUG_CACHE === 'true',
+      providerFactory,
+    });
+  }
   const key = providerKey(apiKey, baseURL, model);
   if (!dispatcherCache.has(key)) {
     dispatcherCache.set(key, new AgentDispatcher({
@@ -44,6 +58,7 @@ function createDispatcherFromConfig(apiKey, baseURL, model) {
       baseURL,
       defaultModel: model,
       debug: process.env.DEBUG_CACHE === 'true',
+      providerFactory,
     }));
   }
   return dispatcherCache.get(key);
@@ -89,8 +104,16 @@ export function createAIInvocationFromRequest(req, options = {}) {
   );
   const providerFactory = options.providerFactory || createProviderFromConfig;
   const dispatcherFactory = options.dispatcherFactory || createDispatcherFromConfig;
-  const provider = providerFactory(apiKey, baseURL, model);
-  const dispatcher = dispatcherFactory(apiKey, baseURL, model);
+  let provider;
+  let dispatcher;
+  const getProvider = () => {
+    if (!provider) provider = providerFactory(apiKey, baseURL, model);
+    return provider;
+  };
+  const getDispatcher = () => {
+    if (!dispatcher) dispatcher = dispatcherFactory(apiKey, baseURL, model, providerFactory);
+    return dispatcher;
+  };
   const dispatched = (
     req?.headers?.['x-use-agent-dispatch'] === 'true'
     || req?.body?.useAgentDispatch === true
@@ -98,15 +121,19 @@ export function createAIInvocationFromRequest(req, options = {}) {
 
   return {
     model,
-    provider,
-    dispatcher,
+    get provider() {
+      return getProvider();
+    },
+    get dispatcher() {
+      return getDispatcher();
+    },
     dispatched,
     async run(kind, operation) {
       if (typeof operation !== 'function') {
         throw new TypeError('AI invocation operation must be a function');
       }
-      if (!dispatched) return operation(provider, model);
-      const dispatchedResult = await dispatcher.dispatch(kind, operation);
+      if (!dispatched) return operation(getProvider(), model);
+      const dispatchedResult = await getDispatcher().dispatch(kind, operation);
       return dispatchedResult.result;
     },
   };

@@ -29,7 +29,7 @@
  */
 
 import { STABLE_FACT_CHECK_PROMPT, STABLE_FACT_FIX_PROMPT } from './learn-prompts.js';
-import { Provider } from './provider.js';
+import { resolveProvider } from './ai-runtime.js';
 
 // ─── Internal helpers ───
 
@@ -404,28 +404,12 @@ export function buildFactCheckSummary(factCheckResult) {
   return `${emoji} 可信度 ${score}% — ${issueCount} 个关注点`;
 }
 
-// ─── Provider resolution (duplicated to avoid circular import with learn-engine) ───
+// ─── Provider resolution ───
 
-const _providerCache = new Map();
 const FALLBACK_MODELS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4'];
 
 function _resolveProviderForFactCheck(providerOrConfig, model) {
-  if (providerOrConfig instanceof Provider) return providerOrConfig;
-
-  const apiKey = providerOrConfig.apiKey || '';
-  const baseURL = providerOrConfig.baseURL || '';
-  const key = apiKey + '::' + baseURL + '::' + (model || '');
-
-  if (!_providerCache.has(key)) {
-    const provider = new Provider({
-      apiKey,
-      baseURL,
-      model,
-      debugCache: process.env.DEBUG_CACHE === 'true',
-    });
-    _providerCache.set(key, provider);
-  }
-  return _providerCache.get(key);
+  return resolveProvider(providerOrConfig, model);
 }
 
 /**

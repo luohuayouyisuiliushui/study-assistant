@@ -8,7 +8,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { getPlan } from './crud-plans.js';
-import { writePlan } from './crud-content.js';
+import { writePlan } from './write-plan.js';
 
 // ─── Exercise parsing ───
 
