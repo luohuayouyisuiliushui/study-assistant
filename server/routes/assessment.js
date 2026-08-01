@@ -56,8 +56,11 @@ router.post('/plans/:planId/exam/:examId/submit', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const { provider } = getAIInvocation(req);
-    const results = await gradeExam(provider, plan, req.params.examId, answers);
+    const ai = getAIInvocation(req);
+    const results = await ai.run(
+      'examGrade',
+      (provider, _model) => gradeExam(provider, plan, req.params.examId, answers),
+    );
 
     // ── Data flywheel: update user profile with latest exam results ──
     try {
@@ -110,12 +113,17 @@ router.post('/plans/:planId/exam/generate-stream', async (req, res) => {
     const abortController = new AbortController();
     res.on('close', () => { aborted = true; clearTimeout(timeout); abortController.abort(); });
 
-    const { provider, model } = getAIInvocation(req);
+    const ai = getAIInvocation(req);
     const writeEvent = (event) => {
       if (aborted) return;
       try { res.write('data: ' + JSON.stringify(event) + '\n\n'); } catch { aborted = true; }
     };
-    await generateExamStream(provider, plan, topicIds, config || {}, writeEvent, model, abortController.signal);
+    await ai.run(
+      'examGenerate',
+      (provider, model) => generateExamStream(
+        provider, plan, topicIds, config || {}, writeEvent, model, abortController.signal,
+      ),
+    );
     clearTimeout(timeout);
     if (!aborted) res.end();
   } catch (err) {
@@ -163,8 +171,11 @@ router.post('/plans/:planId/exam/:examId/practice', async (req, res) => {
 
   const count = Math.max(1, Math.min(20, parseInt(req.body?.count) || 5));
   try {
-    const { provider, model } = getAIInvocation(req);
-    const questions = await generateExamPractice(provider, plan, req.params.examId, count, model);
+    const ai = getAIInvocation(req);
+    const questions = await ai.run(
+      'examGenerate',
+      (provider, model) => generateExamPractice(provider, plan, req.params.examId, count, model),
+    );
     res.json({ questions });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -200,8 +211,11 @@ router.post('/plans/:planId/fact-check/:topicId', async (req, res) => {
   if (!topic.detail) return res.status(400).json({ error: '该知识点还没有讲解内容' });
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    const result = await factCheckDetail(provider, topic.detail, topic.title, model);
+    const ai = getAIInvocation(req);
+    const result = await ai.run(
+      'audit',
+      (provider, model) => factCheckDetail(provider, topic.detail, topic.title, model),
+    );
 
     // Store fact-check result on topic
     await store.updateTopic(req.params.planId, req.params.topicId, { factCheck: result });
@@ -235,8 +249,11 @@ router.post('/plans/:planId/fact-check-auto-fix/:topicId', async (req, res) => {
   }
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    const fixes = await autoFixUncertainClaims(provider, findings, model);
+    const ai = getAIInvocation(req);
+    const fixes = await ai.run(
+      'examSelfCorrect',
+      (provider, model) => autoFixUncertainClaims(provider, findings, model),
+    );
     const { content: corrected, fixedCount } = applyFixesToContent(topic.detail, fixes);
 
     if (corrected !== topic.detail && fixedCount > 0) {
@@ -321,8 +338,11 @@ router.post('/plans/:planId/feynman-analyze/:topicId', async (req, res) => {
   }
 
   try {
-    const { provider } = getAIInvocation(req);
-    const insights = await analyzeFeynmanSession(provider, session.transcript, topic.title);
+    const ai = getAIInvocation(req);
+    const insights = await ai.run(
+      'analysis',
+      (provider, _model) => analyzeFeynmanSession(provider, session.transcript, topic.title),
+    );
     const sessionId = session.masterySessionId || crypto.randomUUID();
     await store.saveFeynmanAssessment(req.params.planId, req.params.topicId, {
       sessionId,

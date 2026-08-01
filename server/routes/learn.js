@@ -246,7 +246,7 @@ router.post('/plans/import', async (req, res) => {
   }
 
   try {
-    const { provider } = getAIInvocation(req);
+    const ai = getAIInvocation(req);
 
     // ── First attempt: deep analysis with IMPORT_PLAN_PROMPT ──
     let parsed;
@@ -254,12 +254,15 @@ router.post('/plans/import', async (req, res) => {
     let relations;
     let planName;
 
-    const firstAttempt = await provider.complete(
-      [
-        { role: 'system', content: IMPORT_PLAN_PROMPT },
-        { role: 'user', content: text.trim() },
-      ],
-      { temperature: 0.3, responseFormat: { type: 'json_object' } }
+    const firstAttempt = await ai.run(
+      'import',
+      (provider, _model) => provider.complete(
+        [
+          { role: 'system', content: IMPORT_PLAN_PROMPT },
+          { role: 'user', content: text.trim() },
+        ],
+        { temperature: 0.3, responseFormat: { type: 'json_object' } }
+      ),
     );
 
     parsed = JSON.parse(firstAttempt.content || '{}');
@@ -313,12 +316,15 @@ router.post('/plans/import', async (req, res) => {
         '}\n\n' +
         '资料内容：\n' + text.trim();
 
-      const retryResult = await provider.complete(
-        [
-          { role: 'system', content: '你是一位学习内容结构分析专家。你的核心方法是「先理解，再结构化」：先在 JSON 的第一个字段 "documentAnalysis" 中完整总结对整份资料的理解，再从中提炼出 3-15 个核心知识点，形成有层次的学习计划。注意：不要逐行拆分，要理解全文后做语义聚合。知识点应反映主要章节/概念，而不是每一句话。' },
-          { role: 'user', content: retryPrompt },
-        ],
-        { temperature: 0.4, responseFormat: { type: 'json_object' } }
+      const retryResult = await ai.run(
+        'import',
+        (provider, _model) => provider.complete(
+          [
+            { role: 'system', content: '你是一位学习内容结构分析专家。你的核心方法是「先理解，再结构化」：先在 JSON 的第一个字段 "documentAnalysis" 中完整总结对整份资料的理解，再从中提炼出 3-15 个核心知识点，形成有层次的学习计划。注意：不要逐行拆分，要理解全文后做语义聚合。知识点应反映主要章节/概念，而不是每一句话。' },
+            { role: 'user', content: retryPrompt },
+          ],
+          { temperature: 0.4, responseFormat: { type: 'json_object' } }
+        ),
       );
 
       parsed = JSON.parse(retryResult.content || '{}');
@@ -436,8 +442,11 @@ router.post('/plans/:planId/infer-relations', async (req, res) => {
   res.json({ status: 'inferring' });
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    await inferTopicRelations(provider, plan, model);
+    const ai = getAIInvocation(req);
+    await ai.run(
+      'analysis',
+      (provider, model) => inferTopicRelations(provider, plan, model),
+    );
 
     // Mark plan as inferred
     await store.markRelationsInferred(plan.id);
@@ -504,8 +513,11 @@ router.post('/plans/:id/analysis', async (req, res) => {
     const plan = store.getPlan(req.params.id);
     if (!plan) return res.status(404).json({ error: '计划不存在' });
 
-    const { provider } = getAIInvocation(req);
-    const analysis = await analyzeLearning(provider, plan, provider.model, req.body?.analysisChat);
+    const ai = getAIInvocation(req);
+    const analysis = await ai.run(
+      'analysis',
+      (provider, model) => analyzeLearning(provider, plan, model, req.body?.analysisChat),
+    );
     res.json({ analysis });
   } catch (err) {
     console.error('[analysis]', err);
@@ -527,8 +539,11 @@ router.post('/plans/:id/analysis/ask', async (req, res) => {
       return res.status(400).json({ error: '缺少 question 或 analysis 参数' });
     }
 
-    const { provider } = getAIInvocation(req);
-    const result = await answerAnalysisFollowUp(provider, plan, analysis, question.trim(), provider.model);
+    const ai = getAIInvocation(req);
+    const result = await ai.run(
+      'analysis',
+      (provider, model) => answerAnalysisFollowUp(provider, plan, analysis, question.trim(), model),
+    );
     res.json({ answer: result.content });
   } catch (err) {
     console.error('[analysis-ask]', err);
@@ -550,9 +565,12 @@ router.post('/plans/:planId/core-topics', async (req, res) => {
     const plan = store.getPlan(req.params.planId);
     if (!plan) return res.status(404).json({ error: '计划不存在' });
 
-    const { provider, model } = getAIInvocation(req);
+    const ai = getAIInvocation(req);
     const force = req.body?.force === true;
-    const result = await analyzeCoreTopics(provider, plan, model, { force });
+    const result = await ai.run(
+      'analysis',
+      (provider, model) => analyzeCoreTopics(provider, plan, model, { force }),
+    );
     res.json(result);
   } catch (err) {
     console.error('[core-topics]', err);
@@ -581,8 +599,11 @@ router.post('/plans/:planId/review/:topicId', async (req, res) => {
   if (!topic.done) return res.status(400).json({ error: '该知识点尚未完成学习，无需复习' });
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    const review = await generateReview(provider, plan, req.params.topicId, model);
+    const ai = getAIInvocation(req);
+    const review = await ai.run(
+      'review',
+      (provider, model) => generateReview(provider, plan, req.params.topicId, model),
+    );
     const exercises = store.parseExercisesFromDetail(review);
     res.json({ review, exercises });
   } catch (err) {
@@ -605,8 +626,11 @@ router.post('/plans/:planId/exercises/:topicId/submit', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const { provider } = getAIInvocation(req);
-    const results = await gradeExercises(provider, plan, req.params.topicId, answers);
+    const ai = getAIInvocation(req);
+    const results = await ai.run(
+      'examGrade',
+      (provider, _model) => gradeExercises(provider, plan, req.params.topicId, answers),
+    );
 
     // ── Data flywheel: update user profile with latest exercise results ──
     try {
@@ -631,8 +655,11 @@ router.post('/plans/:planId/weak-points', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    const results = await analyzeWeakPoints(provider, plan, model);
+    const ai = getAIInvocation(req);
+    const results = await ai.run(
+      'analysis',
+      (provider, model) => analyzeWeakPoints(provider, plan, model),
+    );
 
     // ── Data flywheel: update user profile with weak point analysis results ──
     try {
@@ -658,8 +685,11 @@ router.post('/plans/:planId/quick-quiz', async (req, res) => {
   if (!plan) return res.status(404).json({ error: '计划不存在' });
 
   try {
-    const { provider, model } = getAIInvocation(req);
-    const result = await generateQuickQuiz(provider, plan, model);
+    const ai = getAIInvocation(req);
+    const result = await ai.run(
+      'examGenerate',
+      (provider, model) => generateQuickQuiz(provider, plan, model),
+    );
     res.json(result);
   } catch (err) {
     console.error('[quick-quiz]', err);

@@ -41,8 +41,11 @@ router.post('/analyze', async (req, res) => {
     if (!process.env.OPENAI_API_KEY && !req.headers['x-api-key'] && !req.body?.apiKey) {
       return res.status(400).json({ error: '请提供 API Key' });
     }
-    const { provider, model } = getAIInvocation(req);
-    const profile = await generateUserProfile(provider, model);
+    const ai = getAIInvocation(req);
+    const profile = await ai.run(
+      'analysis',
+      (provider, model) => generateUserProfile(provider, model),
+    );
     res.json({ profile });
   } catch (err) {
     console.error('[user-profile] 生成画像失败:', err.message);
