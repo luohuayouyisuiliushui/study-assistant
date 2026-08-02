@@ -48,6 +48,21 @@ test('domain CRUD consumes the Plan mutation seam directly', async () => {
   assert.doesNotMatch(content, /export \{ writePlan \}/);
 });
 
+test('relation repair script uses the public Plan seam instead of storage internals', async () => {
+  const script = await readFile(
+    path.join(serverDir, 'scripts', 'fix-missing-relations.js'),
+    'utf8',
+  );
+  assert.match(script, /from ['"]\.\.\/engine\/learn-store\.js['"]/);
+  assert.doesNotMatch(script, /from ['"]\.\.\/engine\/store\//);
+  assert.doesNotMatch(script, /writeFileSync\s*\(/, 'script still writes files directly');
+  assert.doesNotMatch(
+    script,
+    /resolve\(__dirname, '\.\.', 'data', 'learn', 'plans'/,
+    'script still composes a plan-file path for writing',
+  );
+});
+
 test('learning engines depend on AI runtime instead of the catch-all engine', async () => {
   for (const file of ['exam-engine.js', 'interactive-teacher.js', 'learning-analyzer.js']) {
     const source = await readFile(path.join(engineDir, file), 'utf8');

@@ -200,7 +200,7 @@ export function useTopicLearningWorkspace({
   const onBackRef = useRef(onBack);
   const detailRef = useRef(topicDetail);
   const interactiveBusyRef = useRef(false);
-  const relationsInferredRef = useRef(false);
+  const relationsInferredPlanIdsRef = useRef(new Set());
   onRefreshRef.current = onRefresh;
   onBackRef.current = onBack;
 
@@ -666,9 +666,9 @@ export function useTopicLearningWorkspace({
   }, [topicId, topic?.factCheck, topic?.resources]);
 
   useEffect(() => {
-    if (!plan || !topic || relationsInferredRef.current) return;
+    if (!plan || !topic || !planId || relationsInferredPlanIdsRef.current.has(planId)) return;
     if (plan.relationsInferredAt) {
-      relationsInferredRef.current = true;
+      relationsInferredPlanIdsRef.current.add(planId);
       return;
     }
     const hasRelations = plan.topics.some(item => (
@@ -677,13 +677,13 @@ export function useTopicLearningWorkspace({
       || item.parentId
     ));
     if (hasRelations) {
-      relationsInferredRef.current = true;
+      relationsInferredPlanIdsRef.current.add(planId);
       return;
     }
-    relationsInferredRef.current = true;
-    api.inferRelations(plan.id)
+    relationsInferredPlanIdsRef.current.add(planId);
+    api.inferRelations(planId)
       .then(refreshPlan)
-      .catch(() => { relationsInferredRef.current = false; });
+      .catch(() => { relationsInferredPlanIdsRef.current.delete(planId); });
   }, [planId, topicId, plan, topic, refreshPlan]);
 
   const runFactCheck = useCallback(async () => {

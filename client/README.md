@@ -1,4 +1,4 @@
-# Study Assistant Client v5.0.0
+# Study Assistant Client v5.0.1
 
 Study Assistant 的 React 前端。开发服务器运行在 `http://localhost:5270`，并通过 Vite proxy 将 `/api` 请求转发到 `http://localhost:3001`。
 
@@ -38,7 +38,7 @@ npm run build --prefix client  # 生产构建到 client/dist
 npm run preview --prefix client
 ```
 
-`v5.0.0` 的验证入口为 `npm test`、`npm run lint` 和 `npm run build`；不在文档中维护会随功能变化的固定测试计数。
+`v5.0.1` 的验证入口为 `npm test`、`npm run lint` 和 `npm run build`；不在文档中维护会随功能变化的固定测试计数。
 
 ## 目录
 

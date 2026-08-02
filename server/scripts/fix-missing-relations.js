@@ -18,22 +18,15 @@
  *   --dry-run: 仅输出将要执行的操作，不修改数据
  */
 
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
-import { createRequire } from 'module';
+import { extractRelationsFromDetail, getPlan, writePlan } from '../engine/learn-store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
 
 function loadPlan(planId) {
-  const path = resolve(__dirname, '..', 'data', 'learn', 'plans', `${planId}.json`);
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function savePlan(plan) {
-  const path = resolve(__dirname, '..', 'data', 'learn', 'plans', `${plan.id}.json`);
-  writeFileSync(path, JSON.stringify(plan, null, 2), 'utf8');
+  return getPlan(planId);
 }
 
 // ── 从公开数据层导入 extractRelationsFromDetail ──
@@ -50,13 +43,10 @@ async function main() {
   }
 
   console.log(`📋 加载计划: ${planId}`);
-  const plan = loadPlan(planId);
+  let plan = loadPlan(planId);
   console.log(`   计划名称: ${plan.name}`);
   console.log(`   知识点总数: ${plan.topics.length}`);
   console.log(`   模式: ${dryRun ? '🔍 预览 (--dry-run)' : '✏️  执行'}`);
-
-  // ── 动态导入 ──
-  const { extractRelationsFromDetail } = await import('../engine/learn-store.js');
 
   // ── 第一步：文本提取（--ai-only 模式跳过） ──
   const textExtracted = [];
@@ -163,7 +153,14 @@ async function main() {
   // ── 保存文本提取结果 ──
   if (!aiOnly) {
     if (!dryRun && textExtracted.length > 0) {
-      savePlan(plan);
+      plan = await writePlan(planId, savedPlan => {
+        for (const extracted of textExtracted) {
+          const topic = savedPlan.topics.find(item => item.id === extracted.id);
+          if (!topic) continue;
+          topic.prerequisites = extracted.prerequisites;
+          topic.relatedTopics = extracted.relatedTopics;
+        }
+      });
       console.log(`✅ 已保存更新（文本提取 ${textExtracted.length} 个知识点的关系已写入）`);
     } else if (dryRun && textExtracted.length > 0) {
       console.log(`🔍 [dry-run] 将更新 ${textExtracted.length} 个知识点，但未执行写入。`);

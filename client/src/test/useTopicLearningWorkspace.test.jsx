@@ -477,6 +477,27 @@ describe('useTopicLearningWorkspace', () => {
     expect(onBack).toHaveBeenCalledOnce();
   });
 
+  it('infers relations independently when the workspace switches plans', async () => {
+    const topicA = { id: 'topic-a', title: 'TCP', detail: 'ready detail', done: true };
+    const topicB = { id: 'topic-b', title: 'UDP', detail: 'ready detail', done: true };
+    const planA = { id: 'plan-a', topics: [topicA] };
+    const planB = { id: 'plan-b', topics: [topicB] };
+
+    const { rerender } = renderHook(
+      ({ plan, topic }) => useTopicLearningWorkspace({ plan, topic, onRefresh: vi.fn() }),
+      { initialProps: { plan: planA, topic: topicA } },
+    );
+
+    await act(async () => { await Promise.resolve(); });
+    rerender({ plan: planB, topic: topicB });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(api.inferRelations.mock.calls).toEqual([
+      ['plan-a'],
+      ['plan-b'],
+    ]);
+  });
+
   it('flushes active time through the workspace when the topic unmounts', async () => {
     const topic = { id: 'topic-1', title: 'TCP', detail: 'ready', done: true };
     const plan = { id: 'plan-1', topics: [topic] };

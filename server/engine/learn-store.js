@@ -13,6 +13,8 @@ export {
   deletePlan, permanentlyDeletePlan, deletePlansByIds,
 } from './store/crud-plans.js';
 
+export { writePlan } from './store/write-plan.js';
+
 export {
   trashPlan, listTrash, restorePlan, permanentlyDeleteTrash, emptyTrash, cleanExpiredTrash,
 } from './store/crud-trash.js';

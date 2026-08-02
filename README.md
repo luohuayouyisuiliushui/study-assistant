@@ -1,8 +1,8 @@
-# Study Assistant v5.0.0
+# Study Assistant v5.0.1
 
 AI 学习助手 —— 告诉 AI 你想学什么，它帮你拆解知识点、生成讲解、出题考试、追踪薄弱环节，还越用越懂你。
 
-当前工作区版本：`v5.0.0`。下载源码归档或查看已发布版本，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
+当前工作区版本：`v5.0.1`。下载源码归档或查看已发布版本，请前往 [GitHub Releases](https://github.com/luohuayouyisuiliushui/study-assistant/releases/latest)。
 
 ## 它能做什么
 
@@ -278,7 +278,7 @@ Server 使用 Node.js 内置 `node --test --test-concurrency=1`（串行，防�
 
 **重要：** AI 相关测试需要 `server/.env` 中配置有效的 `OPENAI_API_KEY`，否则会挂起超时。
 
-`v5.0.0` 的验证入口统一为根目录 `npm test`、`npm run lint` 和 `npm run build`。测试数量随功能变化，不在文档中维护可漂移的固定计数。
+`v5.0.1` 的验证入口统一为根目录 `npm test`、`npm run lint` 和 `npm run build`。测试数量随功能变化，不在文档中维护可漂移的固定计数。
 
 ### 代码规范
 
