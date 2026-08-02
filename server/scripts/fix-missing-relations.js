@@ -21,7 +21,7 @@
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
-import { extractRelationsFromDetail, getPlan, writePlan } from '../engine/learn-store.js';
+import { extractRelationsFromDetail, getPlan, updateTopic } from '../engine/learn-store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -153,14 +153,14 @@ async function main() {
   // ── 保存文本提取结果 ──
   if (!aiOnly) {
     if (!dryRun && textExtracted.length > 0) {
-      plan = await writePlan(planId, savedPlan => {
-        for (const extracted of textExtracted) {
-          const topic = savedPlan.topics.find(item => item.id === extracted.id);
-          if (!topic) continue;
-          topic.prerequisites = extracted.prerequisites;
-          topic.relatedTopics = extracted.relatedTopics;
-        }
-      });
+      const knownIds = new Set(loadPlan(planId).topics.map(item => item.id));
+      for (const extracted of textExtracted) {
+        if (!knownIds.has(extracted.id)) continue;
+        plan = await updateTopic(planId, extracted.id, {
+          prerequisites: extracted.prerequisites,
+          relatedTopics: extracted.relatedTopics,
+        });
+      }
       console.log(`✅ 已保存更新（文本提取 ${textExtracted.length} 个知识点的关系已写入）`);
     } else if (dryRun && textExtracted.length > 0) {
       console.log(`🔍 [dry-run] 将更新 ${textExtracted.length} 个知识点，但未执行写入。`);
